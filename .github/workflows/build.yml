@@ -1,0 +1,96 @@
+name: "Build"
+
+on:
+  pull_request:
+    branches:
+      - "main"
+  workflow_dispatch:
+
+env:
+  BUILT_BINARY_PATH: ./build
+  S3_ARCHIVE_BUCKET: debank-build-artifacts
+  S3_ARCHIVE_FILE_PREFIX: downloads/sonic
+  S3_REGION: ap-northeast-1
+  REGISTRY: 294354037686.dkr.ecr.ap-northeast-1.amazonaws.com
+  IMAGE: blockchain-ftm
+  DOCKERFILE: docker/Dockerfile
+
+jobs:
+  build-artifacts:
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    runs-on: [self-hosted, "${{ matrix.arch }}"]
+    steps:
+      - name: Install Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.21.x
+
+      - name: Checkout code
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: tibdex/github-app-token@v1
+        id: generate-token
+        with:
+          app_id: ${{ secrets.RELEASE_MANAGER_APP_ID }}
+          private_key: ${{ secrets.RELEASE_MANAGER_APP_SECRET }}
+
+      - name: Make binaries
+        run: |
+          git config --global url."https://x-access-token:${{ steps.generate-token.outputs.token }}@github.com/DeBankDeFi".insteadOf "https://github.com/DeBankDeFi"
+          make all
+
+      - name: Set env
+        run: |
+          echo "REVISION=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "ARCHIVE_DIR=fantom-sonic-$(git rev-parse --short HEAD)-linux-${{ matrix.arch }}" >> $GITHUB_ENV
+
+      - name: Archive artifacts
+        run: |
+          mkdir $ARCHIVE_DIR
+          cp $BUILT_BINARY_PATH/* $ARCHIVE_DIR/
+          sha256sum $ARCHIVE_DIR/sonicd --tag >> $ARCHIVE_DIR/sha256.checksum
+          chmod u+x $ARCHIVE_DIR/sonicd
+          tar cvfz $ARCHIVE_DIR.tar.gz $ARCHIVE_DIR
+
+      - name: Copy artifacts to s3
+        run: |
+          aws s3 cp $ARCHIVE_DIR.tar.gz s3://$S3_ARCHIVE_BUCKET/$S3_ARCHIVE_FILE_PREFIX/$ARCHIVE_DIR.tar.gz --acl public-read
+          rm -f $ARCHIVE_DIR.tar.gz
+
+      - name: Build image and push to ECR
+        uses: docker/build-push-action@v5
+        with:
+          file: ${{ env.DOCKERFILE }}
+          context: .
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ matrix.arch }}-${{ env.REVISION }}
+          build-args: ACCESS_TOKEN=${{ steps.generate-token.outputs.token }}
+          provenance: false
+
+  merge-docker-manifest:
+    runs-on: [self-hosted, ops]
+    needs: build-artifacts
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set env
+        run: |
+          echo "REVISION=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Merge manifest
+        run: |
+          docker pull --platform=linux/amd64 ${REGISTRY}/${IMAGE}:amd64-${REVISION}
+          docker pull --platform=linux/arm64 ${REGISTRY}/${IMAGE}:arm64-${REVISION}
+          docker buildx imagetools create --tag ${REGISTRY}/${IMAGE}:${REVISION} ${REGISTRY}/${IMAGE}:amd64-${REVISION} ${REGISTRY}/${IMAGE}:arm64-${REVISION}
+
+      - name: Lark Notification
+        continue-on-error: true
+        run: |
+          notiv3 "Blockchain fantom image pushed 🎉" ${REGISTRY}/${IMAGE}:${REVISION}

@@ -100,6 +100,22 @@ func NewTraceStructLogger(block *evmcore.EvmBlock, tx *types.Transaction, msg ty
 	return &traceStructLogger
 }
 
+// NewTraceStructLogger2 creates new instance of trace creator
+func NewTraceStructLogger2(block *evmcore.EvmBlock, txHash common.Hash, msg types.Message, index uint, gasLimit, gasUsed uint64) *TraceStructLogger {
+	traceStructLogger := TraceStructLogger{
+		tx:          txHash,
+		from:        msg.From(),
+		to:          msg.To(),
+		value:       *msg.Value(),
+		blockHash:   block.Hash,
+		blockNumber: *block.Number,
+		txIndex:     index,
+		gasLimit:    gasLimit,
+		gasUsed:     gasUsed,
+	}
+	return &traceStructLogger
+}
+
 // NewActionTrace creates new instance of type ActionTrace
 func NewActionTrace(bHash common.Hash, bNumber big.Int, tHash common.Hash, tPos uint64, tType string) *ActionTrace {
 	return &ActionTrace{
