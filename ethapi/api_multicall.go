@@ -207,6 +207,15 @@ func doOneCall(ctx context.Context, b Backend, state state.StateDB, header *evmc
 		result.Err = err.Error()
 		return result, err
 	}
+
+	// If the result contains a revert reason, try to unpack and return it.
+	if len(res.Revert()) > 0 {
+		err := newRevertError(res)
+		result.Code = errEVMReverted
+		result.Err = err.Error()
+		return result, err
+	}
+
 	result.Result = res.Return()
 	result.GasUsed = int64(res.UsedGas)
 	return result, nil
