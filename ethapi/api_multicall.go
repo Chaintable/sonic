@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Fantom-foundation/go-opera/evmcore"
@@ -15,7 +14,6 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
@@ -59,17 +57,6 @@ const (
 	errEVMCancelled           = -40013
 	errEVMReverted            = -40014
 	errEVMFastFailed          = -40015
-
-	// internal error
-	errUnderlyingDB = -40020
-	errLoadingState = -40021
-)
-
-var (
-	ethMultiCallCacheHit   = metrics.GetOrRegisterMeter("rpc/ethmulticall/cache/hit", nil)
-	ethMultiCallCacheCount = metrics.GetOrRegisterMeter("rpc/ethmulticall/cache/count", nil)
-
-	errCancelled = fmt.Errorf("execution aborted (timeout = %v)", singleCallTimeout)
 )
 
 const (
@@ -236,10 +223,7 @@ func (s *PublicBlockChainAPI) MultiCall(ctx context.Context, args []TransactionA
 		}
 		return *p
 	}
-
 	fastFail := setb(pfastFail, true)
-	useParallel := setb(puseParallel, true)
-	disableCache := setb(pdisableCache, false)
 
 	// check block & state
 	state, header, err := s.b.StateAndHeaderByNumberOrHash(ctx, blockNrOrHash)
@@ -251,39 +235,10 @@ func (s *PublicBlockChainAPI) MultiCall(ctx context.Context, args []TransactionA
 
 	ret := make([]*callResult, len(args))
 	stats := &multiCallStats{
-		BlockNum:     header.Number.Int64(),
-		BlockHash:    header.Hash,
-		BlockTime:    blockTime,
-		Success:      true,
-		CacheEnabled: !disableCache,
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, singleCallTimeout)
-	defer cancel()
-
-	if useParallel {
-		// run in parallel
-		var wg sync.WaitGroup
-		for i, arg := range args {
-			wg.Add(1)
-			go func(i int, arg TransactionArgs) {
-				defer wg.Done()
-				// state is not reentrancy in concurrent scenarios, so use a copy
-				newState := state.Copy()
-				r, _ := doOneCall(ctx, s.b, newState, header, arg, blockNrOrHash)
-				ret[i] = r
-				if r.Err != "" {
-					stats.Success = false
-					if fastFail {
-						cancel()
-					}
-					return
-				}
-			}(i, arg)
-		}
-		wg.Wait()
-
-		return &multiCallResp{Results: ret, Stats: stats}, nil
+		BlockNum:  header.Number.Int64(),
+		BlockHash: header.Hash,
+		BlockTime: blockTime,
+		Success:   true,
 	}
 
 	// run in sequence
@@ -294,7 +249,7 @@ func (s *PublicBlockChainAPI) MultiCall(ctx context.Context, args []TransactionA
 			continue
 		}
 
-		r, _ := doOneCall(ctx, s.b, state, header, arg, blockNrOrHash)
+		r, _ := doOneCall(context.Background(), s.b, state, header, arg, blockNrOrHash)
 		ret[i] = r
 		if r.Err != "" {
 			stats.Success = false
