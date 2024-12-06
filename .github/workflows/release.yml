@@ -14,7 +14,7 @@ env:
   S3_REGION: ap-northeast-1
   REGISTRY: 294354037686.dkr.ecr.ap-northeast-1.amazonaws.com
   IMAGE: blockchain-ftm
-  DOCKERFILE: docker/Dockerfile
+  DOCKERFILE: Dockerfile
 
 jobs:
   build-artifacts:
