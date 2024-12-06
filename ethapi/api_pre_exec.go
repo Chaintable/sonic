@@ -163,7 +163,7 @@ func (api *PreExecAPI) TraceMany(ctx context.Context, origins []PreExecTx) ([]Pr
 				Error: toPreError(err, result),
 			}
 			if result != nil {
-				preRes.GasUsed = result.MaxUsedGas
+				preRes.GasUsed = result.UsedGas
 			}
 			preResList = append(preResList, preRes)
 			continue
@@ -175,7 +175,7 @@ func (api *PreExecAPI) TraceMany(ctx context.Context, origins []PreExecTx) ([]Pr
 			Logs:  state.GetLogs(txHash, header.Hash),
 		}
 		if result != nil {
-			preRes.GasUsed = result.MaxUsedGas
+			preRes.GasUsed = result.UsedGas
 			if result.Failed() {
 				preRes.Error = toPreError(err, result)
 			}
