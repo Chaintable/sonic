@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"math/rand"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -131,7 +131,7 @@ type Service struct {
 	blockBusyFlag uint32
 	eventBusyFlag uint32
 
-	feed     ServiceFeed
+	feed ServiceFeed
 
 	gpo *gasprice.Oracle
 
@@ -162,7 +162,8 @@ func NewService(stack *node.Node, config Config, store *Store, blockProc BlockPr
 		return nil, err
 	}
 
-	svc, err := newService(config, store, blockProc, engine, dagIndexer, newTxPool)
+	localNodeId := enode.PubkeyToIDV4(&stack.Server().PrivateKey.PublicKey)
+	svc, err := newService(config, store, blockProc, engine, dagIndexer, newTxPool, localNodeId)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +178,7 @@ func NewService(stack *node.Node, config Config, store *Store, blockProc BlockPr
 	return svc, nil
 }
 
-func newService(config Config, store *Store, blockProc BlockProc, engine lachesis.Consensus, dagIndexer *vecmt.Index, newTxPool func(evmcore.StateReader) TxPool) (*Service, error) {
+func newService(config Config, store *Store, blockProc BlockProc, engine lachesis.Consensus, dagIndexer *vecmt.Index, newTxPool func(evmcore.StateReader) TxPool, localId enode.ID) (*Service, error) {
 	svc := &Service{
 		config:             config,
 		blockProcTasksDone: make(chan struct{}),
@@ -204,17 +205,11 @@ func newService(config Config, store *Store, blockProc BlockProc, engine lachesi
 	// load caches for mutable values to avoid race condition
 	svc.store.GetBlockEpochState()
 	svc.store.GetHighestLamport()
-	svc.store.GetLastBVs()
-	svc.store.GetLastEVs()
-	svc.store.GetLlrState()
 	svc.store.GetUpgradeHeights()
 	svc.store.GetGenesisID()
 	netVerStore := verwatcher.NewStore(store.table.NetworkVersion)
 	netVerStore.GetNetworkVersion()
 	netVerStore.GetMissedVersion()
-
-	// create GPO
-	svc.gpo = gasprice.NewOracle(svc.config.GPO)
 
 	// create checkers
 	net := store.GetRules()
@@ -224,9 +219,17 @@ func newService(config Config, store *Store, blockProc BlockProc, engine lachesi
 	svc.gasPowerCheckReader.Ctx.Store(NewGasPowerContext(svc.store, svc.store.GetValidators(), svc.store.GetEpoch(), net.Economy)) // read gaspower check data from DB
 	svc.checkers = makeCheckers(config.HeavyCheck, txSigner, &svc.heavyCheckReader, &svc.gasPowerCheckReader, svc.store)
 
+	// create GPO
+	svc.gpo = gasprice.NewOracle(svc.config.GPO, nil)
+
 	// create tx pool
-	stateReader := svc.GetEvmStateReader()
+	stateReader := &EvmStateReader{
+		ServiceFeed: &svc.feed,
+		store:       svc.store,
+		gpo:         svc.gpo,
+	}
 	svc.txpool = newTxPool(stateReader)
+	svc.gpo.SetReader(&GPOBackend{svc.store, svc.txpool})
 
 	// init dialCandidates
 	dnsclient := dnsdisc.NewClient(dnsdisc.Config{})
@@ -244,18 +247,16 @@ func newService(config Config, store *Store, blockProc BlockProc, engine lachesi
 		engineMu: svc.engineMu,
 		checkers: svc.checkers,
 		s:        store,
+		localId:  localId,
 		process: processCallback{
 			Event: func(event *inter.EventPayload) error {
 				done := svc.procLogger.EventConnectionStarted(event, false)
 				defer done()
 				return svc.processEvent(event)
 			},
-			SwitchEpochTo:    svc.SwitchEpochTo,
-			BVs:              svc.ProcessBlockVotes,
-			BR:               svc.ProcessFullBlockRecord,
-			EV:               svc.ProcessEpochVote,
-			ER:               svc.ProcessFullEpochRecord,
+			SwitchEpochTo: svc.SwitchEpochTo,
 		},
+		localEndPointSource: localEndPointSource{svc},
 	})
 	if err != nil {
 		return nil, err
@@ -273,6 +274,14 @@ func newService(config Config, store *Store, blockProc BlockProc, engine lachesi
 	svc.tflusher = svc.makePeriodicFlusher()
 
 	return svc, nil
+}
+
+type localEndPointSource struct {
+	service *Service
+}
+
+func (s localEndPointSource) GetLocalEndPoint() *enode.Node {
+	return s.service.p2pServer.LocalNode().Node()
 }
 
 // makeCheckers builds event checkers
@@ -344,6 +353,10 @@ func (s *Service) RegisterEmitter(em *emitter.Emitter) {
 
 // MakeProtocols constructs the P2P protocol definitions for `opera`.
 func MakeProtocols(svc *Service, backend *handler, disc enode.Iterator) []p2p.Protocol {
+	nodeIter := enode.NewFairMix(time.Second)
+	nodeIter.AddSource(disc)
+	nodeIter.AddSource(backend.GetSuggestedPeerIterator())
+
 	protocols := make([]p2p.Protocol, len(ProtocolVersions))
 	for i, version := range ProtocolVersions {
 		version := version // Closure
@@ -376,8 +389,8 @@ func MakeProtocols(svc *Service, backend *handler, disc enode.Iterator) []p2p.Pr
 				}
 				return nil
 			},
-			Attributes:     []enr.Entry{currentENREntry(svc)},
-			DialCandidates: disc,
+			Attributes:     []enr.Entry{currentENREntry(svc, 0 /* time */)},
+			DialCandidates: nodeIter,
 		}
 	}
 	return protocols
@@ -408,6 +421,16 @@ func (s *Service) APIs() []rpc.API {
 			Version:   "1.0",
 			Service:   s.netRPCService,
 			Public:    true,
+		}, {
+			Namespace: "debug",
+			Version:   "1.0",
+			Service:   ethapi.NewPublicDebugAPI(s.EthAPI, s.config.MaxResponseSize, s.config.StructLogLimit),
+			Public:    true,
+		}, {
+			Namespace: "trace",
+			Version:   "1.0",
+			Service:   ethapi.NewPublicTxTraceAPI(s.EthAPI, s.config.MaxResponseSize),
+			Public:    true,
 		},
 	}...)
 
@@ -428,7 +451,7 @@ func (s *Service) APIs() []rpc.API {
 
 // Start method invoked when the node is ready to start the service.
 func (s *Service) Start() error {
-	s.gpo.Start(&GPOBackend{s.store, s.txpool})
+	s.gpo.Start()
 	// start tflusher before starting snapshots generation
 	s.tflusher.Start()
 	blockState := s.store.GetBlockState()

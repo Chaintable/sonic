@@ -2,6 +2,7 @@ package vecmt
 
 import (
 	"errors"
+
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/Fantom-foundation/lachesis-base/kvdb"
@@ -117,7 +118,7 @@ func (w *VecFlushable) Drop() {
 	panic(errNotImplemented)
 }
 
-func (w *VecFlushable) AncientDatadir() (string, error) {
+func (db *VecFlushable) AncientDatadir() (string, error) {
 	panic(errNotImplemented)
 }
 
@@ -135,7 +136,7 @@ func (w *VecFlushable) NewIterator(prefix []byte, start []byte) kvdb.Iterator {
 	panic(errNotImplemented)
 }
 
-func (w *VecFlushable) Stat(property string) (string, error) {
+func (w *VecFlushable) Stat() (string, error) {
 	panic(errNotImplemented)
 }
 

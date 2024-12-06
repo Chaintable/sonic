@@ -17,9 +17,7 @@ RUN go mod download
 RUN make all
 
 
-FROM ubuntu:23.04
-
-RUN apt-get update && apt-get install -y ca-certificates wget libsnappy-dev libjemalloc-dev libc6-dev
+FROM golang:1.22
 
 COPY --from=builder /go/Sonic/build/sonicd /usr/local/bin/
 COPY --from=builder /go/Sonic/build/sonictool /usr/local/bin/

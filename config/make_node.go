@@ -2,6 +2,16 @@ package config
 
 import (
 	"fmt"
+	"path"
+	"strconv"
+	"time"
+
+	"github.com/ethereum/go-ethereum/accounts"
+	"github.com/ethereum/go-ethereum/accounts/external"
+	"github.com/ethereum/go-ethereum/accounts/scwallet"
+	"github.com/ethereum/go-ethereum/accounts/usbwallet"
+	"github.com/ethereum/go-ethereum/metrics"
+
 	"github.com/Fantom-foundation/go-opera/config/flags"
 	"github.com/Fantom-foundation/go-opera/evmcore"
 	"github.com/Fantom-foundation/go-opera/gossip"
@@ -10,11 +20,14 @@ import (
 	"github.com/Fantom-foundation/go-opera/utils/errlock"
 	"github.com/Fantom-foundation/go-opera/valkeystore"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
+	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/node"
 	"gopkg.in/urfave/cli.v1"
-	"path"
-	"time"
+)
+
+var (
+	chainInfoGauge = metrics.GetOrRegisterGaugeInfo("chain/info", nil)
 )
 
 func MakeNode(ctx *cli.Context, cfg *Config) (*node.Node, *gossip.Service, func(), error) {
@@ -65,7 +78,7 @@ func MakeNode(ctx *cli.Context, cfg *Config) (*node.Node, *gossip.Service, func(
 		setBootnodes(ctx, bootnodes, &cfg.Node)
 	}
 
-	stack, err := makeNetworkStack(ctx, &cfg.Node)
+	stack, err := MakeNetworkStack(ctx, &cfg.Node)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to unlock validator key: %w", err)
 	}
@@ -75,7 +88,7 @@ func MakeNode(ctx *cli.Context, cfg *Config) (*node.Node, *gossip.Service, func(
 		}
 	})
 
-	_, _, keystoreDir, err := cfg.Node.AccountConfig()
+	keystoreDir, err := cfg.Node.KeyDirConfig()
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to setup account config: %w", err)
 	}
@@ -137,12 +150,19 @@ func MakeNode(ctx *cli.Context, cfg *Config) (*node.Node, *gossip.Service, func(
 	}
 
 	if cfg.Emitter.Validator.ID != 0 {
-		svc.RegisterEmitter(emitter.NewEmitter(cfg.Emitter, svc.EmitterWorld(signer)))
+		svc.RegisterEmitter(emitter.NewEmitter(
+			cfg.Emitter,
+			svc.EmitterWorld(signer),
+			gdb.AsBaseFeeSource(),
+		))
 	}
 
 	stack.RegisterAPIs(svc.APIs())
 	stack.RegisterProtocols(svc.Protocols())
 	stack.RegisterLifecycle(svc)
+
+	rules, _ := gdb.GetEpochRules()
+	chainInfoGauge.Update(metrics.GaugeInfoValue{"chain_id": strconv.FormatUint(rules.NetworkID, 10)})
 
 	success = true // skip cleanup in defer - keep it for the returned cleanup function
 	return stack, svc, func() {
@@ -152,10 +172,76 @@ func MakeNode(ctx *cli.Context, cfg *Config) (*node.Node, *gossip.Service, func(
 	}, nil
 }
 
-func makeNetworkStack(ctx *cli.Context, cfg *node.Config) (*node.Node, error) {
+func MakeNetworkStack(ctx *cli.Context, cfg *node.Config) (*node.Node, error) {
 	stack, err := node.New(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create the protocol stack: %w", err)
 	}
+
+	keystoreDir, err := cfg.KeyDirConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to setup account config: %w", err)
+	}
+	err = setAccountManagerBackends(cfg, stack.AccountManager(), keystoreDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to setup account manager: %w", err)
+	}
+
 	return stack, nil
+}
+
+func setAccountManagerBackends(conf *node.Config, am *accounts.Manager, keydir string) error {
+	scryptN := keystore.StandardScryptN
+	scryptP := keystore.StandardScryptP
+	if conf.UseLightweightKDF {
+		scryptN = keystore.LightScryptN
+		scryptP = keystore.LightScryptP
+	}
+
+	// Assemble the supported backends
+	if len(conf.ExternalSigner) > 0 {
+		log.Info("Using external signer", "url", conf.ExternalSigner)
+		if extBackend, err := external.NewExternalBackend(conf.ExternalSigner); err == nil {
+			am.AddBackend(extBackend)
+			return nil
+		} else {
+			return fmt.Errorf("error connecting to external signer: %v", err)
+		}
+	}
+
+	// For now, we're using EITHER external signer OR local signers.
+	// If/when we implement some form of lockfile for USB and keystore wallets,
+	// we can have both, but it's very confusing for the user to see the same
+	// accounts in both externally and locally, plus very racey.
+	am.AddBackend(keystore.NewKeyStore(keydir, scryptN, scryptP))
+	if conf.USB {
+		// Start a USB hub for Ledger hardware wallets
+		if ledgerhub, err := usbwallet.NewLedgerHub(); err != nil {
+			log.Warn(fmt.Sprintf("Failed to start Ledger hub, disabling: %v", err))
+		} else {
+			am.AddBackend(ledgerhub)
+		}
+		// Start a USB hub for Trezor hardware wallets (HID version)
+		if trezorhub, err := usbwallet.NewTrezorHubWithHID(); err != nil {
+			log.Warn(fmt.Sprintf("Failed to start HID Trezor hub, disabling: %v", err))
+		} else {
+			am.AddBackend(trezorhub)
+		}
+		// Start a USB hub for Trezor hardware wallets (WebUSB version)
+		if trezorhub, err := usbwallet.NewTrezorHubWithWebUSB(); err != nil {
+			log.Warn(fmt.Sprintf("Failed to start WebUSB Trezor hub, disabling: %v", err))
+		} else {
+			am.AddBackend(trezorhub)
+		}
+	}
+	if len(conf.SmartCardDaemonPath) > 0 {
+		// Start a smart card hub
+		if schub, err := scwallet.NewHub(conf.SmartCardDaemonPath, scwallet.Scheme, keydir); err != nil {
+			log.Warn(fmt.Sprintf("Failed to start smart card hub, disabling: %v", err))
+		} else {
+			am.AddBackend(schub)
+		}
+	}
+
+	return nil
 }

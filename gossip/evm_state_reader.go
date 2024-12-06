@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -23,28 +22,10 @@ type EvmStateReader struct {
 	gpo   *gasprice.Oracle
 }
 
-func (s *Service) GetEvmStateReader() *EvmStateReader {
-	return &EvmStateReader{
-		ServiceFeed: &s.feed,
-		store:       s.store,
-		gpo:         s.gpo,
-	}
-}
-
-// MinGasPrice returns current hard lower bound for gas price
-func (r *EvmStateReader) MinGasPrice() *big.Int {
-	return r.store.GetRules().Economy.MinGasPrice
-}
-
-// EffectiveMinTip returns current soft lower bound for gas tip
-func (r *EvmStateReader) EffectiveMinTip() *big.Int {
-	min := r.MinGasPrice()
-	est := r.gpo.EffectiveMinGasPrice()
-	est.Sub(est, min)
-	if est.Sign() < 0 {
-		return new(big.Int)
-	}
-	return est
+// GetCurrentBaseFee returns the base fee charged in the most recent block.
+func (r *EvmStateReader) GetCurrentBaseFee() *big.Int {
+	res := r.store.GetBlock(r.store.GetLatestBlockIndex()).BaseFee
+	return new(big.Int).Set(res)
 }
 
 func (r *EvmStateReader) MaxGasLimit() uint64 {
@@ -65,13 +46,13 @@ func (r *EvmStateReader) Config() *params.ChainConfig {
 func (r *EvmStateReader) CurrentBlock() *evmcore.EvmBlock {
 	n := r.store.GetLatestBlockIndex()
 
-	return r.getBlock(hash.Event{}, n, true)
+	return r.getBlock(common.Hash{}, n, true)
 }
 
 func (r *EvmStateReader) CurrentHeader() *evmcore.EvmHeader {
 	n := r.store.GetLatestBlockIndex()
 
-	return r.getBlock(hash.Event{}, n, false).Header()
+	return r.getBlock(common.Hash{}, n, false).Header()
 }
 
 func (r *EvmStateReader) LastHeaderWithArchiveState() (*evmcore.EvmHeader, error) {
@@ -86,23 +67,27 @@ func (r *EvmStateReader) LastHeaderWithArchiveState() (*evmcore.EvmHeader, error
 		latestBlock = idx.Block(latestArchiveBlock)
 	}
 
-	return r.getBlock(hash.Event{}, latestBlock, false).Header(), nil
+	return r.getBlock(common.Hash{}, latestBlock, false).Header(), nil
+}
+
+func (r *EvmStateReader) GetHeaderByNumber(n uint64) *evmcore.EvmHeader {
+	return r.GetHeader(common.Hash{}, n)
 }
 
 func (r *EvmStateReader) GetHeader(h common.Hash, n uint64) *evmcore.EvmHeader {
-	return r.getBlock(hash.Event(h), idx.Block(n), false).Header()
+	return r.getBlock(h, idx.Block(n), false).Header()
 }
 
 func (r *EvmStateReader) GetBlock(h common.Hash, n uint64) *evmcore.EvmBlock {
-	return r.getBlock(hash.Event(h), idx.Block(n), true)
+	return r.getBlock(h, idx.Block(n), true)
 }
 
-func (r *EvmStateReader) getBlock(h hash.Event, n idx.Block, readTxs bool) *evmcore.EvmBlock {
+func (r *EvmStateReader) getBlock(h common.Hash, n idx.Block, readTxs bool) *evmcore.EvmBlock {
 	block := r.store.GetBlock(n)
 	if block == nil {
 		return nil
 	}
-	if (h != hash.Event{}) && (h != block.Atropos) {
+	if (h != common.Hash{}) && (h != block.Hash()) {
 		return nil
 	}
 	if readTxs {
@@ -119,20 +104,31 @@ func (r *EvmStateReader) getBlock(h hash.Event, n idx.Block, readTxs bool) *evmc
 	}
 
 	// find block rules
-	epoch := block.Atropos.Epoch()
+	epoch := block.Epoch
 	es := r.store.GetHistoryEpochState(epoch)
 	var rules opera.Rules
 	if es != nil {
 		rules = es.Rules
 	}
-	var prev hash.Event
+
+	// There is no epoch state for epoch 0 comprising block 0.
+	// For this epoch, London and Sonic upgrades are enabled.
+	// TODO: instead of hard-coding these values here, a corresponding
+	// epoch state should be included in the genesis procedure to be
+	// consistent. See issue #72.
+	if epoch == 0 {
+		rules.Upgrades.London = true
+		rules.Upgrades.Sonic = true
+	}
+
+	var prev common.Hash
 	if n != 0 {
 		block := r.store.GetBlock(n - 1)
 		if block != nil {
-			prev = block.Atropos
+			prev = block.Hash()
 		}
 	}
-	evmHeader := evmcore.ToEvmHeader(block, n, prev, rules)
+	evmHeader := evmcore.ToEvmHeader(block, prev, rules)
 
 	var evmBlock *evmcore.EvmBlock
 	if readTxs {

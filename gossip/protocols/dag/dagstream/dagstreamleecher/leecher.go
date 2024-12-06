@@ -1,7 +1,8 @@
 package dagstreamleecher
 
 import (
-	"math/rand"
+	"math/rand/v2"
+	"slices"
 	"time"
 
 	"github.com/Fantom-foundation/lachesis-base/gossip/basestream/basestreamleecher"
@@ -139,7 +140,13 @@ func getSessionID(epoch idx.Epoch, try uint32) uint32 {
 }
 
 func (d *Leecher) startSession(candidates []string) {
-	peer := candidates[rand.Intn(len(candidates))]
+	peer := candidates[rand.IntN(len(candidates))]
+	if d.session.try == 0 && rand.IntN(50) != 0 {
+		// try previous successful peer first
+		if slices.Contains(candidates, d.session.peer) {
+			peer = d.session.peer
+		}
+	}
 
 	typ := dagstream.RequestIDs
 	if d.callback.PeerEpoch(peer) > d.epoch && d.emptyState && d.session.try == 0 {

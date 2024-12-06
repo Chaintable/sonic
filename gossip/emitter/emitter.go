@@ -3,22 +3,27 @@ package emitter
 import (
 	"errors"
 	"fmt"
-	"github.com/Fantom-foundation/go-opera/utils/txtime"
-	"github.com/ethereum/go-ethereum/metrics"
-	"math/rand"
+	"math/big"
+	"math/rand/v2"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/Fantom-foundation/go-opera/utils"
+	"github.com/Fantom-foundation/go-opera/utils/txtime"
 	"github.com/Fantom-foundation/lachesis-base/emitter/ancestor"
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/Fantom-foundation/lachesis-base/inter/pos"
 	"github.com/Fantom-foundation/lachesis-base/utils/piecefunc"
-	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/txpool"
+	"github.com/ethereum/go-ethereum/metrics"
 
 	"github.com/Fantom-foundation/go-opera/gossip/emitter/originatedtxs"
+	"github.com/Fantom-foundation/go-opera/gossip/gasprice/gaspricelimits"
 	"github.com/Fantom-foundation/go-opera/inter"
 	"github.com/Fantom-foundation/go-opera/logger"
 	"github.com/Fantom-foundation/go-opera/tracing"
@@ -89,7 +94,7 @@ type Emitter struct {
 	maxParents idx.Event
 
 	cache struct {
-		sortedTxs *types.TransactionsByPriceAndNonce
+		sortedTxs *transactionsByPriceAndNonce
 		poolTime  time.Time
 		poolBlock idx.Block
 		poolCount int
@@ -101,17 +106,26 @@ type Emitter struct {
 	busyRate         *rate.Gauge
 
 	logger.Periodic
+
+	baseFeeSource BaseFeeSource
+
+	lastTimeAnEventWasConfirmed atomic.Pointer[time.Time]
+}
+
+type BaseFeeSource interface {
+	GetCurrentBaseFee() *big.Int
 }
 
 // NewEmitter creation.
 func NewEmitter(
 	config Config,
 	world World,
+	baseFeeSource BaseFeeSource,
 ) *Emitter {
 	// Randomize event time to decrease chance of 2 parallel instances emitting event at the same time
 	// It increases the chance of detecting parallel instances
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	config.EmitIntervals = config.EmitIntervals.RandomizeEmitTime(r)
+	rand := rand.New(rand.NewPCG(uint64(os.Getpid()), uint64(time.Now().UnixNano())))
+	config.EmitIntervals = config.EmitIntervals.RandomizeEmitTime(rand)
 
 	return &Emitter{
 		config:                   config,
@@ -120,6 +134,7 @@ func NewEmitter(
 		intervals:                config.EmitIntervals,
 		globalConfirmingInterval: config.EmitIntervals.Confirming,
 		Periodic:                 logger.Periodic{Instance: logger.New()},
+		baseFeeSource:            baseFeeSource,
 	}
 }
 
@@ -216,7 +231,7 @@ func (em *Emitter) tick() {
 	}
 }
 
-func (em *Emitter) getSortedTxs() *types.TransactionsByPriceAndNonce {
+func (em *Emitter) getSortedTxs(baseFee *big.Int) *transactionsByPriceAndNonce {
 	// Short circuit if pool wasn't updated since the cache was built
 	poolCount := em.world.TxPool.Count()
 	if em.cache.sortedTxs != nil &&
@@ -237,7 +252,25 @@ func (em *Emitter) getSortedTxs() *types.TransactionsByPriceAndNonce {
 			pendingTxs[from] = txs[:em.config.MaxTxsPerAddress]
 		}
 	}
-	sortedTxs := types.NewTransactionsByPriceAndNonce(em.world.TxSigner, pendingTxs, em.world.GetRules().Economy.MinGasPrice)
+	// Convert to lists of LazyTransactions
+	txs := make(map[common.Address][]*txpool.LazyTransaction, len(pendingTxs))
+	for from, list := range pendingTxs {
+		lazyTxs := make([]*txpool.LazyTransaction, 0, len(list))
+		for _, tx := range list {
+			lazyTxs = append(lazyTxs, &txpool.LazyTransaction{
+				Hash:      tx.Hash(),
+				Tx:        tx,
+				Time:      tx.Time(),
+				GasFeeCap: utils.BigIntToUint256(tx.GasFeeCap()),
+				GasTipCap: utils.BigIntToUint256(tx.GasTipCap()),
+				Gas:       tx.Gas(),
+				BlobGas:   tx.BlobGas(),
+			})
+		}
+		txs[from] = lazyTxs
+	}
+
+	sortedTxs := newTransactionsByPriceAndNonce(em.world.TxSigner, txs, baseFee)
 	em.cache.sortedTxs = sortedTxs
 	em.cache.poolCount = poolCount
 	em.cache.poolBlock = em.world.GetLatestBlockIndex()
@@ -250,7 +283,11 @@ func (em *Emitter) EmitEvent() (*inter.EventPayload, error) {
 		// short circuit if not a validator
 		return nil, nil
 	}
-	sortedTxs := em.getSortedTxs()
+
+	minimFeeCap := gaspricelimits.GetMinimumFeeCapForEventEmitter(
+		em.baseFeeSource.GetCurrentBaseFee(),
+	)
+	sortedTxs := em.getSortedTxs(minimFeeCap)
 
 	if em.world.IsBusy() {
 		return nil, nil
@@ -272,12 +309,6 @@ func (em *Emitter) EmitEvent() (*inter.EventPayload, error) {
 	}
 	// write event ID to avoid doublesigning in future after a crash
 	em.writeLastEmittedEventID(e.ID())
-	if e.EpochVote().Epoch != 0 {
-		em.writeLastEmittedEpochVote(e.EpochVote().Epoch)
-	}
-	if len(e.BlockVotes().Votes) != 0 {
-		em.writeLastEmittedBlockVotes(e.BlockVotes().LastBlock())
-	}
 	// broadcast the event
 	em.world.Broadcast(e)
 
@@ -313,7 +344,7 @@ func (em *Emitter) loadPrevEmitTime() time.Time {
 }
 
 // createEvent is not safe for concurrent use.
-func (em *Emitter) createEvent(sortedTxs *types.TransactionsByPriceAndNonce) (*inter.EventPayload, error) {
+func (em *Emitter) createEvent(sortedTxs *transactionsByPriceAndNonce) (*inter.EventPayload, error) {
 	if !em.isValidator() {
 		return nil, nil
 	}
@@ -368,7 +399,9 @@ func (em *Emitter) createEvent(sortedTxs *types.TransactionsByPriceAndNonce) (*i
 	}
 
 	version := uint8(0)
-	if em.world.GetRules().Upgrades.Llr {
+	if em.world.GetRules().Upgrades.Sonic {
+		version = 2
+	} else if em.world.GetRules().Upgrades.Llr {
 		version = 1
 	}
 
@@ -381,10 +414,6 @@ func (em *Emitter) createEvent(sortedTxs *types.TransactionsByPriceAndNonce) (*i
 	mutEvent.SetParents(parents)
 	mutEvent.SetLamport(maxLamport + 1)
 	mutEvent.SetCreationTime(inter.MaxTimestamp(inter.Timestamp(time.Now().UnixNano()), selfParentTime+1))
-
-	// add LLR votes
-	em.addLlrEpochVote(mutEvent)
-	em.addLlrBlockVotes(mutEvent)
 
 	// node version
 	if mutEvent.Seq() <= 1 && len(em.config.VersionToPublish) > 0 {

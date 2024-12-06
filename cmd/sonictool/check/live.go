@@ -3,12 +3,14 @@ package check
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+
 	"github.com/Fantom-foundation/Carmen/go/database/mpt"
 	"github.com/Fantom-foundation/Carmen/go/database/mpt/io"
 	carmen "github.com/Fantom-foundation/Carmen/go/state"
+	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/utils/cachescale"
 	"github.com/ethereum/go-ethereum/log"
-	"path/filepath"
 )
 
 func CheckLiveStateDb(ctx context.Context, dataDir string, cacheRatio cachescale.Func) error {
@@ -43,7 +45,7 @@ func checkLiveBlockRoot(dataDir string, cacheRatio cachescale.Func) error {
 	if lastBlock == nil {
 		return fmt.Errorf("verification failed - unable to get the last block (%d) from gdb", lastBlockIdx)
 	}
-	err = gdb.EvmStore().CheckLiveStateHash(lastBlockIdx, lastBlock.Root)
+	err = gdb.EvmStore().CheckLiveStateHash(lastBlockIdx, hash.Hash(lastBlock.StateRoot))
 	if err != nil {
 		return fmt.Errorf("checking live state failed: %w", err)
 	}

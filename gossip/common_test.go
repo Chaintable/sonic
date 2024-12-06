@@ -11,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/core/tracing"
+	"github.com/ethereum/go-ethereum/p2p/enode"
+
 	"github.com/Fantom-foundation/lachesis-base/abft"
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/dag"
@@ -20,10 +23,13 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/params"
+	"github.com/holiman/uint256"
 
 	"github.com/Fantom-foundation/go-opera/evmcore"
 	"github.com/Fantom-foundation/go-opera/gossip/blockproc"
@@ -135,6 +141,7 @@ func newTestEnv(firstEpoch idx.Epoch, validatorsNum idx.Validator, tb testing.TB
 	rules := opera.FakeNetRules()
 	rules.Epochs.MaxEpochDuration = inter.Timestamp(maxEpochDuration)
 	rules.Blocks.MaxEmptyBlockSkipPeriod = 0
+	rules.Emitter.Interval = 0
 
 	genStore := makefakegenesis.FakeGenesisStoreWithRulesAndStart(validatorsNum, utils.ToFtm(genesisBalance), utils.ToFtm(genesisStake), rules, firstEpoch, 2)
 	genesis := genStore.Genesis()
@@ -162,7 +169,7 @@ func newTestEnv(firstEpoch idx.Epoch, validatorsNum idx.Validator, tb testing.TB
 	txPool := &dummyTxPool{}
 	env.Service, err = newService(DefaultConfig(cachescale.Identity), store, blockProc, engine, vecClock, func(_ evmcore.StateReader) TxPool {
 		return txPool
-	})
+	}, enode.ID{})
 	if err != nil {
 		panic(err)
 	}
@@ -191,7 +198,7 @@ func newTestEnv(firstEpoch idx.Epoch, validatorsNum idx.Validator, tb testing.TB
 		_ = valKeystore.Unlock(pubkey, validatorpk.FakePassword)
 		world := env.EmitterWorld(env.signer)
 		world.External = testEmitterWorldExternal{world.External, env}
-		em := emitter.NewEmitter(cfg, world)
+		em := emitter.NewEmitter(cfg, world, store.AsBaseFeeSource())
 		env.RegisterEmitter(em)
 		env.pubkeys = append(env.pubkeys, pubkey)
 		em.Start()
@@ -230,7 +237,13 @@ func (env *testEnv) ApplyTxs(spent time.Duration, txs ...*types.Transaction) (ty
 			if len(b.Block.Transactions) == 0 {
 				continue
 			}
-			receipts := env.store.evm.GetReceipts(idx.Block(b.Block.Number.Uint64()), env.EthAPI.signer, b.Block.Hash, b.Block.Transactions)
+
+			var config *params.ChainConfig = nil
+			time := uint64(0)
+			baseFee := big.NewInt(0)
+			blobGasPrice := big.NewInt(1)
+
+			receipts := env.store.evm.GetReceipts(idx.Block(b.Block.Number.Uint64()), config, b.Block.Hash, time, baseFee, blobGasPrice, b.Block.Transactions)
 			for i, tx := range b.Block.Transactions {
 				if r, _, _ := tx.RawSignatureValues(); r.Sign() != 0 {
 					mu.Lock()
@@ -255,39 +268,6 @@ func (env *testEnv) ApplyTxs(spent time.Duration, txs ...*types.Transaction) (ty
 	return externalReceipts, err
 }
 
-func (env *testEnv) ApplyMPs(spent time.Duration, mps ...inter.MisbehaviourProof) error {
-	env.t = env.t.Add(spent)
-
-	// all callbacks are non-async
-	lastEpoch := idx.Epoch(0)
-	env.callback.buildEvent = func(e *inter.MutableEventPayload) {
-		if e.Epoch() > lastEpoch {
-			e.SetMisbehaviourProofs(mps)
-			lastEpoch = e.Epoch()
-		}
-	}
-	confirmed := false
-	env.callback.onEventConfirmed = func(_e inter.EventI) {
-		// ensure that not only MPs were confirmed, but also no new MPs will be confirmed in future
-		if _e.AnyMisbehaviourProofs() && _e.Epoch() == lastEpoch {
-			confirmed = true
-			// sanity check for gas used
-			e := env.store.GetEventPayload(_e.ID())
-			rule := env.store.GetRules().Economy.Gas
-			if e.GasPowerUsed() < rule.EventGas+uint64(len(e.MisbehaviourProofs()))*rule.MisbehaviourProofGas {
-				panic("GasPowerUsed calculation doesn't include MisbehaviourProofGas")
-			}
-		}
-	}
-	defer func() {
-		env.callback.buildEvent = nil
-	}()
-
-	return env.EmitUntil(func() bool {
-		return confirmed
-	})
-}
-
 func (env *testEnv) EmitUntil(stop func() bool) error {
 	t := time.Now()
 
@@ -309,7 +289,7 @@ func (env *testEnv) EmitUntil(stop func() bool) error {
 
 func (env *testEnv) Transfer(from, to idx.ValidatorID, amount *big.Int) *types.Transaction {
 	sender := env.Address(from)
-	nonce, _ := env.PendingNonceAt(nil, sender)
+	nonce, _ := env.PendingNonceAt(context.TODO(), sender)
 	env.incNonce(sender)
 	key := env.privateKey(from)
 	receiver := env.Address(to)
@@ -325,7 +305,7 @@ func (env *testEnv) Transfer(from, to idx.ValidatorID, amount *big.Int) *types.T
 
 func (env *testEnv) Contract(from idx.ValidatorID, amount *big.Int, hex string) *types.Transaction {
 	sender := env.Address(from)
-	nonce, _ := env.PendingNonceAt(nil, sender)
+	nonce, _ := env.PendingNonceAt(context.TODO(), sender)
 	env.incNonce(sender)
 	key := env.privateKey(from)
 	gp := new(big.Int).SetUint64(1e12)
@@ -353,7 +333,7 @@ func (env *testEnv) Address(n idx.ValidatorID) common.Address {
 func (env *testEnv) Payer(n idx.ValidatorID, amounts ...*big.Int) *bind.TransactOpts {
 	key := env.privateKey(n)
 	t, _ := bind.NewKeyedTransactorWithChainID(key, new(big.Int).SetUint64(env.store.GetRules().NetworkID))
-	nonce, _ := env.PendingNonceAt(nil, env.Address(n))
+	nonce, _ := env.PendingNonceAt(context.TODO(), env.Address(n))
 	t.Nonce = big.NewInt(int64(nonce))
 	t.Value = big.NewInt(0)
 	for _, amount := range amounts {
@@ -450,18 +430,27 @@ func (env *testEnv) callContract(
 	if call.Value == nil {
 		call.Value = new(big.Int)
 	}
+	if call.GasFeeCap == nil {
+		call.GasFeeCap = big.NewInt(math.MaxInt)
+	}
+	if call.GasTipCap == nil {
+		call.GasTipCap = big.NewInt(math.MaxInt)
+	}
 	// Set infinite balance to the fake caller account.
-	state.AddBalance(call.From, big.NewInt(math.MaxInt64))
+	state.AddBalance(call.From, uint256.NewInt(math.MaxInt64), tracing.BalanceIncreaseGenesisBalance)
 
-	msg := callmsg{call}
+	msg := CallMsgToMessage(call)
 
 	// Create a new environment which holds all relevant information
 	// about the transaction and calling mechanisms.
 	txContext := evmcore.NewEVMTxContext(msg)
 	context := evmcore.NewEVMBlockContext(block.Header(), env.GetEvmStateReader(), nil)
 	vmenv := vm.NewEVM(context, txContext, state, env.store.GetEvmChainConfig(), opera.DefaultVMConfig)
-	gaspool := new(evmcore.GasPool).AddGas(math.MaxUint64)
-	res, err := evmcore.NewStateTransition(vmenv, msg, gaspool).TransitionDb()
+	gaspool := new(core.GasPool).AddGas(math.MaxUint64)
+	res, err := core.NewStateTransition(vmenv, msg, gaspool).TransitionDb()
+	if err != nil {
+		return nil, 0, false, err
+	}
 
 	ret, usedGas, failed = res.Return(), res.UsedGas, res.Failed()
 	return
@@ -523,29 +512,27 @@ func (env *testEnv) SendTransaction(ctx context.Context, tx *types.Transaction) 
 // returning all the results in one batch.
 func (env *testEnv) FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]types.Log, error) {
 	panic("not implemented yet")
-	return nil, nil
 }
 
 // SubscribeFilterLogs creates a background log filtering operation, returning
 // a subscription immediately, which can be used to stream the found events.
 func (env *testEnv) SubscribeFilterLogs(ctx context.Context, query ethereum.FilterQuery, ch chan<- types.Log) (ethereum.Subscription, error) {
 	panic("not implemented yet")
-	return nil, nil
 }
 
-// callmsg implements evmcore.Message to allow passing it as a transaction simulator.
-type callmsg struct {
-	ethereum.CallMsg
+// CallMsgToMessage converts the given CallMsg to an evmcore.Message to allow passing it as a transaction simulator.
+func CallMsgToMessage(msg ethereum.CallMsg) *core.Message {
+	return &core.Message{
+		From:              msg.From,
+		To:                msg.To,
+		GasPrice:          msg.GasPrice,
+		GasTipCap:         msg.GasTipCap,
+		GasFeeCap:         msg.GasFeeCap,
+		GasLimit:          msg.Gas,
+		Value:             msg.Value,
+		Nonce:             0,
+		SkipAccountChecks: true,
+		Data:              msg.Data,
+		AccessList:        msg.AccessList,
+	}
 }
-
-func (m callmsg) From() common.Address         { return m.CallMsg.From }
-func (m callmsg) To() *common.Address          { return m.CallMsg.To }
-func (m callmsg) GasPrice() *big.Int           { return m.CallMsg.GasPrice }
-func (m callmsg) GasTipCap() *big.Int          { return m.CallMsg.GasTipCap }
-func (m callmsg) GasFeeCap() *big.Int          { return m.CallMsg.GasFeeCap }
-func (m callmsg) Gas() uint64                  { return m.CallMsg.Gas }
-func (m callmsg) Value() *big.Int              { return m.CallMsg.Value }
-func (m callmsg) Nonce() uint64                { return 0 }
-func (m callmsg) IsFake() bool                 { return true }
-func (m callmsg) Data() []byte                 { return m.CallMsg.Data }
-func (m callmsg) AccessList() types.AccessList { return nil }

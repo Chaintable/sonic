@@ -4,15 +4,17 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	carmen "github.com/Fantom-foundation/Carmen/go/state"
-	"github.com/Fantom-foundation/go-opera/config/flags"
-	"github.com/Fantom-foundation/go-opera/gossip/evmstore"
-	"github.com/ethereum/go-ethereum/common/fdlimit"
 	"os"
 	"path"
 	"path/filepath"
 	"reflect"
 	"strings"
+
+	carmen "github.com/Fantom-foundation/Carmen/go/state"
+	"github.com/Fantom-foundation/go-opera/config/flags"
+	"github.com/Fantom-foundation/go-opera/gossip/evmstore"
+	"github.com/Fantom-foundation/go-opera/version"
+	"github.com/ethereum/go-ethereum/common/fdlimit"
 
 	"github.com/Fantom-foundation/lachesis-base/abft"
 	"github.com/Fantom-foundation/lachesis-base/utils/cachescale"
@@ -20,7 +22,6 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/p2p/enode"
-	"github.com/ethereum/go-ethereum/params"
 	"github.com/naoina/toml"
 	"github.com/syndtr/goleveldb/leveldb/opt"
 	"gopkg.in/urfave/cli.v1"
@@ -93,9 +94,10 @@ func loadAllConfigs(file string, cfg *Config) error {
 		err = errors.New(file + ", " + err.Error())
 	}
 	if err != nil {
-		return errors.New(fmt.Sprintf("TOML config file error: %v.\n"+
+
+		return fmt.Errorf("TOML config file error: %v.\n"+
 			"Use 'dumpconfig' command to get an example config file.\n"+
-			"If node was recently upgraded and a previous network config file is used, then check updates for the config file.", err))
+			"If node was recently upgraded and a previous network config file is used, then check updates for the config file.", err)
 	}
 	return err
 }
@@ -174,11 +176,16 @@ func gossipConfigWithFlags(ctx *cli.Context, src gossip.Config) gossip.Config {
 	if ctx.GlobalIsSet(flags.RPCGlobalTimeoutFlag.Name) {
 		cfg.RPCTimeout = ctx.GlobalDuration(flags.RPCGlobalTimeoutFlag.Name)
 	}
-
+	if ctx.GlobalIsSet(flags.MaxResponseSizeFlag.Name) {
+		cfg.MaxResponseSize = ctx.GlobalInt(flags.MaxResponseSizeFlag.Name)
+	}
+	if ctx.IsSet(flags.StructLogLimitFlag.Name) {
+		cfg.StructLogLimit = ctx.GlobalInt(flags.StructLogLimitFlag.Name)
+	}
 	return cfg
 }
 
-func setEvmStore(ctx *cli.Context, datadir string, src  evmstore.StoreConfig) (evmstore.StoreConfig, error) {
+func setEvmStore(ctx *cli.Context, datadir string, src evmstore.StoreConfig) (evmstore.StoreConfig, error) {
 	cfg := src
 	cfg.StateDb.Directory = filepath.Join(datadir, "carmen")
 
@@ -231,13 +238,13 @@ const (
 	// DefaultCacheSize is calculated as memory consumption in a worst case scenario with default configuration
 	// Average memory consumption might be 3-5 times lower than the maximum
 	DefaultCacheSize  = 6 * 1024 // MB
-	ConstantCacheSize = 400 // MB
+	ConstantCacheSize = 400      // MB
 )
 
 func cacheScaler(ctx *cli.Context) cachescale.Func {
 	baseSize := DefaultCacheSize
 	totalMemory := int(memory.TotalMemory() / opt.MiB)
-	maxCache := totalMemory * 3 / 5  // max 60% of available memory
+	maxCache := totalMemory * 3 / 5 // max 60% of available memory
 	if maxCache < baseSize {
 		maxCache = baseSize
 	}
@@ -330,6 +337,10 @@ func MakeAllConfigsFromFile(ctx *cli.Context, configFile string) (*Config, error
 		return nil, err
 	}
 
+	if ctx.IsSet(flags.SuppressFramePanicFlag.Name) {
+		cfg.Lachesis.SuppressFramePanic = true
+	}
+
 	return &cfg, nil
 }
 
@@ -340,9 +351,9 @@ func MakeAllConfigs(ctx *cli.Context) (*Config, error) {
 func DefaultNodeConfig() node.Config {
 	cfg := NodeDefaultConfig
 	cfg.Name = ClientIdentifier
-	cfg.Version = params.VersionWithCommit(GitCommit, GitDate)
+	cfg.Version = version.VersionWithCommit(GitCommit, GitDate)
 	cfg.HTTPModules = append(cfg.HTTPModules, "eth", "ftm", "dag", "abft", "web3")
 	cfg.WSModules = append(cfg.WSModules, "eth", "ftm", "dag", "abft", "web3")
-	cfg.IPCPath = "opera.ipc"
+	cfg.IPCPath = "sonic.ipc"
 	return cfg
 }

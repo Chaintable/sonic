@@ -4,7 +4,7 @@ import (
 	"errors"
 	"math"
 	"math/big"
-	"math/rand"
+	"math/rand/v2"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -304,9 +304,6 @@ func TestBadVals(t *testing.T) {
 		require := require.New(t)
 
 		err = UnmarshalBinaryAdapter(buf, func(r *Reader) error {
-			for _, _ = range expBigInt {
-				// skip
-			}
 			for i, exp := range expFixedBytes {
 				got := make([]byte, len(exp))
 				r.FixedBytes(got)
@@ -318,9 +315,6 @@ func TestBadVals(t *testing.T) {
 				require.NotEqual(exp, got, i)
 				require.Equal(len(exp), len(got), i)
 			}
-			for _, _ = range expU56 {
-				// skip
-			}
 			return nil
 		})
 		require.NoError(err)
@@ -329,9 +323,8 @@ func TestBadVals(t *testing.T) {
 
 func randBytes(n int) []byte {
 	bb := make([]byte, n)
-	_, err := rand.Read(bb)
-	if err != nil {
-		panic(err)
+	for i := range bb {
+		bb[i] = byte(rand.IntN(256))
 	}
 	return bb
 }

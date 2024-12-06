@@ -3,13 +3,15 @@ package check
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+
 	"github.com/Fantom-foundation/Carmen/go/database/mpt"
 	"github.com/Fantom-foundation/Carmen/go/database/mpt/io"
 	carmen "github.com/Fantom-foundation/Carmen/go/state"
+	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/Fantom-foundation/lachesis-base/utils/cachescale"
 	"github.com/ethereum/go-ethereum/log"
-	"path/filepath"
 )
 
 func CheckArchiveStateDb(ctx context.Context, dataDir string, cacheRatio cachescale.Func) error {
@@ -46,12 +48,12 @@ func checkArchiveBlockRoots(dataDir string, cacheRatio cachescale.Func) error {
 		if block == nil {
 			return fmt.Errorf("verification failed - unable to get block %d from gdb", i)
 		}
-		err = gdb.EvmStore().CheckArchiveStateHash(i, block.Root)
+		err = gdb.EvmStore().CheckArchiveStateHash(i, hash.Hash(block.StateRoot))
 		if err != nil {
 			log.Error("Block root verification failed", "block", i, "err", err)
 			invalidBlocks++
 		}
-		if i % 1000 == 0 {
+		if i%1000 == 0 {
 			log.Info("Block root verification OK", "block", i)
 		}
 	}

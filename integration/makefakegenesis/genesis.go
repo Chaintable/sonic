@@ -28,7 +28,6 @@ import (
 	"github.com/Fantom-foundation/go-opera/opera/contracts/netinit"
 	netinitcall "github.com/Fantom-foundation/go-opera/opera/contracts/netinit/netinitcalls"
 	"github.com/Fantom-foundation/go-opera/opera/contracts/sfc"
-	"github.com/Fantom-foundation/go-opera/opera/contracts/sfclib"
 	"github.com/Fantom-foundation/go-opera/opera/genesis"
 	"github.com/Fantom-foundation/go-opera/opera/genesis/gpos"
 	"github.com/Fantom-foundation/go-opera/opera/genesisstore"
@@ -76,16 +75,24 @@ func FakeGenesisStoreWithRulesAndStart(num idx.Validator, balance, stake *big.In
 	// deploy essential contracts
 	// pre deploy NetworkInitializer
 	builder.SetCode(netinit.ContractAddress, netinit.GetContractBin())
+	builder.SetNonce(netinit.ContractAddress, 1)
 	// pre deploy NodeDriver
 	builder.SetCode(driver.ContractAddress, driver.GetContractBin())
+	builder.SetNonce(driver.ContractAddress, 1)
 	// pre deploy NodeDriverAuth
 	builder.SetCode(driverauth.ContractAddress, driverauth.GetContractBin())
+	builder.SetNonce(driverauth.ContractAddress, 1)
 	// pre deploy SFC
 	builder.SetCode(sfc.ContractAddress, sfc.GetContractBin())
-	// pre deploy SFCLib
-	builder.SetCode(sfclib.ContractAddress, sfclib.GetContractBin())
+	builder.SetNonce(sfc.ContractAddress, 1)
 	// set non-zero code for pre-compiled contracts
 	builder.SetCode(evmwriter.ContractAddress, []byte{0})
+	builder.SetNonce(evmwriter.ContractAddress, 1)
+
+	_, genesisStateRoot, err := builder.FinalizeBlockZero(rules, FakeGenesisTime)
+	if err != nil {
+		panic(err)
+	}
 
 	builder.SetCurrentEpoch(ier.LlrIdxFullEpochRecord{
 		LlrFullEpochRecord: ier.LlrFullEpochRecord{
@@ -95,7 +102,7 @@ func FakeGenesisStoreWithRulesAndStart(num idx.Validator, balance, stake *big.In
 					Time:    FakeGenesisTime,
 					Atropos: hash.Event{},
 				},
-				FinalizedStateRoot:    hash.Hash{},
+				FinalizedStateRoot:    hash.Hash(genesisStateRoot),
 				EpochGas:              0,
 				EpochCheaters:         lachesis.Cheaters{},
 				CheatersWritten:       0,
@@ -108,7 +115,7 @@ func FakeGenesisStoreWithRulesAndStart(num idx.Validator, balance, stake *big.In
 				Epoch:             epoch - 1,
 				EpochStart:        FakeGenesisTime,
 				PrevEpochStart:    FakeGenesisTime - 1,
-				EpochStateRoot:    hash.Zero,
+				EpochStateRoot:    hash.Hash(genesisStateRoot),
 				Validators:        pos.NewBuilder().Build(),
 				ValidatorStates:   make([]iblockproc.ValidatorEpochState, 0),
 				ValidatorProfiles: make(map[idx.ValidatorID]drivertype.Validator),
@@ -125,7 +132,7 @@ func FakeGenesisStoreWithRulesAndStart(num idx.Validator, balance, stake *big.In
 
 	blockProc := makegenesis.DefaultBlockProc()
 	genesisTxs := GetGenesisTxs(epoch-2, validators, builder.TotalSupply(), delegations, owner)
-	err := builder.ExecuteGenesisTxs(blockProc, genesisTxs)
+	err = builder.ExecuteGenesisTxs(blockProc, genesisTxs)
 	if err != nil {
 		panic(err)
 	}
@@ -140,7 +147,7 @@ func FakeGenesisStoreWithRulesAndStart(num idx.Validator, balance, stake *big.In
 func txBuilder() func(calldata []byte, addr common.Address) *types.Transaction {
 	nonce := uint64(0)
 	return func(calldata []byte, addr common.Address) *types.Transaction {
-		tx := types.NewTransaction(nonce, addr, common.Big0, 1e10, common.Big0, calldata)
+		tx := types.NewTransaction(nonce, addr, common.Big0, 3e6, common.Big0, calldata)
 		nonce++
 		return tx
 	}
@@ -150,7 +157,7 @@ func GetGenesisTxs(sealedEpoch idx.Epoch, validators gpos.Validators, totalSuppl
 	buildTx := txBuilder()
 	internalTxs := make(types.Transactions, 0, 15)
 	// initialization
-	calldata := netinitcall.InitializeAll(sealedEpoch, totalSupply, sfc.ContractAddress, sfclib.ContractAddress, driverauth.ContractAddress, driver.ContractAddress, evmwriter.ContractAddress, driverOwner)
+	calldata := netinitcall.InitializeAll(sealedEpoch, totalSupply, sfc.ContractAddress, driverauth.ContractAddress, driver.ContractAddress, evmwriter.ContractAddress, driverOwner)
 	internalTxs = append(internalTxs, buildTx(calldata, netinit.ContractAddress))
 	// push genesis validators
 	for _, v := range validators {

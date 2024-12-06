@@ -3,7 +3,10 @@ package genesis
 import (
 	"context"
 	"fmt"
-	"github.com/Fantom-foundation/go-opera/eventcheck/basiccheck"
+	"io"
+	"os"
+	"path"
+
 	"github.com/Fantom-foundation/go-opera/gossip"
 	"github.com/Fantom-foundation/go-opera/inter/ibr"
 	"github.com/Fantom-foundation/go-opera/inter/ier"
@@ -17,9 +20,6 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 	gzip "github.com/klauspost/pgzip"
-	"io"
-	"os"
-	"path"
 )
 
 func ExportGenesis(ctx context.Context, gdb *gossip.Store, includeArchive bool, out *os.File, tmpPath string) error {
@@ -44,15 +44,19 @@ func ExportGenesis(ctx context.Context, gdb *gossip.Store, includeArchive bool, 
 	}
 
 	// blocks
-	from := idx.Epoch(1)
-	if !includeArchive && to > basiccheck.MaxLiableEpochs {
-		from = to - basiccheck.MaxLiableEpochs
+	var maxBlocks int64
+	if !includeArchive {
+		maxBlocks = 300
 	}
 	writer = newUnitWriter(out)
 	if err := writer.Start(header, "brs", tmpPath); err != nil {
 		return err
 	}
-	if err := exportBlocksSection(ctx, gdb, writer, from, to); err != nil {
+	lastBlock := gdb.GetLatestBlockIndex()
+	if epochEnd := getEpochBlock(to, gdb); lastBlock != epochEnd {
+		log.Warn("Last block is not the last block of the epoch", "last", lastBlock, "epochEnd", epochEnd)
+	}
+	if err := exportBlocksSection(ctx, gdb, writer, lastBlock, maxBlocks); err != nil {
 		return err
 	}
 
@@ -107,15 +111,15 @@ func exportEpochsSection(ctx context.Context, gdb *gossip.Store, writer *unitWri
 	return nil
 }
 
-func exportBlocksSection(ctx context.Context, gdb *gossip.Store, writer *unitWriter, from, to idx.Epoch) error {
-	toBlock := getEpochBlock(to, gdb)
-	fromBlock := getEpochBlock(from, gdb)
-	if fromBlock < 1 {
-		// avoid underflow
-		fromBlock = 1
+func exportBlocksSection(ctx context.Context, gdb *gossip.Store, writer *unitWriter, to idx.Block, maxBlocks int64) error {
+	toBlock := int64(to)
+	fromBlock := int64(0)
+	if maxBlocks != 0 && toBlock > 1+maxBlocks {
+		fromBlock = toBlock - maxBlocks
 	}
 	log.Info("Exporting blocks", "from", fromBlock, "to", toBlock)
 	for i := toBlock; i >= fromBlock; i-- {
+		i := idx.Block(i)
 		br := gdb.GetFullBlockRecord(i)
 		if br == nil {
 			return fmt.Errorf("the block record for block %d is missing in gdb", i)

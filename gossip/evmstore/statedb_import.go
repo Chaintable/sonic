@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+
 	cc "github.com/Fantom-foundation/Carmen/go/common"
 	"github.com/Fantom-foundation/Carmen/go/common/amount"
-	io2 "github.com/Fantom-foundation/Carmen/go/database/mpt/io"
+	mptio "github.com/Fantom-foundation/Carmen/go/database/mpt/io"
 	carmen "github.com/Fantom-foundation/Carmen/go/state"
 	"github.com/Fantom-foundation/go-opera/opera/genesis"
 	"github.com/Fantom-foundation/go-opera/utils/adapters/kvdb2ethdb"
@@ -15,14 +19,11 @@ import (
 	"github.com/Fantom-foundation/lachesis-base/kvdb/table"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
-	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
-	"io"
-	"os"
-	"path/filepath"
+	"github.com/ethereum/go-ethereum/triedb"
 )
 
 var emptyCodeHash = crypto.Keccak256(nil)
@@ -34,7 +35,7 @@ func (s *Store) ImportLiveWorldState(liveReader io.Reader) error {
 	if err := os.MkdirAll(liveDir, 0700); err != nil {
 		return fmt.Errorf("failed to create carmen dir during FWS import; %v", err)
 	}
-	if err := io2.ImportLiveDb(io2.NewLog(), liveDir, liveReader); err != nil {
+	if err := mptio.ImportLiveDb(mptio.NewLog(), liveDir, liveReader); err != nil {
 		return fmt.Errorf("failed to import LiveDB; %v", err)
 	}
 	return nil
@@ -51,7 +52,7 @@ func (s *Store) ImportArchiveWorldState(archiveReader io.Reader) error {
 		if err := os.MkdirAll(archiveDir, 0700); err != nil {
 			return fmt.Errorf("failed to create carmen archive dir during FWS import; %v", err)
 		}
-		if err := io2.ImportArchive(io2.NewLog(), archiveDir, archiveReader); err != nil {
+		if err := mptio.ImportArchive(mptio.NewLog(), archiveDir, archiveReader); err != nil {
 			return fmt.Errorf("failed to initialize Archive; %v", err)
 		}
 		return nil
@@ -70,7 +71,7 @@ func (s *Store) InitializeArchiveWorldState(liveReader io.Reader, blockNum uint6
 		if err := os.MkdirAll(archiveDir, 0700); err != nil {
 			return fmt.Errorf("failed to create carmen archive dir during FWS import; %v", err)
 		}
-		if err := io2.InitializeArchive(io2.NewLog(), archiveDir, liveReader, blockNum); err != nil {
+		if err := mptio.InitializeArchive(mptio.NewLog(), archiveDir, liveReader, blockNum); err != nil {
 			return fmt.Errorf("failed to initialize Archive; %v", err)
 		}
 		return nil
@@ -82,7 +83,7 @@ func (s *Store) InitializeArchiveWorldState(liveReader io.Reader, blockNum uint6
 // The Store must be closed during the call.
 func (s *Store) ExportLiveWorldState(ctx context.Context, out io.Writer) error {
 	liveDir := filepath.Join(s.parameters.Directory, "live")
-	if err := io2.Export(ctx, io2.NewLog(), liveDir, out); err != nil {
+	if err := mptio.Export(ctx, mptio.NewLog(), liveDir, out); err != nil {
 		return fmt.Errorf("failed to export Live StateDB; %v", err)
 	}
 	return nil
@@ -92,7 +93,7 @@ func (s *Store) ExportLiveWorldState(ctx context.Context, out io.Writer) error {
 // The Store must be closed during the call.
 func (s *Store) ExportArchiveWorldState(ctx context.Context, out io.Writer) error {
 	archiveDir := filepath.Join(s.parameters.Directory, "archive")
-	if err := io2.ExportArchive(ctx, io2.NewLog(), archiveDir, out); err != nil {
+	if err := mptio.ExportArchive(ctx, mptio.NewLog(), archiveDir, out); err != nil {
 		return fmt.Errorf("failed to export Archive StateDB; %v", err)
 	}
 	return nil
@@ -117,10 +118,7 @@ func (s *Store) ImportLegacyEvmData(evmItems genesis.EvmItems, blockNum uint64, 
 	}
 	evmItems.ForEach(func(key, value []byte) bool {
 		err := db.Put(key, value)
-		if err != nil {
-			return false
-		}
-		return true
+		return err == nil
 	})
 
 	s.Log.Info("Importing legacy EVM data into Carmen", "index", blockNum, "root", root)
@@ -141,14 +139,17 @@ func (s *Store) ImportLegacyEvmData(evmItems genesis.EvmItems, blockNum uint64, 
 	}
 
 	chaindb := rawdb.NewDatabase(kvdb2ethdb.Wrap(nokeyiserr.Wrap(db)))
-	triedb := trie.NewDatabase(chaindb)
-	t, err := trie.NewSecure(root, triedb)
+	tdb := triedb.NewDatabase(chaindb, &triedb.Config{Preimages: false, IsVerkle: false})
+	t, err := trie.NewStateTrie(trie.StateTrieID(root), tdb)
 	if err != nil {
 		return fmt.Errorf("failed to open trie; %v", err)
 	}
 	preimages := table.New(db, []byte("secure-key-"))
 
-	accIter := t.NodeIterator(nil)
+	accIter, err := t.NodeIterator(nil)
+	if err != nil {
+		return fmt.Errorf("failed to open accounts iterator; %v", err)
+	}
 	for accIter.Next(true) {
 		if accIter.Leaf() {
 
@@ -158,7 +159,7 @@ func (s *Store) ImportLegacyEvmData(evmItems genesis.EvmItems, blockNum uint64, 
 			}
 			address := cc.Address(common.BytesToAddress(addressBytes))
 
-			var acc state.Account
+			var acc types.StateAccount
 			if err := rlp.DecodeBytes(accIter.LeafBlob(), &acc); err != nil {
 				return fmt.Errorf("invalid account encountered during traversal; %v", err)
 			}
@@ -170,7 +171,7 @@ func (s *Store) ImportLegacyEvmData(evmItems genesis.EvmItems, blockNum uint64, 
 
 			bulk.CreateAccount(address)
 			bulk.SetNonce(address, acc.Nonce)
-			bulk.SetBalance(address, balance)
+			bulk.SetBalance(address, amount.NewFromUint256(acc.Balance))
 
 			if !bytes.Equal(acc.CodeHash, emptyCodeHash) {
 				code := rawdb.ReadCode(chaindb, common.BytesToHash(acc.CodeHash))
@@ -181,11 +182,14 @@ func (s *Store) ImportLegacyEvmData(evmItems genesis.EvmItems, blockNum uint64, 
 			}
 
 			if acc.Root != types.EmptyRootHash {
-				storageTrie, err := trie.NewSecure(acc.Root, triedb)
+				storageTrie, err := trie.NewStateTrie(trie.StateTrieID(acc.Root), tdb)
 				if err != nil {
 					return fmt.Errorf("failed to open storage trie for account %v; %v", address, err)
 				}
-				storageIt := storageTrie.NodeIterator(nil)
+				storageIt, err := storageTrie.NodeIterator(nil)
+				if err != nil {
+					return fmt.Errorf("failed to open storage iterator for account %v; %v", address, err)
+				}
 				for storageIt.Next(true) {
 					if storageIt.Leaf() {
 						keyBytes, err := preimages.Get(storageIt.LeafKey())

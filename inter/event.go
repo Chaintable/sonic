@@ -2,7 +2,6 @@ package inter
 
 import (
 	"crypto/sha256"
-
 	"github.com/Fantom-foundation/lachesis-base/common/bigendian"
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/dag"
@@ -70,10 +69,10 @@ type EventPayloadI interface {
 var emptyPayloadHash1 = CalcPayloadHash(&MutableEventPayload{extEventData: extEventData{version: 1}})
 
 func EmptyPayloadHash(version uint8) hash.Hash {
-	if version == 0 {
-		return hash.Hash(types.EmptyRootHash)
-	} else {
+	if version == 1 {
 		return emptyPayloadHash1
+	} else {
+		return hash.Hash(types.EmptyRootHash)
 	}
 }
 
@@ -220,10 +219,11 @@ func CalcMisbehaviourProofsHash(mps []MisbehaviourProof) hash.Hash {
 }
 
 func CalcPayloadHash(e EventPayloadI) hash.Hash {
-	if e.Version() == 0 {
+	if e.Version() == 1 {
+		return hash.Of(hash.Of(CalcTxHash(e.Txs()).Bytes(), CalcMisbehaviourProofsHash(e.MisbehaviourProofs()).Bytes()).Bytes(), hash.Of(e.EpochVote().Hash().Bytes(), e.BlockVotes().Hash().Bytes()).Bytes())
+	} else {
 		return CalcTxHash(e.Txs())
 	}
-	return hash.Of(hash.Of(CalcTxHash(e.Txs()).Bytes(), CalcMisbehaviourProofsHash(e.MisbehaviourProofs()).Bytes()).Bytes(), hash.Of(e.EpochVote().Hash().Bytes(), e.BlockVotes().Hash().Bytes()).Bytes())
 }
 
 func (e *MutableEventPayload) SetVersion(v uint8) { e.version = v }

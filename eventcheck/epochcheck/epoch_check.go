@@ -89,12 +89,12 @@ func CheckTxs(txs types.Transactions, rules opera.Rules) error {
 	if rules.Upgrades.London {
 		maxType = 2
 	}
+	if rules.Upgrades.Sonic {
+		maxType = 3
+	}
 	for _, tx := range txs {
 		if tx.Type() > maxType {
 			return ErrUnsupportedTxType
-		}
-		if tx.GasFeeCapIntCmp(rules.Economy.MinGasPrice) < 0 {
-			return ErrUnderpriced
 		}
 	}
 	return nil
@@ -122,8 +122,11 @@ func (v *Checker) Validate(e inter.EventPayloadI) error {
 	if err := CheckTxs(e.Txs(), rules); err != nil {
 		return err
 	}
+
 	version := uint8(0)
-	if rules.Upgrades.Llr {
+	if rules.Upgrades.Sonic {
+		version = 2
+	} else if rules.Upgrades.Llr {
 		version = 1
 	}
 	if e.Version() != version {

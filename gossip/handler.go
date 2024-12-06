@@ -3,39 +3,25 @@ package gossip
 import (
 	"errors"
 	"fmt"
-	"github.com/ethereum/go-ethereum/metrics"
-	"github.com/ethereum/go-ethereum/p2p/enode"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ethereum/go-ethereum/metrics"
+	"github.com/ethereum/go-ethereum/p2p/enode"
+
 	"github.com/Fantom-foundation/go-opera/eventcheck"
-	"github.com/Fantom-foundation/go-opera/eventcheck/bvallcheck"
 	"github.com/Fantom-foundation/go-opera/eventcheck/epochcheck"
-	"github.com/Fantom-foundation/go-opera/eventcheck/evallcheck"
 	"github.com/Fantom-foundation/go-opera/eventcheck/heavycheck"
 	"github.com/Fantom-foundation/go-opera/eventcheck/parentlesscheck"
 	"github.com/Fantom-foundation/go-opera/evmcore"
-	"github.com/Fantom-foundation/go-opera/gossip/protocols/blockrecords/brprocessor"
-	"github.com/Fantom-foundation/go-opera/gossip/protocols/blockrecords/brstream"
-	"github.com/Fantom-foundation/go-opera/gossip/protocols/blockrecords/brstream/brstreamleecher"
-	"github.com/Fantom-foundation/go-opera/gossip/protocols/blockrecords/brstream/brstreamseeder"
-	"github.com/Fantom-foundation/go-opera/gossip/protocols/blockvotes/bvprocessor"
-	"github.com/Fantom-foundation/go-opera/gossip/protocols/blockvotes/bvstream"
-	"github.com/Fantom-foundation/go-opera/gossip/protocols/blockvotes/bvstream/bvstreamleecher"
-	"github.com/Fantom-foundation/go-opera/gossip/protocols/blockvotes/bvstream/bvstreamseeder"
 	"github.com/Fantom-foundation/go-opera/gossip/protocols/dag/dagstream"
 	"github.com/Fantom-foundation/go-opera/gossip/protocols/dag/dagstream/dagstreamleecher"
 	"github.com/Fantom-foundation/go-opera/gossip/protocols/dag/dagstream/dagstreamseeder"
-	"github.com/Fantom-foundation/go-opera/gossip/protocols/epochpacks/epprocessor"
-	"github.com/Fantom-foundation/go-opera/gossip/protocols/epochpacks/epstream"
-	"github.com/Fantom-foundation/go-opera/gossip/protocols/epochpacks/epstream/epstreamleecher"
-	"github.com/Fantom-foundation/go-opera/gossip/protocols/epochpacks/epstream/epstreamseeder"
+	"github.com/Fantom-foundation/go-opera/gossip/topology"
 	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/Fantom-foundation/go-opera/inter/ibr"
-	"github.com/Fantom-foundation/go-opera/inter/ier"
 	"github.com/Fantom-foundation/go-opera/logger"
 	"github.com/Fantom-foundation/go-opera/utils/txtime"
 	"github.com/Fantom-foundation/lachesis-base/gossip/dagprocessor"
@@ -87,12 +73,8 @@ type dagNotifier interface {
 }
 
 type processCallback struct {
-	Event            func(*inter.EventPayload) error
-	SwitchEpochTo    func(idx.Epoch) error
-	BVs              func(inter.LlrSignedBlockVotes) error
-	BR               func(ibr.LlrIdxFullBlockRecord) error
-	EV               func(inter.LlrSignedEpochVote) error
-	ER               func(ier.LlrIdxFullEpochRecord) error
+	Event         func(*inter.EventPayload) error
+	SwitchEpochTo func(idx.Epoch) error
 }
 
 // handlerConfig is the collection of initialization parameters to create a full
@@ -105,6 +87,13 @@ type handlerConfig struct {
 	checkers *eventcheck.Checkers
 	s        *Store
 	process  processCallback
+	localId  enode.ID
+
+	localEndPointSource LocalEndPointSource
+}
+
+type LocalEndPointSource interface {
+	GetLocalEndPoint() *enode.Node
 }
 
 type handler struct {
@@ -125,18 +114,6 @@ type handler struct {
 	dagSeeder    *dagstreamseeder.Seeder
 	dagProcessor *dagprocessor.Processor
 	dagFetcher   *itemsfetcher.Fetcher
-
-	bvLeecher   *bvstreamleecher.Leecher
-	bvSeeder    *bvstreamseeder.Seeder
-	bvProcessor *bvprocessor.Processor
-
-	brLeecher   *brstreamleecher.Leecher
-	brSeeder    *brstreamseeder.Seeder
-	brProcessor *brprocessor.Processor
-
-	epLeecher   *epstreamleecher.Leecher
-	epSeeder    *epstreamseeder.Seeder
-	epProcessor *epprocessor.Processor
 
 	process processCallback
 
@@ -167,6 +144,15 @@ type handler struct {
 	peerWG  sync.WaitGroup
 	started sync.WaitGroup
 
+	// channels for peer info collection loop
+	peerInfoStop chan<- struct{}
+
+	// suggests new peers to connect to by monitoring the neighborhood
+	connectionAdvisor topology.ConnectionAdvisor
+	nextSuggestedPeer chan *enode.Node
+
+	localEndPointSource LocalEndPointSource
+
 	logger.Instance
 }
 
@@ -193,6 +179,10 @@ func newHandler(
 		txsyncCh:             make(chan *txsync),
 		quitSync:             make(chan struct{}),
 		quitProgressBradcast: make(chan struct{}),
+		connectionAdvisor:    topology.NewConnectionAdvisor(c.localId),
+		nextSuggestedPeer:    make(chan *enode.Node, 1),
+
+		localEndPointSource: c.localEndPointSource,
 
 		Instance: logger.New("PM"),
 	}
@@ -240,121 +230,6 @@ func newHandler(
 		ForEachEvent: c.s.ForEachEventRLP,
 	})
 
-	h.bvProcessor = h.makeBvProcessor(c.checkers)
-	h.bvLeecher = bvstreamleecher.New(h.config.Protocol.BvStreamLeecher, bvstreamleecher.Callbacks{
-		LowestBlockToDecide: func() (idx.Epoch, idx.Block) {
-			llrs := h.store.GetLlrState()
-			epoch := h.store.FindBlockEpoch(llrs.LowestBlockToDecide)
-			return epoch, llrs.LowestBlockToDecide
-		},
-		MaxEpochToDecide: func() idx.Epoch {
-			if !h.syncStatus.RequestLLR() {
-				return 0
-			}
-			return h.store.GetLlrState().LowestEpochToFill
-		},
-		IsProcessed: h.store.HasBlockVotes,
-		RequestChunk: func(peer string, r bvstream.Request) error {
-			p := h.peers.Peer(peer)
-			if p == nil {
-				return errNotRegistered
-			}
-			return p.RequestBVsStream(r)
-		},
-		Suspend: func(_ string) bool {
-			return h.bvProcessor.Overloaded()
-		},
-		PeerBlock: func(peer string) idx.Block {
-			p := h.peers.Peer(peer)
-			if p == nil || p.Useless() {
-				return 0
-			}
-			return p.GetProgress().LastBlockIdx
-		},
-	})
-	h.bvSeeder = bvstreamseeder.New(h.config.Protocol.BvStreamSeeder, bvstreamseeder.Callbacks{
-		Iterate: h.store.IterateOverlappingBlockVotesRLP,
-	})
-
-	h.brProcessor = h.makeBrProcessor()
-	h.brLeecher = brstreamleecher.New(h.config.Protocol.BrStreamLeecher, brstreamleecher.Callbacks{
-		LowestBlockToFill: func() idx.Block {
-			return h.store.GetLlrState().LowestBlockToFill
-		},
-		MaxBlockToFill: func() idx.Block {
-			if !h.syncStatus.RequestLLR() {
-				return 0
-			}
-			// rough estimation for the max fill-able block
-			llrs := h.store.GetLlrState()
-			start := llrs.LowestBlockToFill
-			end := llrs.LowestBlockToDecide
-			if end > start+100 && h.store.HasBlock(start+100) {
-				return start + 100
-			}
-			return end
-		},
-		IsProcessed: h.store.HasBlock,
-		RequestChunk: func(peer string, r brstream.Request) error {
-			p := h.peers.Peer(peer)
-			if p == nil {
-				return errNotRegistered
-			}
-			return p.RequestBRsStream(r)
-		},
-		Suspend: func(_ string) bool {
-			return h.brProcessor.Overloaded()
-		},
-		PeerBlock: func(peer string) idx.Block {
-			p := h.peers.Peer(peer)
-			if p == nil || p.Useless() {
-				return 0
-			}
-			return p.GetProgress().LastBlockIdx
-		},
-	})
-	h.brSeeder = brstreamseeder.New(h.config.Protocol.BrStreamSeeder, brstreamseeder.Callbacks{
-		Iterate: h.store.IterateFullBlockRecordsRLP,
-	})
-
-	h.epProcessor = h.makeEpProcessor(h.checkers)
-	h.epLeecher = epstreamleecher.New(h.config.Protocol.EpStreamLeecher, epstreamleecher.Callbacks{
-		LowestEpochToFetch: func() idx.Epoch {
-			llrs := h.store.GetLlrState()
-			if llrs.LowestEpochToFill < llrs.LowestEpochToDecide {
-				return llrs.LowestEpochToFill
-			}
-			return llrs.LowestEpochToDecide
-		},
-		MaxEpochToFetch: func() idx.Epoch {
-			if !h.syncStatus.RequestLLR() {
-				return 0
-			}
-			return h.store.GetLlrState().LowestEpochToDecide + 10000
-		},
-		IsProcessed: h.store.HasHistoryBlockEpochState,
-		RequestChunk: func(peer string, r epstream.Request) error {
-			p := h.peers.Peer(peer)
-			if p == nil {
-				return errNotRegistered
-			}
-			return p.RequestEPsStream(r)
-		},
-		Suspend: func(_ string) bool {
-			return h.epProcessor.Overloaded()
-		},
-		PeerEpoch: func(peer string) idx.Epoch {
-			p := h.peers.Peer(peer)
-			if p == nil || p.Useless() {
-				return 0
-			}
-			return p.GetProgress().Epoch
-		},
-	})
-	h.epSeeder = epstreamseeder.New(h.config.Protocol.EpStreamSeeder, epstreamseeder.Callbacks{
-		Iterate: h.store.IterateEpochPacksRLP,
-	})
-
 	return h, nil
 }
 
@@ -395,7 +270,7 @@ func (h *handler) makeDagProcessor(checkers *eventcheck.Checkers) *dagprocessor.
 		}
 		var selfParent inter.EventI
 		if e.SelfParent() != nil {
-			selfParent = parents[0].(inter.EventI)
+			selfParent = parents[0]
 		}
 		if err := checkers.Parentscheck.Validate(e, parents); err != nil {
 			return err
@@ -457,84 +332,6 @@ func (h *handler) makeDagProcessor(checkers *eventcheck.Checkers) *dagprocessor.
 	return newProcessor
 }
 
-func (h *handler) makeBvProcessor(checkers *eventcheck.Checkers) *bvprocessor.Processor {
-	// checkers
-	lightCheck := func(bvs inter.LlrSignedBlockVotes) error {
-		if h.store.HasBlockVotes(bvs.Val.Epoch, bvs.Val.LastBlock(), bvs.Signed.Locator.ID()) {
-			return eventcheck.ErrAlreadyProcessedBVs
-		}
-		return checkers.Basiccheck.ValidateBVs(bvs)
-	}
-	allChecker := bvallcheck.Checker{
-		HeavyCheck: &heavycheck.BVsOnly{Checker: checkers.Heavycheck},
-		LightCheck: lightCheck,
-	}
-	return bvprocessor.New(datasemaphore.New(h.config.Protocol.BVsSemaphoreLimit, getSemaphoreWarningFn("BVs")), h.config.Protocol.BvProcessor, bvprocessor.Callback{
-		// DAG callbacks
-		Item: bvprocessor.ItemCallback{
-			Process: h.process.BVs,
-			Released: func(bvs inter.LlrSignedBlockVotes, peer string, err error) {
-				if eventcheck.IsBan(err) {
-					log.Warn("Incoming BVs rejected", "BVs", bvs.Signed.Locator.ID(), "creator", bvs.Signed.Locator.Creator, "err", err)
-					h.removePeer(peer)
-				}
-			},
-			Check: allChecker.Enqueue,
-		},
-	})
-}
-
-func (h *handler) makeBrProcessor() *brprocessor.Processor {
-	// checkers
-	return brprocessor.New(datasemaphore.New(h.config.Protocol.BVsSemaphoreLimit, getSemaphoreWarningFn("BR")), h.config.Protocol.BrProcessor, brprocessor.Callback{
-		// DAG callbacks
-		Item: brprocessor.ItemCallback{
-			Process: h.process.BR,
-			Released: func(br ibr.LlrIdxFullBlockRecord, peer string, err error) {
-				if eventcheck.IsBan(err) {
-					log.Warn("Incoming BR rejected", "block", br.Idx, "err", err)
-					h.removePeer(peer)
-				}
-			},
-		},
-	})
-}
-
-func (h *handler) makeEpProcessor(checkers *eventcheck.Checkers) *epprocessor.Processor {
-	// checkers
-	lightCheck := func(ev inter.LlrSignedEpochVote) error {
-		if h.store.HasEpochVote(ev.Val.Epoch, ev.Signed.Locator.ID()) {
-			return eventcheck.ErrAlreadyProcessedEV
-		}
-		return checkers.Basiccheck.ValidateEV(ev)
-	}
-	allChecker := evallcheck.Checker{
-		HeavyCheck: &heavycheck.EVOnly{Checker: checkers.Heavycheck},
-		LightCheck: lightCheck,
-	}
-	// checkers
-	return epprocessor.New(datasemaphore.New(h.config.Protocol.BVsSemaphoreLimit, getSemaphoreWarningFn("BR")), h.config.Protocol.EpProcessor, epprocessor.Callback{
-		// DAG callbacks
-		Item: epprocessor.ItemCallback{
-			ProcessEV: h.process.EV,
-			ProcessER: h.process.ER,
-			ReleasedEV: func(ev inter.LlrSignedEpochVote, peer string, err error) {
-				if eventcheck.IsBan(err) {
-					log.Warn("Incoming EV rejected", "event", ev.Signed.Locator.ID(), "creator", ev.Signed.Locator.Creator, "err", err)
-					h.removePeer(peer)
-				}
-			},
-			ReleasedER: func(er ier.LlrIdxFullEpochRecord, peer string, err error) {
-				if eventcheck.IsBan(err) {
-					log.Warn("Incoming ER rejected", "epoch", er.Idx, "err", err)
-					h.removePeer(peer)
-				}
-			},
-			CheckEV: allChecker.Enqueue,
-		},
-	})
-}
-
 func (h *handler) isEventInterested(id hash.Event, epoch idx.Epoch) bool {
 	if id.Epoch() != epoch {
 		return false
@@ -576,14 +373,8 @@ func (h *handler) unregisterPeer(id string) {
 	log.Debug("Removing peer", "peer", id)
 
 	// Unregister the peer from the leecher's and seeder's and peer sets
-	_ = h.epLeecher.UnregisterPeer(id)
-	_ = h.epSeeder.UnregisterPeer(id)
 	_ = h.dagLeecher.UnregisterPeer(id)
 	_ = h.dagSeeder.UnregisterPeer(id)
-	_ = h.brLeecher.UnregisterPeer(id)
-	_ = h.brSeeder.UnregisterPeer(id)
-	_ = h.bvLeecher.UnregisterPeer(id)
-	_ = h.bvSeeder.UnregisterPeer(id)
 	if err := h.peers.UnregisterPeer(id); err != nil {
 		log.Error("Peer removal failed", "peer", id, "err", err)
 	}
@@ -598,6 +389,11 @@ func (h *handler) Start(maxPeers int) {
 
 	h.loopsWg.Add(1)
 	go h.txBroadcastLoop()
+
+	h.loopsWg.Add(1)
+	peerInfoStopChannel := make(chan struct{})
+	h.peerInfoStop = peerInfoStopChannel
+	go h.peerInfoCollectionLoop(peerInfoStopChannel)
 
 	if h.notifier != nil {
 		// broadcast mined events
@@ -619,42 +415,19 @@ func (h *handler) Start(maxPeers int) {
 	h.txFetcher.Start()
 	h.checkers.Heavycheck.Start()
 
-	h.epProcessor.Start()
-	h.epSeeder.Start()
-	h.epLeecher.Start()
-
 	h.dagProcessor.Start()
 	h.dagSeeder.Start()
 	h.dagLeecher.Start()
 
-	h.bvProcessor.Start()
-	h.bvSeeder.Start()
-	h.bvLeecher.Start()
-
-	h.brProcessor.Start()
-	h.brSeeder.Start()
-	h.brLeecher.Start()
 	h.started.Done()
 }
 
 func (h *handler) Stop() {
 	log.Info("Stopping Fantom protocol")
 
-	h.brLeecher.Stop()
-	h.brSeeder.Stop()
-	h.brProcessor.Stop()
-
-	h.bvLeecher.Stop()
-	h.bvSeeder.Stop()
-	h.bvProcessor.Stop()
-
 	h.dagLeecher.Stop()
 	h.dagSeeder.Stop()
 	h.dagProcessor.Stop()
-
-	h.epLeecher.Stop()
-	h.epSeeder.Stop()
-	h.epProcessor.Stop()
 
 	h.checkers.Heavycheck.Stop()
 	h.txFetcher.Stop()
@@ -666,6 +439,9 @@ func (h *handler) Stop() {
 		h.emittedEventsSub.Unsubscribe() // quits eventBroadcastLoop
 		h.newEpochsSub.Unsubscribe()     // quits onNewEpochLoop
 	}
+
+	close(h.peerInfoStop)
+	h.peerInfoStop = nil
 
 	// Wait for the subscription loops to come down.
 	h.loopsWg.Wait()
@@ -724,11 +500,13 @@ func isUseless(node *enode.Node, name string) bool {
 // handle is the callback invoked to manage the life cycle of a peer. When
 // this function terminates, the peer is disconnected.
 func (h *handler) handle(p *peer) error {
+	p.Log().Trace("Connecting peer", "peer", p.ID(), "name", p.Name())
+
 	useless := isUseless(p.Node(), p.Name())
 	if !p.Peer.Info().Network.Trusted && useless && h.peers.UselessNum() >= h.maxPeers/10 {
 		// don't allow more than 10% of useless peers
-		p.Log().Trace("Rejecting peer as useless")
-		return p2p.DiscTooManyPeers
+		p.Log().Trace("Rejecting peer as useless", "peer", p.ID(), "name", p.Name())
+		return p2p.DiscUselessPeer
 	}
 	if !p.Peer.Info().Network.Trusted && useless {
 		p.SetUseless()
@@ -743,7 +521,7 @@ func (h *handler) handle(p *peer) error {
 		myProgress = h.myProgress()
 	)
 	if err := p.Handshake(h.NetworkID, myProgress, common.Hash(genesis)); err != nil {
-		p.Log().Debug("Handshake failed", "err", err)
+		p.Log().Debug("Handshake failed", "err", err, "peer", p.ID(), "name", p.Name())
 		if !useless {
 			discfilter.Ban(p.ID())
 		}
@@ -755,7 +533,7 @@ func (h *handler) handle(p *peer) error {
 		p.Log().Trace("Rejecting peer as maxPeers is exceeded")
 		return p2p.DiscTooManyPeers
 	}
-	p.Log().Debug("Peer connected", "name", p.Name())
+	p.Log().Debug("Peer connected", "peer", p.ID(), "name", p.Name())
 
 	// Register the peer locally
 	if err := h.peers.RegisterPeer(p); err != nil {
@@ -766,20 +544,6 @@ func (h *handler) handle(p *peer) error {
 		p.Log().Warn("Leecher peer registration failed", "err", err)
 		return err
 	}
-	if p.RunningCap(ProtocolName, []uint{FTM63}) {
-		if err := h.epLeecher.RegisterPeer(p.id); err != nil {
-			p.Log().Warn("Leecher peer registration failed", "err", err)
-			return err
-		}
-		if err := h.bvLeecher.RegisterPeer(p.id); err != nil {
-			p.Log().Warn("Leecher peer registration failed", "err", err)
-			return err
-		}
-		if err := h.brLeecher.RegisterPeer(p.id); err != nil {
-			p.Log().Warn("Leecher peer registration failed", "err", err)
-			return err
-		}
-	}
 	defer h.unregisterPeer(p.id)
 
 	// Propagate existing transactions. new transactions appearing
@@ -789,7 +553,7 @@ func (h *handler) handle(p *peer) error {
 	// Handle incoming messages until the connection is torn down
 	for {
 		if err := h.handleMsg(p); err != nil {
-			p.Log().Debug("Message handling failed", "err", err)
+			p.Log().Debug("Message handling failed", "err", err, "peer", p.ID(), "name", p.Name())
 			return err
 		}
 	}
@@ -879,14 +643,14 @@ func (h *handler) handleEventHashes(p *peer, announces hash.Events) {
 	_ = h.dagFetcher.NotifyAnnounces(p.id, eventIDsToInterfaces(notTooHigh), time.Now(), requestEvents)
 }
 
-func (h *handler) handleEvents(p *peer, events dag.Events, ordered bool) {
+func (h *handler) handleEvents(peer *peer, events dag.Events, ordered bool) {
 	// Mark the hashes as present at the remote node
 	now := time.Now()
 	for _, e := range events {
 		for _, tx := range e.(inter.EventPayloadI).Txs() {
 			txtime.Saw(tx.Hash(), now)
 		}
-		p.MarkEvent(e.ID())
+		peer.MarkEvent(e.ID())
 	}
 	// filter too high events
 	notTooHigh := make(dag.Events, 0, len(events))
@@ -907,7 +671,6 @@ func (h *handler) handleEvents(p *peer, events dag.Events, ordered bool) {
 		return
 	}
 	// Schedule all the events for connection
-	peer := *p
 	requestEvents := func(ids []interface{}) error {
 		return peer.RequestEvents(interfacesToEventIDs(ids))
 	}
@@ -1106,138 +869,72 @@ func (h *handler) handleMsg(p *peer) error {
 
 		_ = h.dagLeecher.NotifyChunkReceived(chunk.SessionID, last, chunk.Done)
 
-	case msg.Code == RequestBVsStream:
-		var request bvstream.Request
-		if err := msg.Decode(&request); err != nil {
-			return errResp(ErrDecode, "%v: %v", msg, err)
+	case msg.Code == GetPeerInfosMsg:
+		infos := []peerInfo{}
+		for _, peer := range h.peers.List() {
+			if peer.Useless() {
+				continue
+			}
+			info := peer.endPoint.Load()
+			if info == nil {
+				continue
+			}
+			infos = append(infos, peerInfo{
+				Enode: info.enode.String(),
+			})
 		}
-		if request.Limit.Num > hardLimitItems-1 {
-			return errResp(ErrMsgTooLarge, "%v", msg)
-		}
-		if request.Limit.Size > protocolMaxMsgSize*2/3 {
-			return errResp(ErrMsgTooLarge, "%v", msg)
-		}
-
-		pid := p.id
-		_, peerErr := h.bvSeeder.NotifyRequestReceived(bvstreamseeder.Peer{
-			ID:        pid,
-			SendChunk: p.SendBVsStream,
-			Misbehaviour: func(err error) {
-				h.peerMisbehaviour(pid, err)
-			},
-		}, request)
-		if peerErr != nil {
-			return peerErr
-		}
-
-	case msg.Code == BVsStreamResponse:
-		var chunk bvsChunk
-		if err := msg.Decode(&chunk); err != nil {
-			return errResp(ErrDecode, "%v: %v", msg, err)
-		}
-		if err := checkLenLimits(len(chunk.BVs)+1, chunk); err != nil {
+		err := p2p.Send(p.rw, PeerInfosMsg, peerInfoMsg{
+			Peers: infos,
+		})
+		if err != nil {
 			return err
 		}
 
-		var last bvstreamleecher.BVsID
-		if len(chunk.BVs) != 0 {
-			_ = h.bvProcessor.Enqueue(p.id, chunk.BVs, nil)
-			last = bvstreamleecher.BVsID{
-				Epoch:     chunk.BVs[len(chunk.BVs)-1].Val.Epoch,
-				LastBlock: chunk.BVs[len(chunk.BVs)-1].Val.LastBlock(),
-				ID:        chunk.BVs[len(chunk.BVs)-1].Signed.Locator.ID(),
+	case msg.Code == PeerInfosMsg:
+		var infos peerInfoMsg
+		if err := msg.Decode(&infos); err != nil {
+			return errResp(ErrDecode, "%v: %v", msg, err)
+		}
+
+		reportedPeers := []*enode.Node{}
+		for _, info := range infos.Peers {
+			var enode enode.Node
+			if err := enode.UnmarshalText([]byte(info.Enode)); err != nil {
+				h.Log.Warn("Failed to unmarshal enode", "enode", info.Enode, "err", err)
+			} else {
+				reportedPeers = append(reportedPeers, &enode)
 			}
 		}
 
-		_ = h.bvLeecher.NotifyChunkReceived(chunk.SessionID, last, chunk.Done)
+		h.connectionAdvisor.UpdatePeers(p.ID(), reportedPeers)
 
-	case msg.Code == RequestBRsStream:
-		var request brstream.Request
-		if err := msg.Decode(&request); err != nil {
-			return errResp(ErrDecode, "%v: %v", msg, err)
+	case msg.Code == GetEndPointMsg:
+		source := h.localEndPointSource
+		if source == nil {
+			return nil
 		}
-		if request.Limit.Num > hardLimitItems-1 {
-			return errResp(ErrMsgTooLarge, "%v", msg)
+		enode := source.GetLocalEndPoint()
+		if enode == nil {
+			return nil
 		}
-		if request.Limit.Size > protocolMaxMsgSize*2/3 {
-			return errResp(ErrMsgTooLarge, "%v", msg)
-		}
-
-		pid := p.id
-		_, peerErr := h.brSeeder.NotifyRequestReceived(brstreamseeder.Peer{
-			ID:        pid,
-			SendChunk: p.SendBRsStream,
-			Misbehaviour: func(err error) {
-				h.peerMisbehaviour(pid, err)
-			},
-		}, request)
-		if peerErr != nil {
-			return peerErr
-		}
-
-	case msg.Code == BRsStreamResponse:
-		if !h.syncStatus.AcceptBlockRecords() {
-			break
-		}
-
-		msgSize := uint64(msg.Size)
-		var chunk brsChunk
-		if err := msg.Decode(&chunk); err != nil {
-			return errResp(ErrDecode, "%v: %v", msg, err)
-		}
-		if err := checkLenLimits(len(chunk.BRs)+1, chunk); err != nil {
+		if err := p2p.Send(p.rw, EndPointUpdateMsg, enode.String()); err != nil {
 			return err
 		}
 
-		var last idx.Block
-		if len(chunk.BRs) != 0 {
-			_ = h.brProcessor.Enqueue(p.id, chunk.BRs, msgSize, nil)
-			last = chunk.BRs[len(chunk.BRs)-1].Idx
-		}
-
-		_ = h.brLeecher.NotifyChunkReceived(chunk.SessionID, last, chunk.Done)
-
-	case msg.Code == RequestEPsStream:
-		var request epstream.Request
-		if err := msg.Decode(&request); err != nil {
+	case msg.Code == EndPointUpdateMsg:
+		var encoded string
+		if err := msg.Decode(&encoded); err != nil {
 			return errResp(ErrDecode, "%v: %v", msg, err)
 		}
-		if request.Limit.Num > hardLimitItems-1 {
-			return errResp(ErrMsgTooLarge, "%v", msg)
+		var enode enode.Node
+		if err := enode.UnmarshalText([]byte(encoded)); err != nil {
+			h.Log.Warn("Failed to unmarshal enode", "enode", encoded, "err", err)
+		} else {
+			p.endPoint.Store(&peerEndPointInfo{
+				enode:     enode,
+				timestamp: time.Now(),
+			})
 		}
-		if request.Limit.Size > protocolMaxMsgSize*2/3 {
-			return errResp(ErrMsgTooLarge, "%v", msg)
-		}
-
-		pid := p.id
-		_, peerErr := h.epSeeder.NotifyRequestReceived(epstreamseeder.Peer{
-			ID:        pid,
-			SendChunk: p.SendEPsStream,
-			Misbehaviour: func(err error) {
-				h.peerMisbehaviour(pid, err)
-			},
-		}, request)
-		if peerErr != nil {
-			return peerErr
-		}
-
-	case msg.Code == EPsStreamResponse:
-		msgSize := uint64(msg.Size)
-		var chunk epsChunk
-		if err := msg.Decode(&chunk); err != nil {
-			return errResp(ErrDecode, "%v: %v", msg, err)
-		}
-		if err := checkLenLimits(len(chunk.EPs)+1, chunk); err != nil {
-			return err
-		}
-
-		var last idx.Epoch
-		if len(chunk.EPs) != 0 {
-			_ = h.epProcessor.Enqueue(p.id, chunk.EPs, msgSize, nil)
-			last = chunk.EPs[len(chunk.EPs)-1].Record.Idx
-		}
-
-		_ = h.epLeecher.NotifyChunkReceived(chunk.SessionID, last, chunk.Done)
 
 	default:
 		return errResp(ErrInvalidMsgCode, "%v", msg.Code)
@@ -1330,7 +1027,7 @@ func (h *handler) BroadcastTxs(txs types.Transactions) {
 		for _, peer := range peers {
 			txset[peer] = append(txset[peer], tx)
 		}
-		totalSize += tx.Size()
+		totalSize += common.StorageSize(tx.Size())
 		log.Trace("Broadcast transaction", "hash", tx.Hash(), "recipients", len(peers))
 	}
 	fullRecipients := h.decideBroadcastAggressiveness(int(totalSize), time.Second, len(txset))
@@ -1423,8 +1120,53 @@ func (h *handler) txBroadcastLoop() {
 			if len(peers) == 0 {
 				continue
 			}
-			randPeer := peers[rand.Intn(len(peers))]
+			randPeer := peers[rand.IntN(len(peers))]
 			h.syncTransactions(randPeer, h.txpool.SampleHashes(h.config.Protocol.MaxRandomTxHashesSend))
+		}
+	}
+}
+
+func (h *handler) peerInfoCollectionLoop(stop <-chan struct{}) {
+	ticker := time.NewTicker(h.config.Protocol.PeerInfoCollectionPeriod)
+	defer ticker.Stop()
+	defer h.loopsWg.Done()
+	for {
+		select {
+		case <-ticker.C:
+			// Get a suggestion for a new peer.
+			suggestion := h.connectionAdvisor.GetNewPeerSuggestion()
+			if suggestion != nil {
+				select {
+				case h.nextSuggestedPeer <- suggestion:
+				default:
+				}
+			}
+
+			// Request updated peer information from current peers.
+			peers := h.peers.List()
+			for _, peer := range peers {
+				// If we do not have the peer's end-point or it is too old, request it.
+				if info := peer.endPoint.Load(); info == nil || time.Since(info.timestamp) > h.config.Protocol.PeerEndPointUpdatePeriod {
+					peer.SendEndPointUpdateRequest()
+				}
+				peer.SendPeerInfoRequest()
+			}
+
+			// Drop a redundant connection if there are too many connections.
+			if suggestion != nil && len(peers) >= h.maxPeers-1 {
+				redundant := h.connectionAdvisor.GetRedundantPeerSuggestion()
+				if redundant != nil {
+					for _, peer := range peers {
+						if peer.Node().ID() == *redundant {
+							peer.Disconnect(p2p.DiscTooManyPeers)
+							break
+						}
+					}
+				}
+			}
+
+		case <-stop:
+			return
 		}
 	}
 }
@@ -1457,4 +1199,34 @@ func getSemaphoreWarningFn(name string) func(dag.Metric, dag.Metric, dag.Metric)
 			"processingNum", processing.Num, "processingSize", processing.Size,
 			"releasingNum", releasing.Num, "releasingSize", releasing.Size)
 	}
+}
+
+func (h *handler) GetSuggestedPeerIterator() enode.Iterator {
+	return &suggestedPeerIterator{
+		handler: h,
+		close:   make(chan struct{}),
+	}
+}
+
+type suggestedPeerIterator struct {
+	handler *handler
+	next    *enode.Node
+	close   chan struct{}
+}
+
+func (i *suggestedPeerIterator) Next() bool {
+	select {
+	case i.next = <-i.handler.nextSuggestedPeer:
+		return true
+	case <-i.close:
+		return false
+	}
+}
+
+func (i *suggestedPeerIterator) Node() *enode.Node {
+	return i.next
+}
+
+func (i *suggestedPeerIterator) Close() {
+	close(i.close)
 }

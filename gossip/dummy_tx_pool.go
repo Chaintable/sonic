@@ -2,7 +2,7 @@ package gossip
 
 import (
 	"math/big"
-	"math/rand"
+	"math/rand/v2"
 	"sort"
 	"sync"
 
@@ -21,7 +21,7 @@ type dummyTxPool struct {
 
 	signer types.Signer
 
-	lock sync.RWMutex // Protects the transaction pool
+	lock sync.RWMutex
 }
 
 // AddRemotes appends a batch of transactions to the pool, and notifies any
@@ -134,7 +134,7 @@ func (p *dummyTxPool) SampleHashes(max int) []common.Hash {
 	res := make([]common.Hash, 0, max)
 	skip := 0
 	if len(p.pool) > max {
-		skip = rand.Intn(len(p.pool) - max)
+		skip = rand.IntN(len(p.pool) - max)
 	}
 	for _, tx := range p.pool {
 		if len(res) >= max {
@@ -150,6 +150,8 @@ func (p *dummyTxPool) SampleHashes(max int) []common.Hash {
 }
 
 func (p *dummyTxPool) Count() int {
+	p.lock.Lock()
+	defer p.lock.Unlock()
 	return len(p.pool)
 }
 

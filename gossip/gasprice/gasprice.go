@@ -66,12 +66,6 @@ type tipCache struct {
 	tip *big.Int
 }
 
-type effectiveMinGasPriceCache struct {
-	head  idx.Block
-	lock  sync.RWMutex
-	value *big.Int
-}
-
 // Oracle recommends gas prices based on the content of recent
 // blocks. Suitable for both light and full clients.
 type Oracle struct {
@@ -81,7 +75,6 @@ type Oracle struct {
 
 	cfg Config
 
-	eCache effectiveMinGasPriceCache
 	tCache *lru.Cache
 
 	wg   sync.WaitGroup
@@ -106,20 +99,24 @@ func sanitizeBigInt(val, min, max, _default *big.Int, name string) *big.Int {
 
 // NewOracle returns a new gasprice oracle which can recommend suitable
 // gasprice for newly created transaction.
-func NewOracle(params Config) *Oracle {
+func NewOracle(params Config, backend Reader) *Oracle {
 	params.MaxGasPrice = sanitizeBigInt(params.MaxGasPrice, nil, nil, DefaultMaxGasPrice, "MaxGasPrice")
 	params.MinGasPrice = sanitizeBigInt(params.MinGasPrice, nil, nil, new(big.Int), "MinGasPrice")
 	params.DefaultCertainty = sanitizeBigInt(new(big.Int).SetUint64(params.DefaultCertainty), big.NewInt(0), DecimalUnitBn, big.NewInt(DecimalUnit/2), "DefaultCertainty").Uint64()
 	tCache, _ := lru.New(100)
 	return &Oracle{
-		cfg:    params,
-		tCache: tCache,
-		quit:   make(chan struct{}),
+		cfg:     params,
+		tCache:  tCache,
+		quit:    make(chan struct{}),
+		backend: backend,
 	}
 }
 
-func (gpo *Oracle) Start(backend Reader) {
+func (gpo *Oracle) SetReader(backend Reader) {
 	gpo.backend = backend
+}
+
+func (gpo *Oracle) Start() {
 	gpo.wg.Add(1)
 	go func() {
 		defer gpo.wg.Done()
@@ -188,30 +185,4 @@ func (gpo *Oracle) SuggestTip(certainty uint64) *big.Int {
 		tip: tip,
 	})
 	return new(big.Int).Set(tip)
-}
-
-// EffectiveMinGasPrice returns softly enforced minimum gas price on top of on-chain minimum gas price (base fee)
-func (gpo *Oracle) EffectiveMinGasPrice() *big.Int {
-	if gpo.backend == nil {
-		return new(big.Int).Set(gpo.cfg.MinGasPrice)
-	}
-	head := gpo.backend.GetLatestBlockIndex()
-
-	// If the latest gasprice is still available, return it.
-	gpo.eCache.lock.RLock()
-	cachedHead, cachedValue := gpo.eCache.head, gpo.eCache.value
-	gpo.eCache.lock.RUnlock()
-	if head <= cachedHead {
-		return new(big.Int).Set(cachedValue)
-	}
-
-	value := gpo.effectiveMinGasPrice()
-
-	gpo.eCache.lock.Lock()
-	if head > gpo.eCache.head {
-		gpo.eCache.head = head
-		gpo.eCache.value = value
-	}
-	gpo.eCache.lock.Unlock()
-	return new(big.Int).Set(value)
 }

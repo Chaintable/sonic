@@ -8,6 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core"
+
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/ethereum/go-ethereum/accounts"
@@ -22,6 +25,7 @@ import (
 	"github.com/Fantom-foundation/go-opera/ethapi"
 	"github.com/Fantom-foundation/go-opera/evmcore"
 	"github.com/Fantom-foundation/go-opera/gossip/evmstore"
+	"github.com/Fantom-foundation/go-opera/gossip/gasprice/gaspricelimits"
 	"github.com/Fantom-foundation/go-opera/inter"
 	"github.com/Fantom-foundation/go-opera/inter/iblockproc"
 	"github.com/Fantom-foundation/go-opera/inter/state"
@@ -163,7 +167,11 @@ func (b *EthAPIBackend) GetFullEventID(shortEventID string) (hash.Event, error) 
 	s := strings.Split(shortEventID, ":")
 	if len(s) == 1 {
 		// it's a full hash
-		return hash.HexToEventHash(shortEventID), nil
+		eventHash, err := hexutil.Decode(shortEventID)
+		if err != nil {
+			return hash.Event{}, errors.Wrap(err, "full hash parsing error")
+		}
+		return hash.Event(hash.BytesToHash(eventHash)), nil
 	}
 	// short hash
 	epoch, lamport, prefix, err := decodeShortEventID(s)
@@ -289,7 +297,10 @@ func (b *EthAPIBackend) GetReceiptsByNumber(ctx context.Context, number rpc.Bloc
 	}
 
 	block := b.state.GetBlock(common.Hash{}, uint64(number))
-	receipts := b.svc.store.evm.GetReceipts(idx.Block(number), b.signer, block.Hash, block.Transactions)
+	time := uint64(block.Time.Unix())
+	baseFee := block.BaseFee
+	blobGasPrice := new(big.Int) // TODO issue #147
+	receipts := b.svc.store.evm.GetReceipts(idx.Block(number), b.ChainConfig(), block.Hash, time, baseFee, blobGasPrice, block.Transactions)
 	return receipts, nil
 }
 
@@ -315,11 +326,7 @@ func (b *EthAPIBackend) GetLogs(ctx context.Context, block common.Hash) ([][]*ty
 	return logs, nil
 }
 
-func (b *EthAPIBackend) GetTd(_ common.Hash) *big.Int {
-	return big.NewInt(0)
-}
-
-func (b *EthAPIBackend) GetEVM(ctx context.Context, msg evmcore.Message, state vm.StateDB, header *evmcore.EvmHeader, vmConfig *vm.Config) (*vm.EVM, func() error, error) {
+func (b *EthAPIBackend) GetEVM(ctx context.Context, msg *core.Message, state vm.StateDB, header *evmcore.EvmHeader, vmConfig *vm.Config) (*vm.EVM, func() error, error) {
 	vmError := func() error { return nil }
 
 	if vmConfig == nil {
@@ -437,10 +444,6 @@ func (b *EthAPIBackend) SuggestGasTipCap(ctx context.Context, certainty uint64) 
 	return b.svc.gpo.SuggestTip(certainty)
 }
 
-func (b *EthAPIBackend) EffectiveMinGasPrice(ctx context.Context) *big.Int {
-	return b.svc.gpo.EffectiveMinGasPrice()
-}
-
 func (b *EthAPIBackend) AccountManager() *accounts.Manager {
 	return b.svc.AccountManager()
 }
@@ -475,7 +478,8 @@ func (b *EthAPIBackend) CurrentEpoch(ctx context.Context) idx.Epoch {
 }
 
 func (b *EthAPIBackend) MinGasPrice() *big.Int {
-	return b.state.MinGasPrice()
+	current := b.state.GetCurrentBaseFee()
+	return gaspricelimits.GetSuggestedGasPriceForNewTransactions(current)
 }
 func (b *EthAPIBackend) MaxGasLimit() uint64 {
 	return b.state.MaxGasLimit()

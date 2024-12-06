@@ -3,6 +3,7 @@ package gossip
 import (
 	"errors"
 	"fmt"
+
 	"github.com/Fantom-foundation/go-opera/inter/iblockproc"
 	"github.com/Fantom-foundation/go-opera/inter/ibr"
 	"github.com/Fantom-foundation/go-opera/inter/ier"
@@ -47,10 +48,18 @@ func (s *Store) ApplyGenesis(g genesis.Genesis) (err error) {
 	s.SetBlockEpochState(topEr.BlockState, topEr.EpochState)
 	s.FlushBlockEpochState()
 
+	s.SetGenesisID(g.GenesisID)
+	s.SetGenesisBlockIndex(topEr.BlockState.LastBlock.Idx)
+
 	// write blocks
 	var lastBlock ibr.LlrIdxFullBlockRecord
 	g.Blocks.ForEach(func(br ibr.LlrIdxFullBlockRecord) bool {
-		s.WriteFullBlockRecord(br)
+		err = s.WriteFullBlockRecord(br)
+		if err != nil {
+			s.Log.Crit(err.Error())
+			return false
+		}
+
 		if br.Idx > lastBlock.Idx {
 			lastBlock = br
 		}
@@ -91,7 +100,7 @@ func (s *Store) ApplyGenesis(g genesis.Genesis) (err error) {
 		}
 	} else { // no S5 section in the genesis file
 		// Import legacy EVM genesis section
-		err = s.evm.ImportLegacyEvmData(g.RawEvmItems, uint64(lastBlock.Idx), common.Hash(lastBlock.Root))
+		err = s.evm.ImportLegacyEvmData(g.RawEvmItems, uint64(lastBlock.Idx), common.Hash(lastBlock.StateRoot))
 		if err != nil {
 			return fmt.Errorf("import of legacy genesis data into StateDB failed; %v", err)
 		}
@@ -100,23 +109,11 @@ func (s *Store) ApplyGenesis(g genesis.Genesis) (err error) {
 	if err := s.evm.Open(); err != nil {
 		return fmt.Errorf("unable to open EvmStore to check imported state: %w", err)
 	}
-	if err := s.evm.CheckLiveStateHash(lastBlock.Idx, lastBlock.Root); err != nil {
+	if err := s.evm.CheckLiveStateHash(lastBlock.Idx, lastBlock.StateRoot); err != nil {
 		return fmt.Errorf("checking imported live state failed: %w", err)
 	} else {
-		s.Log.Info("StateDB imported successfully, stateRoot matches", "index", lastBlock.Idx, "root", lastBlock.Root)
+		s.Log.Info("StateDB imported successfully, stateRoot matches", "index", lastBlock.Idx, "root", lastBlock.StateRoot)
 	}
-
-	// write LLR state
-	s.setLlrState(LlrState{
-		LowestEpochToDecide: topEr.Idx + 1,
-		LowestEpochToFill:   topEr.Idx + 1,
-		LowestBlockToDecide: topEr.BlockState.LastBlock.Idx + 1,
-		LowestBlockToFill:   topEr.BlockState.LastBlock.Idx + 1,
-	})
-	s.FlushLlrState()
-
-	s.SetGenesisID(g.GenesisID)
-	s.SetGenesisBlockIndex(topEr.BlockState.LastBlock.Idx)
 
 	return nil
 }
