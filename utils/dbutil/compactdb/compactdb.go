@@ -2,8 +2,11 @@ package compactdb
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 	"strconv"
+
+	"github.com/Fantom-foundation/go-opera/utils/dbutil"
 
 	"github.com/Fantom-foundation/lachesis-base/kvdb"
 	"github.com/Fantom-foundation/lachesis-base/kvdb/table"
@@ -47,7 +50,7 @@ func compact(db *contCompacter, prefix []byte, iters int) error {
 	}
 
 	// once a table is located, split the range into *iters* chunks for compaction
-	prefixed := utils.NewTableOrSelf(db, append(prefix))
+	prefixed := utils.NewTableOrSelf(db, prefix)
 	first, _, diff := keysRange(prefixed)
 	if diff.Cmp(big.NewInt(int64(iters+10000))) < 0 {
 		// skip if too few keys and compact it along with next range
@@ -73,7 +76,13 @@ func Compact(db kvdb.Store, loggingName string, sizePerIter uint64) error {
 	defer loggedDB.StopLogging()
 
 	// scale number of iterations based on total DB size and sizePerIter
-	diskSizeStr, err := db.Stat("disk.size")
+
+	measurableStore, isMeasurable := db.(dbutil.MeasurableStore)
+	if !isMeasurable {
+		return fmt.Errorf("unable to read database used disk space - not a MeasurableStore")
+	}
+
+	diskSizeStr, err := measurableStore.UsedDiskSpace()
 	if err != nil {
 		return err
 	}

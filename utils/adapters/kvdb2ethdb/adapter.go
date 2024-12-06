@@ -32,6 +32,10 @@ func (db *Adapter) NewBatch() ethdb.Batch {
 	return &batch{db.Store.NewBatch()}
 }
 
+func (db *Adapter) NewBatchWithSize(int) ethdb.Batch {
+	return db.NewBatch()
+}
+
 // NewIterator creates a binary-alphabetical iterator over a subset
 // of database content with a particular key prefix, starting at a particular
 // initial key (or after, if it does not exist).

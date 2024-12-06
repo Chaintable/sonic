@@ -3,6 +3,9 @@ package config
 import (
 	"crypto/ecdsa"
 	"fmt"
+	"os"
+	"strings"
+
 	"github.com/Fantom-foundation/go-opera/config/flags"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
@@ -13,8 +16,6 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/netutil"
 	"github.com/ethereum/go-ethereum/params"
 	"gopkg.in/urfave/cli.v1"
-	"os"
-	"strings"
 )
 
 // SetNodeConfig applies node-related command line flags to the config.
@@ -193,6 +194,12 @@ func setHTTP(ctx *cli.Context, cfg *node.Config) {
 	if ctx.GlobalIsSet(flags.HTTPPathPrefixFlag.Name) {
 		cfg.HTTPPathPrefix = ctx.GlobalString(flags.HTTPPathPrefixFlag.Name)
 	}
+	if ctx.IsSet(flags.BatchRequestLimit.Name) {
+		cfg.BatchRequestLimit = ctx.Int(flags.BatchRequestLimit.Name)
+	}
+	if ctx.IsSet(flags.BatchResponseMaxSize.Name) {
+		cfg.BatchResponseMaxSize = ctx.Int(flags.BatchResponseMaxSize.Name)
+	}
 }
 
 // setWS creates the WebSocket RPC listener interface string from the set
@@ -259,6 +266,9 @@ func setP2PConfig(ctx *cli.Context, cfg *p2p.Config) error {
 	if ctx.GlobalIsSet(flags.NoDiscoverFlag.Name) {
 		cfg.NoDiscovery = true
 	}
+	if ctx.GlobalIsSet(flags.DiscoveryV4Flag.Name) {
+		cfg.DiscoveryV4 = ctx.GlobalBool(flags.DiscoveryV4Flag.Name)
+	}
 	if ctx.GlobalIsSet(flags.DiscoveryV5Flag.Name) {
 		cfg.DiscoveryV5 = ctx.GlobalBool(flags.DiscoveryV5Flag.Name)
 	}
@@ -269,21 +279,6 @@ func setP2PConfig(ctx *cli.Context, cfg *p2p.Config) error {
 			return fmt.Errorf("option %q: %v", flags.NetrestrictFlag.Name, err)
 		}
 		cfg.NetRestrict = list
-	}
-
-	var err error
-	if iprestrict := ctx.GlobalString(flags.IPrestrictFlag.Name); iprestrict != "" {
-		cfg.IPRestrict, err = netutil.ParseIPs(iprestrict)
-		if err != nil {
-			return fmt.Errorf("option %q: %v", flags.IPrestrictFlag.Name, err)
-		}
-	}
-
-	if privatenodes := ctx.GlobalString(flags.PrivateNodeFlag.Name); privatenodes != "" {
-		cfg.PrivateNodes, err = enode.ParseNodes(privatenodes)
-		if err != nil {
-			return fmt.Errorf("option %q: %v", flags.PrivateNodeFlag.Name, err)
-		}
 	}
 
 	return nil

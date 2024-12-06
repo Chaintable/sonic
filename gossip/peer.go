@@ -3,7 +3,6 @@ package gossip
 import (
 	"errors"
 	"fmt"
-	"github.com/ethereum/go-ethereum/metrics"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,13 +14,12 @@ import (
 	mapset "github.com/deckarep/golang-set"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p"
+	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/rlp"
 
-	"github.com/Fantom-foundation/go-opera/gossip/protocols/blockrecords/brstream"
-	"github.com/Fantom-foundation/go-opera/gossip/protocols/blockvotes/bvstream"
 	"github.com/Fantom-foundation/go-opera/gossip/protocols/dag/dagstream"
-	"github.com/Fantom-foundation/go-opera/gossip/protocols/epochpacks/epstream"
 	"github.com/Fantom-foundation/go-opera/inter"
 )
 
@@ -30,10 +28,10 @@ var (
 )
 
 var (
-	sentTxsPromotedCounter = metrics.GetOrRegisterCounter("p2p_sent_txs_promoted", nil)
+	sentTxsPromotedCounter    = metrics.GetOrRegisterCounter("p2p_sent_txs_promoted", nil)
 	droppedTxsPromotedCounter = metrics.GetOrRegisterCounter("p2p_dropped_txs_promoted", nil)
-	sentTxsRequestedCounter = metrics.GetOrRegisterCounter("p2p_sent_txs_requested", nil)
-	sentTxHashesCounter = metrics.GetOrRegisterCounter("p2p_sent_tx_hashes", nil)
+	sentTxsRequestedCounter   = metrics.GetOrRegisterCounter("p2p_sent_txs_requested", nil)
+	sentTxHashesCounter       = metrics.GetOrRegisterCounter("p2p_sent_tx_hashes", nil)
 )
 
 const (
@@ -74,6 +72,13 @@ type peer struct {
 	useless uint32
 
 	sync.RWMutex
+
+	endPoint atomic.Pointer[peerEndPointInfo]
+}
+
+type peerEndPointInfo struct {
+	enode     enode.Node
+	timestamp time.Time
 }
 
 func (p *peer) Useless() bool {
@@ -127,7 +132,7 @@ func newPeer(version uint, p *p2p.Peer, rw p2p.MsgReadWriter, cfg PeerCacheConfi
 		knownTxs:            mapset.NewSet(),
 		knownEvents:         mapset.NewSet(),
 		queue:               make(chan broadcastItem, cfg.MaxQueuedItems),
-		queuedDataSemaphore: datasemaphore.New(dag.Metric{cfg.MaxQueuedItems, cfg.MaxQueuedSize}, getSemaphoreWarningFn("Peers queue")),
+		queuedDataSemaphore: datasemaphore.New(dag.Metric{Num: cfg.MaxQueuedItems, Size: cfg.MaxQueuedSize}, getSemaphoreWarningFn("Peers queue")),
 		term:                make(chan struct{}),
 	}
 
@@ -205,7 +210,7 @@ func (p *peer) SendTransactionHashes(txids []common.Hash) error {
 }
 
 func memSize(v rlp.RawValue) dag.Metric {
-	return dag.Metric{1, uint64(len(v) + 1024)}
+	return dag.Metric{Num: 1, Size: uint64(len(v) + 1024)}
 }
 
 func (p *peer) asyncSendEncodedItem(raw rlp.RawValue, code uint64, queue chan broadcastItem) bool {
@@ -449,30 +454,6 @@ func (p *peer) RequestTransactions(txids []common.Hash) error {
 	return nil
 }
 
-func (p *peer) SendBVsStream(r bvstream.Response) error {
-	return p2p.Send(p.rw, BVsStreamResponse, r)
-}
-
-func (p *peer) RequestBVsStream(r bvstream.Request) error {
-	return p2p.Send(p.rw, RequestBVsStream, r)
-}
-
-func (p *peer) SendBRsStream(r brstream.Response) error {
-	return p2p.Send(p.rw, BRsStreamResponse, r)
-}
-
-func (p *peer) RequestBRsStream(r brstream.Request) error {
-	return p2p.Send(p.rw, RequestBRsStream, r)
-}
-
-func (p *peer) SendEPsStream(r epstream.Response) error {
-	return p2p.Send(p.rw, EPsStreamResponse, r)
-}
-
-func (p *peer) RequestEPsStream(r epstream.Request) error {
-	return p2p.Send(p.rw, RequestEPsStream, r)
-}
-
 func (p *peer) SendEventsStream(r dagstream.Response, ids hash.Events) error {
 	// Mark all the event hash as known, but ensure we don't overflow our limits
 	for _, id := range ids {
@@ -561,6 +542,30 @@ func (p *peer) readStatus(network uint64, handshake *handshakeData, genesis comm
 		return errResp(ErrProtocolVersionMismatch, "%d (!= %d)", handshake.ProtocolVersion, p.version)
 	}
 	return nil
+}
+
+// SendPeerInfoRequest sends a request to the peer asking for an update of
+// its list of peers.
+func (p *peer) SendPeerInfoRequest() error {
+	// If the peer doesn't support the peer info protocol, don't bother
+	// sending the request. This request would lead to a disconnect
+	// if the peer doesn't understand it.
+	if !p.Peer.RunningCap(ProtocolName, []uint{_Sonic_64, _Sonic_65}) {
+		return nil
+	}
+	return p2p.Send(p.rw, GetPeerInfosMsg, struct{}{})
+}
+
+// SendEndPointUpdateRequest sends a request to the peer asking for the peer's
+// public enode address to be used to establish a connection to this peer.
+func (p *peer) SendEndPointUpdateRequest() error {
+	// If the peer doesn't support version 65 of this protocol, don't bother
+	// sending the request. This request would lead to a disconnect
+	// if the peer doesn't understand it.
+	if !p.Peer.RunningCap(ProtocolName, []uint{_Sonic_65}) {
+		return nil
+	}
+	return p2p.Send(p.rw, GetEndPointMsg, struct{}{})
 }
 
 // String implements fmt.Stringer.

@@ -5,10 +5,13 @@ import (
 	"math/big"
 	"strings"
 
+	"github.com/ethereum/go-ethereum/core/tracing"
+
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/holiman/uint256"
 
 	"github.com/Fantom-foundation/go-opera/opera/contracts/driver"
 )
@@ -53,7 +56,7 @@ func init() {
 
 type PreCompiledContract struct{}
 
-func (_ PreCompiledContract) Run(stateDB vm.StateDB, _ vm.BlockContext, txCtx vm.TxContext, caller common.Address, input []byte, suppliedGas uint64) ([]byte, uint64, error) {
+func (PreCompiledContract) Run(stateDB vm.StateDB, _ vm.BlockContext, txCtx vm.TxContext, caller common.Address, input []byte, suppliedGas uint64) ([]byte, uint64, error) {
 	if caller != driver.ContractAddress {
 		return nil, 0, vm.ErrExecutionReverted
 	}
@@ -73,7 +76,7 @@ func (_ PreCompiledContract) Run(stateDB vm.StateDB, _ vm.BlockContext, txCtx vm
 
 		acc := common.BytesToAddress(input[12:32])
 		input = input[32:]
-		value := new(big.Int).SetBytes(input[:32])
+		value := new(uint256.Int).SetBytes32(input[:32])
 
 		if acc == txCtx.Origin {
 			// Origin balance shouldn't decrease during his transaction
@@ -82,11 +85,11 @@ func (_ PreCompiledContract) Run(stateDB vm.StateDB, _ vm.BlockContext, txCtx vm
 
 		balance := stateDB.GetBalance(acc)
 		if balance.Cmp(value) >= 0 {
-			diff := new(big.Int).Sub(balance, value)
-			stateDB.SubBalance(acc, diff)
+			diff := new(uint256.Int).Sub(balance, value)
+			stateDB.SubBalance(acc, diff, tracing.BalanceChangeUnspecified)
 		} else {
-			diff := new(big.Int).Sub(value, balance)
-			stateDB.AddBalance(acc, diff)
+			diff := new(uint256.Int).Sub(value, balance)
+			stateDB.AddBalance(acc, diff, tracing.BalanceChangeUnspecified)
 		}
 	} else if bytes.Equal(input[:4], copyCodeMethodID) {
 		input = input[4:]

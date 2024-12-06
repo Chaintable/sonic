@@ -1,35 +1,42 @@
 package gossip
 
 import (
+	"math/big"
+
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	notify "github.com/ethereum/go-ethereum/event"
-	"math/big"
 
 	"github.com/Fantom-foundation/go-opera/evmcore"
 	"github.com/Fantom-foundation/go-opera/gossip/emitter"
 	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/Fantom-foundation/go-opera/inter/ibr"
-	"github.com/Fantom-foundation/go-opera/inter/iep"
 )
 
 // Constants to match up protocol versions and messages
 const (
-	FTM62           = 62
-	FTM63           = 63
-	ProtocolVersion = FTM63
+	_FTM62    = 62
+	_Sonic_64 = 64
+	_Sonic_65 = 65
 )
 
 // ProtocolName is the official short name of the protocol used during capability negotiation.
 const ProtocolName = "opera"
 
 // ProtocolVersions are the supported versions of the protocol (first is primary).
-var ProtocolVersions = []uint{FTM62, FTM63}
+var ProtocolVersions = []uint{
+	_Sonic_65,
+	_Sonic_64,
+	_FTM62,
+}
 
 // protocolLengths are the number of implemented message corresponding to different protocol versions.
-var protocolLengths = map[uint]uint64{FTM62: EventsStreamResponse + 1, FTM63: EPsStreamResponse + 1}
+var protocolLengths = map[uint]uint64{
+	_Sonic_65: EndPointUpdateMsg + 1,
+	_Sonic_64: PeerInfosMsg + 1,
+	_FTM62:    EventsStreamResponse + 1,
+}
 
 const protocolMaxMsgSize = inter.ProtocolMaxMsgSize // Maximum cap on the size of a protocol message
 
@@ -62,12 +69,15 @@ const (
 	// Contains the requested events by RequestEventsStream
 	EventsStreamResponse = 9
 
-	RequestBVsStream  = 10
-	BVsStreamResponse = 11
-	RequestBRsStream  = 12
-	BRsStreamResponse = 13
-	RequestEPsStream  = 14
-	EPsStreamResponse = 15
+	// Request the list of known peers and their information.
+	GetPeerInfosMsg = 10
+	// Contains the list of known peers and their information.
+	PeerInfosMsg = 11
+
+	// Request the enode of the peer identifying its public end-point.
+	GetEndPointMsg = 12
+	// Contains the enode including the public end-point of the sender.
+	EndPointUpdateMsg = 13
 )
 
 type errCode int
@@ -146,20 +156,10 @@ type dagChunk struct {
 	Events    inter.EventPayloads
 }
 
-type bvsChunk struct {
-	SessionID uint32
-	Done      bool
-	BVs       []inter.LlrSignedBlockVotes
+type peerInfo struct {
+	Enode string
 }
 
-type brsChunk struct {
-	SessionID uint32
-	Done      bool
-	BRs       []ibr.LlrIdxFullBlockRecord
-}
-
-type epsChunk struct {
-	SessionID uint32
-	Done      bool
-	EPs       []iep.LlrEpochPack
+type peerInfoMsg struct {
+	Peers []peerInfo
 }

@@ -62,67 +62,6 @@ func (t TestBackend) MinGasTip() *big.Int {
 	return big.NewInt(0)
 }
 
-func TestOracle_EffectiveMinGasPrice(t *testing.T) {
-	backend := &TestBackend{
-		block:             1,
-		totalGasPowerLeft: 0,
-		rules:             opera.FakeNetRules(),
-		pendingRules:      opera.FakeNetRules(),
-	}
-
-	gpo := NewOracle(Config{})
-	gpo.cfg.MaxGasPrice = math.MaxBig256
-	gpo.cfg.MinGasPrice = new(big.Int)
-
-	// no backend
-	require.Equal(t, "0", gpo.EffectiveMinGasPrice().String())
-	gpo.backend = backend
-
-	// all the gas is consumed, price should be high
-	backend.block++
-	backend.totalGasPowerLeft = 0
-	require.Equal(t, "25000000000", gpo.EffectiveMinGasPrice().String())
-
-	// test the cache as well
-	backend.totalGasPowerLeft = 1008000000
-	require.Equal(t, "25000000000", gpo.EffectiveMinGasPrice().String())
-	backend.block++
-	require.Equal(t, "24994672000", gpo.EffectiveMinGasPrice().String())
-	backend.block++
-
-	// all the gas is free, price should be low
-	backend.totalGasPowerLeft = gpo.maxTotalGasPower().Uint64()
-	require.Equal(t, uint64(0x92aeed1c000), backend.totalGasPowerLeft)
-	require.Equal(t, "1000000000", gpo.EffectiveMinGasPrice().String())
-	backend.block++
-
-	// edge case with totalGasPowerLeft exceeding maxTotalGasPower
-	backend.totalGasPowerLeft = 2 * gpo.maxTotalGasPower().Uint64()
-	require.Equal(t, "1000000000", gpo.EffectiveMinGasPrice().String())
-	backend.block++
-
-	// half of the gas is free, price should be 3.75x
-	backend.totalGasPowerLeft = gpo.maxTotalGasPower().Uint64() / 2
-	require.Equal(t, "3750000000", gpo.EffectiveMinGasPrice().String())
-	backend.block++
-
-	// third of the gas is free, price should be higher
-	backend.totalGasPowerLeft = gpo.maxTotalGasPower().Uint64() / 3
-	require.Equal(t, "8125008000", gpo.EffectiveMinGasPrice().String())
-	backend.block++
-
-	// check min and max price hard limits don't apply
-	gpo.cfg.MaxGasPrice = big.NewInt(2000000000)
-	backend.totalGasPowerLeft = gpo.maxTotalGasPower().Uint64() / 3
-	require.Equal(t, "8125008000", gpo.EffectiveMinGasPrice().String())
-	backend.block++
-
-	gpo.cfg.MinGasPrice = big.NewInt(1500000000)
-	backend.totalGasPowerLeft = gpo.maxTotalGasPower().Uint64()
-	require.Equal(t, "1000000000", gpo.EffectiveMinGasPrice().String())
-	backend.block++
-}
-
 func TestOracle_constructiveGasPrice(t *testing.T) {
 	backend := &TestBackend{
 		totalGasPowerLeft: 0,
@@ -130,8 +69,7 @@ func TestOracle_constructiveGasPrice(t *testing.T) {
 		pendingRules:      opera.FakeNetRules(),
 	}
 
-	gpo := NewOracle(Config{})
-	gpo.backend = backend
+	gpo := NewOracle(Config{}, backend)
 	gpo.cfg.MaxGasPrice = math.MaxBig256
 	gpo.cfg.MinGasPrice = new(big.Int)
 
@@ -139,28 +77,28 @@ func TestOracle_constructiveGasPrice(t *testing.T) {
 	backend.totalGasPowerLeft = 0
 	require.Equal(t, "2500", gpo.constructiveGasPrice(0, 0, big.NewInt(100)).String())
 	require.Equal(t, "2500", gpo.constructiveGasPrice(0, 0.1*DecimalUnit, big.NewInt(100)).String())
-	require.Equal(t, "2500", gpo.constructiveGasPrice(1008000000, 0, big.NewInt(100)).String())
+	require.Equal(t, "2500", gpo.constructiveGasPrice(10080000, 0, big.NewInt(100)).String())
 	require.Equal(t, "2500", gpo.constructiveGasPrice(gpo.maxTotalGasPower().Uint64()*2, 2*DecimalUnit, big.NewInt(100)).String())
 
 	// all the gas is free, price should be low
 	backend.totalGasPowerLeft = gpo.maxTotalGasPower().Uint64()
 	require.Equal(t, "100", gpo.constructiveGasPrice(0, 0, big.NewInt(100)).String())
 	require.Equal(t, "120", gpo.constructiveGasPrice(0, 0.1*DecimalUnit, big.NewInt(100)).String())
-	require.Equal(t, "101", gpo.constructiveGasPrice(100800000000, 0, big.NewInt(100)).String())
+	require.Equal(t, "110", gpo.constructiveGasPrice(10080000, 0, big.NewInt(100)).String())
 	require.Equal(t, "2500", gpo.constructiveGasPrice(gpo.maxTotalGasPower().Uint64()*2, 2*DecimalUnit, big.NewInt(100)).String())
 
 	// half of the gas is free, price should be 3.75x
 	backend.totalGasPowerLeft = gpo.maxTotalGasPower().Uint64() / 2
 	require.Equal(t, "375", gpo.constructiveGasPrice(0, 0, big.NewInt(100)).String())
 	require.Equal(t, "637", gpo.constructiveGasPrice(0, 0.1*DecimalUnit, big.NewInt(100)).String())
-	require.Equal(t, "401", gpo.constructiveGasPrice(100800000000, 0, big.NewInt(100)).String())
+	require.Equal(t, "551", gpo.constructiveGasPrice(10080000, 0, big.NewInt(100)).String())
 	require.Equal(t, "2500", gpo.constructiveGasPrice(gpo.maxTotalGasPower().Uint64()*2, 2*DecimalUnit, big.NewInt(100)).String())
 
 	// third of the gas is free, price should be higher
 	backend.totalGasPowerLeft = gpo.maxTotalGasPower().Uint64() / 3
 	require.Equal(t, "812", gpo.constructiveGasPrice(0, 0, big.NewInt(100)).String())
 	require.Equal(t, "1255", gpo.constructiveGasPrice(0, 0.1*DecimalUnit, big.NewInt(100)).String())
-	require.Equal(t, "838", gpo.constructiveGasPrice(100800000000, 0, big.NewInt(100)).String())
+	require.Equal(t, "1080", gpo.constructiveGasPrice(10080000, 0, big.NewInt(100)).String())
 	require.Equal(t, "2500", gpo.constructiveGasPrice(gpo.maxTotalGasPower().Uint64()*2, 2*DecimalUnit, big.NewInt(100)).String())
 
 }
@@ -172,8 +110,7 @@ func TestOracle_reactiveGasPrice(t *testing.T) {
 		pendingRules:      opera.FakeNetRules(),
 	}
 
-	gpo := NewOracle(Config{})
-	gpo.backend = backend
+	gpo := NewOracle(Config{}, backend)
 	gpo.cfg.MaxGasPrice = math.MaxBig256
 	gpo.cfg.MinGasPrice = new(big.Int)
 

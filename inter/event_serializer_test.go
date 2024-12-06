@@ -2,10 +2,9 @@ package inter
 
 import (
 	"bytes"
-	"encoding/json"
 	"math"
 	"math/big"
-	"math/rand"
+	"math/rand/v2"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -32,6 +31,7 @@ func emptyEvent(ver uint8) EventPayload {
 
 func TestEventPayloadSerialization(t *testing.T) {
 	max := MutableEventPayload{}
+	max.SetVersion(2)
 	max.SetEpoch(math.MaxUint32)
 	max.SetSeq(idx.Event(math.MaxUint32))
 	max.SetLamport(idx.Lamport(math.MaxUint32))
@@ -72,10 +72,12 @@ func TestEventPayloadSerialization(t *testing.T) {
 	max.SetTxs(txs)
 
 	ee := map[string]EventPayload{
-		"empty0": emptyEvent(0),
-		"empty1": emptyEvent(1),
-		"max":    *max.Build(),
-		"random": *FakeEvent(12, 1, 1, true),
+		"empty0":  emptyEvent(0),
+		"empty1":  emptyEvent(1),
+		"empty2":  emptyEvent(2),
+		"max":     *max.Build(),
+		"random1": *FakeEvent(1, 12, 1, 1, true),
+		"random2": *FakeEvent(2, 12, 0, 0, false),
 	}
 
 	t.Run("ok", func(t *testing.T) {
@@ -108,7 +110,7 @@ func TestEventPayloadSerialization(t *testing.T) {
 			bin, err := header0.MarshalBinary()
 			require.NoError(err, name)
 
-			n := rand.Intn(len(bin) - len(header0.Extra()) - 1)
+			n := rand.IntN(len(bin) - len(header0.Extra()) - 1)
 			bin = bin[0:n]
 
 			buf, err := rlp.EncodeToBytes(bin)
@@ -136,7 +138,7 @@ func BenchmarkEventPayload_EncodeRLP_empty(b *testing.B) {
 }
 
 func BenchmarkEventPayload_EncodeRLP_NoPayload(b *testing.B) {
-	e := FakeEvent(0, 0, 0, false)
+	e := FakeEvent(2, 0, 0, 0, false)
 
 	b.ResetTimer()
 
@@ -150,7 +152,7 @@ func BenchmarkEventPayload_EncodeRLP_NoPayload(b *testing.B) {
 }
 
 func BenchmarkEventPayload_EncodeRLP(b *testing.B) {
-	e := FakeEvent(1000, 0, 0, false)
+	e := FakeEvent(2, 1000, 0, 0, false)
 
 	b.ResetTimer()
 
@@ -183,7 +185,7 @@ func BenchmarkEventPayload_DecodeRLP_empty(b *testing.B) {
 }
 
 func BenchmarkEventPayload_DecodeRLP_NoPayload(b *testing.B) {
-	e := FakeEvent(0, 0, 0, false)
+	e := FakeEvent(2, 0, 0, 0, false)
 	me := MutableEventPayload{}
 
 	buf, err := rlp.EncodeToBytes(&e)
@@ -202,7 +204,7 @@ func BenchmarkEventPayload_DecodeRLP_NoPayload(b *testing.B) {
 }
 
 func BenchmarkEventPayload_DecodeRLP(b *testing.B) {
-	e := FakeEvent(1000, 0, 0, false)
+	e := FakeEvent(2, 22, 0, 0, false)
 	me := MutableEventPayload{}
 
 	buf, err := rlp.EncodeToBytes(&e)
@@ -220,93 +222,66 @@ func BenchmarkEventPayload_DecodeRLP(b *testing.B) {
 	}
 }
 
-func TestEventRPCMarshaling(t *testing.T) {
-	t.Run("Event", func(t *testing.T) {
-		require := require.New(t)
-		for i := 0; i < 3; i++ {
-			var event0 EventI = &FakeEvent(i, i, i, i != 0).Event
-			mapping := RPCMarshalEvent(event0)
-			bb, err := json.Marshal(mapping)
-			require.NoError(err)
-
-			mapping = make(map[string]interface{})
-			err = json.Unmarshal(bb, &mapping)
-			require.NoError(err)
-			event1 := RPCUnmarshalEvent(mapping)
-
-			require.Equal(event0, event1, i)
-		}
-	})
-
-	t.Run("EventPayload", func(t *testing.T) {
-		require := require.New(t)
-		for i := 0; i < 3; i++ {
-			var event0 = FakeEvent(i, i, i, i != 0)
-			mapping, err := RPCMarshalEventPayload(event0, true, false)
-			require.NoError(err)
-			bb, err := json.Marshal(mapping)
-			require.NoError(err)
-
-			mapping = make(map[string]interface{})
-			err = json.Unmarshal(bb, &mapping)
-
-			event1 := RPCUnmarshalEvent(mapping)
-			require.Equal(&event0.SignedEvent.Event, event1, i)
-		}
-	})
-}
-
-func randBig(r *rand.Rand) *big.Int {
-	b := make([]byte, r.Intn(8))
-	_, _ = r.Read(b)
+func randBig(rand *rand.Rand) *big.Int {
+	b := make([]byte, rand.IntN(8))
+	for i := range b {
+		b[i] = byte(rand.IntN(256))
+	}
 	if len(b) == 0 {
 		b = []byte{0}
 	}
 	return new(big.Int).SetBytes(b)
 }
 
-func randAddr(r *rand.Rand) common.Address {
+func randAddr(rand *rand.Rand) common.Address {
 	addr := common.Address{}
-	r.Read(addr[:])
+	for i := 0; i < len(addr); i++ {
+		addr[i] = byte(rand.IntN(256))
+	}
 	return addr
 }
 
-func randBytes(r *rand.Rand, size int) []byte {
+func randBytes(rand *rand.Rand, size int) []byte {
 	b := make([]byte, size)
-	r.Read(b)
+	for i := 0; i < size; i++ {
+		b[i] = byte(rand.IntN(256))
+	}
 	return b
 }
 
-func randHash(r *rand.Rand) hash.Hash {
-	return hash.BytesToHash(randBytes(r, 32))
+func randHash(rand *rand.Rand) hash.Hash {
+	return hash.BytesToHash(randBytes(rand, 32))
 }
 
-func randAddrPtr(r *rand.Rand) *common.Address {
-	addr := randAddr(r)
+func randAddrPtr(rand *rand.Rand) *common.Address {
+	addr := randAddr(rand)
 	return &addr
 }
 
-func randAccessList(r *rand.Rand, maxAddrs, maxKeys int) types.AccessList {
-	accessList := make(types.AccessList, r.Intn(maxAddrs))
+func randAccessList(rand *rand.Rand, maxAddrs, maxKeys int) types.AccessList {
+	accessList := make(types.AccessList, rand.IntN(maxAddrs))
 	for i := range accessList {
-		accessList[i].Address = randAddr(r)
-		accessList[i].StorageKeys = make([]common.Hash, r.Intn(maxKeys))
+		accessList[i].Address = randAddr(rand)
+		accessList[i].StorageKeys = make([]common.Hash, rand.IntN(maxKeys))
 		for j := range accessList[i].StorageKeys {
-			r.Read(accessList[i].StorageKeys[j][:])
+			for k := 0; k < len(accessList[i].StorageKeys[j]); k++ {
+				accessList[i].StorageKeys[j][k] = byte(rand.IntN(256))
+			}
 		}
 	}
 	return accessList
 }
 
 // FakeEvent generates random event for testing purpose.
-func FakeEvent(txsNum, mpsNum, bvsNum int, ersNum bool) *EventPayload {
-	r := rand.New(rand.NewSource(int64(0)))
+func FakeEvent(version uint8, txsNum, mpsNum, bvsNum int, ersNum bool) *EventPayload {
+	r := rand.New(rand.NewPCG(0, 0))
 	random := &MutableEventPayload{}
-	random.SetVersion(1)
+	random.SetVersion(version)
 	random.SetNetForkID(uint16(r.Uint32() >> 16))
 	random.SetLamport(1000)
 	random.SetExtra([]byte{byte(r.Uint32())})
 	random.SetSeq(idx.Event(r.Uint32() >> 8))
+	random.SetEpoch(idx.Epoch(1234))
 	random.SetCreator(idx.ValidatorID(r.Uint32()))
 	random.SetFrame(idx.Frame(r.Uint32() >> 16))
 	random.SetCreationTime(Timestamp(r.Uint64()))
@@ -316,7 +291,9 @@ func FakeEvent(txsNum, mpsNum, bvsNum int, ersNum bool) *EventPayload {
 	txs := types.Transactions{}
 	for i := 0; i < txsNum; i++ {
 		h := hash.Hash{}
-		r.Read(h[:])
+		for i := 0; i < len(h); i++ {
+			h[i] = byte(r.Uint32())
+		}
 		if i%3 == 0 {
 			tx := types.NewTx(&types.LegacyTx{
 				Nonce:    r.Uint64(),
@@ -324,8 +301,8 @@ func FakeEvent(txsNum, mpsNum, bvsNum int, ersNum bool) *EventPayload {
 				Gas:      257 + r.Uint64(),
 				To:       nil,
 				Value:    randBig(r),
-				Data:     randBytes(r, r.Intn(300)),
-				V:        big.NewInt(int64(r.Intn(0xffffffff))),
+				Data:     randBytes(r, rand.IntN(300)),
+				V:        big.NewInt(int64(rand.IntN(0xffffffff))),
 				R:        h.Big(),
 				S:        h.Big(),
 			})
@@ -338,9 +315,9 @@ func FakeEvent(txsNum, mpsNum, bvsNum int, ersNum bool) *EventPayload {
 				Gas:        r.Uint64(),
 				To:         randAddrPtr(r),
 				Value:      randBig(r),
-				Data:       randBytes(r, r.Intn(300)),
+				Data:       randBytes(r, rand.IntN(300)),
 				AccessList: randAccessList(r, 300, 300),
-				V:          big.NewInt(int64(r.Intn(0xffffffff))),
+				V:          big.NewInt(int64(rand.IntN(0xffffffff))),
 				R:          h.Big(),
 				S:          h.Big(),
 			})
@@ -354,46 +331,51 @@ func FakeEvent(txsNum, mpsNum, bvsNum int, ersNum bool) *EventPayload {
 				Gas:        r.Uint64(),
 				To:         randAddrPtr(r),
 				Value:      randBig(r),
-				Data:       randBytes(r, r.Intn(300)),
+				Data:       randBytes(r, rand.IntN(300)),
 				AccessList: randAccessList(r, 300, 300),
-				V:          big.NewInt(int64(r.Intn(0xffffffff))),
+				V:          big.NewInt(int64(rand.IntN(0xffffffff))),
 				R:          h.Big(),
 				S:          h.Big(),
 			})
 			txs = append(txs, tx)
 		}
 	}
-	mps := []MisbehaviourProof{}
-	for i := 0; i < mpsNum; i++ {
-		// MPs are serialized with RLP, so no need to test extensively
-		mps = append(mps, MisbehaviourProof{
-			EventsDoublesign: &EventsDoublesign{
-				Pair: [2]SignedEventLocator{SignedEventLocator{}, SignedEventLocator{}},
-			},
-			BlockVoteDoublesign: nil,
-			WrongBlockVote:      nil,
-			EpochVoteDoublesign: nil,
-			WrongEpochVote:      nil,
-		})
-	}
-	bvs := LlrBlockVotes{}
-	if bvsNum > 0 {
-		bvs.Start = 1 + idx.Block(rand.Intn(1000))
-		bvs.Epoch = 1 + idx.Epoch(rand.Intn(1000))
-	}
-	for i := 0; i < bvsNum; i++ {
-		bvs.Votes = append(bvs.Votes, randHash(r))
-	}
-	ers := LlrEpochVote{}
-	if ersNum {
-		ers.Epoch = 1 + idx.Epoch(rand.Intn(1000))
-		ers.Vote = randHash(r)
+	random.SetTxs(txs)
+
+	if version == 1 {
+		mps := []MisbehaviourProof{}
+		for i := 0; i < mpsNum; i++ {
+			// MPs are serialized with RLP, so no need to test extensively
+			mps = append(mps, MisbehaviourProof{
+				EventsDoublesign: &EventsDoublesign{
+					Pair: [2]SignedEventLocator{SignedEventLocator{}, SignedEventLocator{}},
+				},
+				BlockVoteDoublesign: nil,
+				WrongBlockVote:      nil,
+				EpochVoteDoublesign: nil,
+				WrongEpochVote:      nil,
+			})
+		}
+		random.SetMisbehaviourProofs(mps)
+
+		bvs := LlrBlockVotes{}
+		if bvsNum > 0 {
+			bvs.Start = 1 + idx.Block(rand.IntN(1000))
+			bvs.Epoch = 1 + idx.Epoch(rand.IntN(1000))
+		}
+		for i := 0; i < bvsNum; i++ {
+			bvs.Votes = append(bvs.Votes, randHash(r))
+		}
+		random.SetBlockVotes(bvs)
+
+		ers := LlrEpochVote{}
+		if ersNum {
+			ers.Epoch = 1 + idx.Epoch(rand.IntN(1000))
+			ers.Vote = randHash(r)
+		}
+		random.SetEpochVote(ers)
 	}
 
-	random.SetTxs(txs)
-	random.SetMisbehaviourProofs(mps)
-	random.SetEpochVote(ers)
-	random.SetBlockVotes(bvs)
 	random.SetPayloadHash(CalcPayloadHash(random))
 
 	parent := MutableEventPayload{}

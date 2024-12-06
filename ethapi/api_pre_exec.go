@@ -7,9 +7,9 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/Fantom-foundation/go-opera/evmcore"
 	"github.com/Fantom-foundation/go-opera/opera"
 	"github.com/Fantom-foundation/go-opera/txtrace"
+	"github.com/ethereum/go-ethereum/core"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
@@ -59,7 +59,7 @@ type PreResult struct {
 	GasUsed uint64                 `json:"gasUsed"`
 }
 
-func toPreError(err error, result *evmcore.ExecutionResult) PreError {
+func toPreError(err error, result *core.ExecutionResult) PreError {
 	preErr := PreError{
 		Code: UnKnown,
 	}
@@ -125,7 +125,6 @@ func (api *PreExecAPI) TraceMany(ctx context.Context, origins []PreExecTx) ([]Pr
 		}
 		// Get a new instance of the EVM.
 		msg, err := txArgs.ToMessage(api.b.RPCGasCap(), header.BaseFee)
-		//msg, err := evmcore.TxAsMessage(txArgs, signer, block.BaseFee)
 		if err != nil {
 			preResList = append(preResList, PreResult{
 				Error: PreError{
@@ -136,13 +135,13 @@ func (api *PreExecAPI) TraceMany(ctx context.Context, origins []PreExecTx) ([]Pr
 			continue
 		}
 		txHash := common.BigToHash(big.NewInt(int64(i)))
+		// Providing default config with tracer
 		vmConfig := opera.DefaultVMConfig
+		txTracer := txtrace.NewTraceStructLogger(block, uint(i))
+		vmConfig.Tracer = txTracer.Hooks()
 		vmConfig.NoBaseFee = true
-		vmConfig.Debug = true
-		txTracer := txtrace.NewTraceStructLogger2(block, txHash, msg, uint(i), msg.Gas(), msg.Gas())
-		vmConfig.Tracer = txTracer
 
-		evm, vmError, err := api.b.GetEVM(ctx, msg, state, header, &vmConfig)
+		evm, _, err := api.b.GetEVM(ctx, msg, state, header, &vmConfig)
 		if err != nil {
 			preResList = append(preResList, PreResult{
 				Error: PreError{
@@ -153,25 +152,17 @@ func (api *PreExecAPI) TraceMany(ctx context.Context, origins []PreExecTx) ([]Pr
 			continue
 		}
 		// Execute the message.
-		gp := new(evmcore.GasPool).AddGas(math.MaxUint64)
-		state.Prepare(txHash, i)
-		result, err := evmcore.ApplyMessage(evm, msg, gp)
-		if err := vmError(); err != nil {
-			preRes := PreResult{
-				Error: toPreError(err, result),
-			}
-			if result != nil {
-				preRes.GasUsed = result.MaxUsedGas
-			}
-			preResList = append(preResList, preRes)
-			continue
-		}
+		gp := new(core.GasPool).AddGas(math.MaxUint64)
+		state.SetTxContext(txHash, int(i))
+
+		//result, err := evmcore.ApplyTransactionWithEVM(msg, api.b.ChainConfig(), gp, state, header.Number, block.Hash, txArgs.toTransaction(), &usedGas, evm)
+		result, err := core.ApplyMessage(evm, msg, gp)
 		if err != nil {
 			preRes := PreResult{
 				Error: toPreError(err, result),
 			}
 			if result != nil {
-				preRes.GasUsed = result.MaxUsedGas
+				preRes.GasUsed = result.UsedGas
 			}
 			preResList = append(preResList, preRes)
 			continue
@@ -183,7 +174,7 @@ func (api *PreExecAPI) TraceMany(ctx context.Context, origins []PreExecTx) ([]Pr
 			Logs:  state.GetLogs(txHash, header.Hash),
 		}
 		if result != nil {
-			preRes.GasUsed = result.MaxUsedGas
+			preRes.GasUsed = result.UsedGas
 			if result.Failed() {
 				preRes.Error = toPreError(err, result)
 			}

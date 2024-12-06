@@ -1,15 +1,18 @@
 package evmstore
 
 import (
-	"errors"
 	cc "github.com/Fantom-foundation/Carmen/go/common"
 	"github.com/Fantom-foundation/Carmen/go/common/amount"
+	"github.com/Fantom-foundation/Carmen/go/common/witness"
 	carmen "github.com/Fantom-foundation/Carmen/go/state"
 	"github.com/Fantom-foundation/go-opera/inter/state"
 	"github.com/ethereum/go-ethereum/common"
-	ethstate "github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/stateless"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
-	"math/big"
+	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/trie/utils"
+	"github.com/holiman/uint256"
 )
 
 func CreateCarmenStateDb(carmenStateDb carmen.VmStateDB) state.StateDB {
@@ -27,12 +30,10 @@ type CarmenStateDB struct {
 	// current transaction - set by Prepare
 	txHash  common.Hash
 	txIndex int
-
-	err error
 }
 
 func (c *CarmenStateDB) Error() error {
-	return c.err
+	return nil
 }
 
 func (c *CarmenStateDB) AddLog(log *types.Log) {
@@ -72,6 +73,27 @@ func (c *CarmenStateDB) GetLogs(txHash common.Hash, blockHash common.Hash) []*ty
 	return logs
 }
 
+func (c *CarmenStateDB) Logs() []*types.Log {
+	carmenLogs := c.db.GetLogs()
+	logs := make([]*types.Log, len(carmenLogs))
+	for i, clog := range carmenLogs {
+		log := &types.Log{
+			Address:     common.Address(clog.Address),
+			Topics:      nil,
+			Data:        clog.Data,
+			BlockNumber: c.blockNum,
+			TxHash:      c.txHash,
+			TxIndex:     uint(c.txIndex),
+			Index:       clog.Index,
+		}
+		for _, topic := range clog.Topics {
+			log.Topics = append(log.Topics, common.Hash(topic))
+		}
+		logs[i] = log
+	}
+	return logs
+}
+
 func (c *CarmenStateDB) AddPreimage(hash common.Hash, preimage []byte) {
 	// ignored - preimages of keys hashes are relevant only for geth trie
 }
@@ -92,8 +114,9 @@ func (c *CarmenStateDB) Empty(addr common.Address) bool {
 	return c.db.Empty(cc.Address(addr))
 }
 
-func (c *CarmenStateDB) GetBalance(addr common.Address) *big.Int {
-	return c.db.GetBalance(cc.Address(addr)).ToBig()
+func (c *CarmenStateDB) GetBalance(addr common.Address) *uint256.Int {
+	res := c.db.GetBalance(cc.Address(addr)).Uint256()
+	return &res
 }
 
 func (c *CarmenStateDB) GetNonce(addr common.Address) uint64 {
@@ -116,58 +139,63 @@ func (c *CarmenStateDB) GetCodeHash(addr common.Address) common.Hash {
 	return common.Hash(c.db.GetCodeHash(cc.Address(addr)))
 }
 
-func (c *CarmenStateDB) GetState(addr common.Address, hash common.Hash) common.Hash {
-	return common.Hash(c.db.GetState(cc.Address(addr), cc.Key(hash)))
+func (c *CarmenStateDB) GetState(addr common.Address, key common.Hash) common.Hash {
+	return common.Hash(c.db.GetState(cc.Address(addr), cc.Key(key)))
 }
 
-func (c *CarmenStateDB) GetProof(addr common.Address) ([][]byte, error) {
-	panic("not supported")
+func (c *CarmenStateDB) GetTransientState(addr common.Address, key common.Hash) common.Hash {
+	return common.Hash(c.db.GetTransientState(cc.Address(addr), cc.Key(key)))
 }
 
-func (c *CarmenStateDB) GetStorageProof(a common.Address, key common.Hash) ([][]byte, error) {
-	panic("not supported")
+func (c *CarmenStateDB) GetProof(addr common.Address, keys []common.Hash) (witness.Proof, error) {
+	if db, ok := c.db.(carmen.NonCommittableStateDB); ok {
+		cKeys := make([]cc.Key, len(keys))
+		for i, key := range keys {
+			cKeys[i] = cc.Key(key)
+		}
+		return db.CreateWitnessProof(cc.Address(addr), cKeys...)
+	} else {
+		panic("unable get proof from not a NonCommittableStateDB")
+	}
+}
+
+func (c *CarmenStateDB) GetStorageRoot(addr common.Address) common.Hash {
+	empty := c.db.HasEmptyStorage(cc.Address(addr))
+	var h common.Hash
+	if !empty {
+		// Carmen does not provide a method to get the storage root for performance reasons
+		// as getting a storage root needs computation of hashes in the trie.
+		// In practice, the method GetStorageRoot here is used in the EVM only to assess
+		// if the storage is empty. For this reason, this method returns a dummy hash here just
+		// not to equal to the empty hash when the storage is not empty.
+		h[0] = 1
+	}
+	return h
 }
 
 func (c *CarmenStateDB) GetCommittedState(addr common.Address, hash common.Hash) common.Hash {
 	return common.Hash(c.db.GetCommittedState(cc.Address(addr), cc.Key(hash)))
 }
 
-func (c *CarmenStateDB) StorageTrie(addr common.Address) ethstate.Trie {
-	panic("not supported")
-}
-
-func (c *CarmenStateDB) HasSuicided(addr common.Address) bool {
+func (c *CarmenStateDB) HasSelfDestructed(addr common.Address) bool {
 	return c.db.HasSuicided(cc.Address(addr))
 }
 
-func (c *CarmenStateDB) AddBalance(addr common.Address, amountInt *big.Int) {
-	if amountInt.Sign() < 0 {
-		c.SubBalance(addr, amountInt.Abs(amountInt))
-		return
-	}
-	am, err := amount.NewFromBigInt(amountInt)
-	if err != nil {
-		c.err = errors.Join(c.err, err)
-		return
-	}
-	c.db.AddBalance(cc.Address(addr), am)
+func (c *CarmenStateDB) AddBalance(addr common.Address, value *uint256.Int, reason tracing.BalanceChangeReason) {
+	c.db.AddBalance(cc.Address(addr), amount.NewFromUint256(value))
 }
 
-func (c *CarmenStateDB) SubBalance(addr common.Address, amountInt *big.Int) {
-	if amountInt.Sign() < 0 {
-		c.AddBalance(addr, amountInt.Abs(amountInt))
-		return
-	}
-	am, err := amount.NewFromBigInt(amountInt)
-	if err != nil {
-		c.err = errors.Join(c.err, err)
-		return
-	}
-	c.db.SubBalance(cc.Address(addr), am)
+func (c *CarmenStateDB) SubBalance(addr common.Address, value *uint256.Int, reason tracing.BalanceChangeReason) {
+	c.db.SubBalance(cc.Address(addr), amount.NewFromUint256(value))
 }
 
-func (c *CarmenStateDB) SetBalance(addr common.Address, amount *big.Int) {
-	panic("not supported")
+func (c *CarmenStateDB) SetBalance(addr common.Address, balance *uint256.Int) {
+	origBalance := c.db.GetBalance(cc.Address(addr)).Uint256()
+	if origBalance.Cmp(balance) < 0 {
+		c.db.AddBalance(cc.Address(addr), amount.NewFromUint256(new(uint256.Int).Sub(balance, &origBalance)))
+	} else {
+		c.db.SubBalance(cc.Address(addr), amount.NewFromUint256(new(uint256.Int).Sub(&origBalance, balance)))
+	}
 }
 
 func (c *CarmenStateDB) SetNonce(addr common.Address, nonce uint64) {
@@ -182,20 +210,28 @@ func (c *CarmenStateDB) SetState(addr common.Address, key, value common.Hash) {
 	c.db.SetState(cc.Address(addr), cc.Key(key), cc.Value(value))
 }
 
+func (c *CarmenStateDB) SetTransientState(addr common.Address, key, value common.Hash) {
+	c.db.SetTransientState(cc.Address(addr), cc.Key(key), cc.Value(value))
+}
+
 func (c *CarmenStateDB) SetStorage(addr common.Address, storage map[common.Hash]common.Hash) {
 	panic("not supported")
 }
 
-func (c *CarmenStateDB) Suicide(addr common.Address) bool {
-	return c.db.Suicide(cc.Address(addr))
+func (c *CarmenStateDB) SelfDestruct(addr common.Address) {
+	c.db.Suicide(cc.Address(addr))
+}
+
+func (c *CarmenStateDB) Selfdestruct6780(addr common.Address) {
+	c.db.SuicideNewContract(cc.Address(addr))
 }
 
 func (c *CarmenStateDB) CreateAccount(addr common.Address) {
 	c.db.CreateAccount(cc.Address(addr))
 }
 
-func (c *CarmenStateDB) ForEachStorage(addr common.Address, cb func(key common.Hash, value common.Hash) bool) error {
-	panic("not supported")
+func (c *CarmenStateDB) CreateContract(addr common.Address) {
+	c.db.CreateContract(cc.Address(addr))
 }
 
 func (c *CarmenStateDB) Copy() state.StateDB {
@@ -222,9 +258,9 @@ func (c *CarmenStateDB) Finalise() {
 	c.db.EndTransaction()
 }
 
-// Prepare sets the current transaction hash and index which are
+// SetTxContext sets the current transaction hash and index which are
 // used when the EVM emits new state logs.
-func (c *CarmenStateDB) Prepare(txHash common.Hash, txIndex int) {
+func (c *CarmenStateDB) SetTxContext(txHash common.Hash, txIndex int) {
 	c.txHash = txHash
 	c.txIndex = txIndex
 	c.db.ClearAccessList()
@@ -243,12 +279,12 @@ func (c *CarmenStateDB) EndBlock(number uint64) {
 	}
 }
 
-func (c *CarmenStateDB) Commit(deleteEmptyObjects bool) (common.Hash, error) {
-	// get state hash only
-	return common.Hash(c.db.GetHash()), nil
+func (c *CarmenStateDB) GetStateHash() common.Hash {
+	return common.Hash(c.db.GetHash())
 }
 
-func (c *CarmenStateDB) PrepareAccessList(sender common.Address, dest *common.Address, precompiles []common.Address, txAccesses types.AccessList) {
+func (c *CarmenStateDB) Prepare(rules params.Rules, sender, coinbase common.Address, dest *common.Address, precompiles []common.Address, txAccesses types.AccessList) {
+	// TODO: consider rules of Paris and Cancun revisions
 	c.db.ClearAccessList()
 	c.db.AddAddressToAccessList(cc.Address(sender))
 	if dest != nil {
@@ -262,6 +298,9 @@ func (c *CarmenStateDB) PrepareAccessList(sender common.Address, dest *common.Ad
 		for _, key := range el.StorageKeys {
 			c.db.AddSlotToAccessList(cc.Address(el.Address), cc.Key(key))
 		}
+	}
+	if rules.IsShanghai {
+		c.db.AddAddressToAccessList(cc.Address(coinbase))
 	}
 }
 
@@ -279,6 +318,16 @@ func (c *CarmenStateDB) AddressInAccessList(addr common.Address) bool {
 
 func (c *CarmenStateDB) SlotInAccessList(addr common.Address, slot common.Hash) (addressPresent bool, slotPresent bool) {
 	return c.db.IsSlotInAccessList(cc.Address(addr), cc.Key(slot))
+}
+
+// PointCache returns the point cache used in computations of verkle trees
+func (c *CarmenStateDB) PointCache() *utils.PointCache {
+	return nil // used only when IsEIP4762 (verkle trees) enabled
+}
+
+// Witness retrieves the current state witness being collected
+func (c *CarmenStateDB) Witness() *stateless.Witness {
+	return nil // set to not-nil only when vmConfig.EnableWitnessCollection
 }
 
 func (c *CarmenStateDB) Release() {

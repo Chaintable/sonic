@@ -19,21 +19,20 @@ package debug
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
 	"runtime"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/metrics/exp"
-	"github.com/fjl/memsize/memsizeui"
 	"github.com/mattn/go-colorable"
 	"github.com/mattn/go-isatty"
 	"gopkg.in/urfave/cli.v1"
 )
-
-var Memsize memsizeui.Handler
 
 var (
 	verbosityFlag = cli.IntFlag{
@@ -111,46 +110,58 @@ var Flags = []cli.Flag{
 var glogger *log.GlogHandler
 
 func init() {
-	glogger = log.NewGlogHandler(log.StreamHandler(os.Stderr, log.TerminalFormat(false)))
+	glogger = log.NewGlogHandler(log.NewTerminalHandler(os.Stderr, false))
 	glogger.Verbosity(log.LvlInfo)
-	log.Root().SetHandler(glogger)
 }
 
 // Setup initializes profiling and logging based on the CLI flags.
 // It should be called as early as possible in the program.
 func Setup(ctx *cli.Context) error {
-	var ostream log.Handler
+	setupMutex.Lock()
+	defer setupMutex.Unlock()
+
+	if setupDone {
+		return nil
+	}
+
+	err := setup(ctx)
+	if err != nil {
+		return err
+	}
+
+	setupDone = true
+	return nil
+}
+
+var (
+	setupMutex sync.Mutex
+	setupDone  = false
+)
+
+func setup(ctx *cli.Context) error {
+	var handler slog.Handler
 	output := io.Writer(os.Stderr)
 	if ctx.GlobalBool(logjsonFlag.Name) {
-		ostream = log.StreamHandler(output, log.JSONFormat())
+		handler = slog.NewJSONHandler(output, nil)
 	} else {
-		usecolor := (isatty.IsTerminal(os.Stderr.Fd()) || isatty.IsCygwinTerminal(os.Stderr.Fd())) && os.Getenv("TERM") != "dumb"
-		if usecolor {
+		useColor := (isatty.IsTerminal(os.Stderr.Fd()) || isatty.IsCygwinTerminal(os.Stderr.Fd())) && os.Getenv("TERM") != "dumb"
+		if useColor {
 			output = colorable.NewColorableStderr()
 		}
-		ostream = log.StreamHandler(output, log.TerminalFormat(usecolor))
+		handler = log.NewTerminalHandler(output, useColor)
 	}
-	glogger.SetHandler(ostream)
+	glogger = log.NewGlogHandler(handler)
 
 	// logging
-	verbosity := ctx.GlobalInt(verbosityFlag.Name)
-	glogger.Verbosity(log.Lvl(verbosity))
+	verbosity := log.FromLegacyLevel(ctx.GlobalInt(verbosityFlag.Name))
+	glogger.Verbosity(verbosity)
 	vmodule := ctx.GlobalString(vmoduleFlag.Name)
-	glogger.Vmodule(vmodule)
-
-	debug := ctx.GlobalBool(debugFlag.Name)
-	if ctx.GlobalIsSet(debugFlag.Name) {
-		debug = ctx.GlobalBool(debugFlag.Name)
+	err := glogger.Vmodule(vmodule)
+	if err != nil {
+		return fmt.Errorf("failed to set --%s: %w", vmoduleFlag.Name, err)
 	}
-	log.PrintOrigins(debug)
 
-	backtrace := ctx.GlobalString(backtraceAtFlag.Name)
-	if b := ctx.GlobalString(backtraceAtFlag.Name); b != "" {
-		backtrace = b
-	}
-	glogger.BacktraceAt(backtrace)
-
-	log.Root().SetHandler(glogger)
+	log.SetDefault(log.NewLogger(glogger))
 
 	// profiling, tracing
 	runtime.MemProfileRate = memprofilerateFlag.Value
@@ -196,7 +207,6 @@ func StartPProf(address string, withMetrics bool) {
 	if withMetrics {
 		exp.Exp(metrics.DefaultRegistry)
 	}
-	http.Handle("/memsize/", http.StripPrefix("/memsize", &Memsize))
 	log.Info("Starting pprof server", "addr", fmt.Sprintf("http://%s/debug/pprof", address))
 	go func() {
 		if err := http.ListenAndServe(address, nil); err != nil {

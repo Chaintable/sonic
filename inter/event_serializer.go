@@ -20,7 +20,7 @@ var (
 	ErrUnknownVersion    = errors.New("unknown serialization version")
 )
 
-const MaxSerializationVersion = 1
+const MaxSerializationVersion = 2
 
 const ProtocolMaxMsgSize = 10 * 1024 * 1024
 
@@ -68,7 +68,7 @@ func (e *Event) MarshalCSER(w *cser.Writer) error {
 	}
 	// tx hash
 	w.Bool(e.AnyTxs())
-	if e.Version() > 0 {
+	if e.Version() == 1 {
 		w.Bool(e.AnyMisbehaviourProofs())
 		w.Bool(e.AnyEpochVote())
 		w.Bool(e.AnyBlockVotes())
@@ -144,9 +144,9 @@ func eventUnmarshalCSER(r *cser.Reader, e *MutableEventPayload) (err error) {
 	}
 	// tx hash
 	anyTxs := r.Bool()
-	anyMisbehaviourProofs := version > 0 && r.Bool()
-	anyEpochVote := version > 0 && r.Bool()
-	anyBlockVotes := version > 0 && r.Bool()
+	anyMisbehaviourProofs := version == 1 && r.Bool()
+	anyEpochVote := version == 1 && r.Bool()
+	anyBlockVotes := version == 1 && r.Bool()
 	payloadHash := EmptyPayloadHash(version)
 	if anyTxs || anyMisbehaviourProofs || anyEpochVote || anyBlockVotes {
 		r.FixedBytes(payloadHash[:])
@@ -442,89 +442,19 @@ func RPCMarshalEvent(e EventI) map[string]interface{} {
 		},
 		"gasPowerUsed":          hexutil.Uint64(e.GasPowerUsed()),
 		"anyTxs":                e.AnyTxs(),
-		"anyMisbehaviourProofs": e.AnyMisbehaviourProofs(),
-		"anyEpochVote":          e.AnyEpochVote(),
-		"anyBlockVotes":         e.AnyBlockVotes(),
 	}
-}
-
-// RPCUnmarshalEvent converts the RPC output to the header.
-func RPCUnmarshalEvent(fields map[string]interface{}) EventI {
-	mustBeUint64 := func(name string) uint64 {
-		s := fields[name].(string)
-		return hexutil.MustDecodeUint64(s)
-	}
-	mustBeBytes := func(name string) []byte {
-		s := fields[name].(string)
-		return hexutil.MustDecode(s)
-	}
-	mustBeID := func(name string) (id [24]byte) {
-		s := fields[name].(string)
-		bb := hexutil.MustDecode(s)
-		copy(id[:], bb)
-		return
-	}
-	mustBeBool := func(name string) bool {
-		return fields[name].(bool)
-	}
-	mayBeHash := func(name string) *hash.Hash {
-		s, ok := fields[name].(string)
-		if !ok {
-			return nil
-		}
-		bb := hexutil.MustDecode(s)
-		h := hash.BytesToHash(bb)
-		return &h
-	}
-
-	e := MutableEventPayload{}
-
-	e.SetVersion(uint8(mustBeUint64("version")))
-	e.SetNetForkID(uint16(mustBeUint64("networkVersion")))
-	e.SetEpoch(idx.Epoch(mustBeUint64("epoch")))
-	e.SetSeq(idx.Event(mustBeUint64("seq")))
-	e.SetID(mustBeID("id"))
-	e.SetFrame(idx.Frame(mustBeUint64("frame")))
-	e.SetCreator(idx.ValidatorID(mustBeUint64("creator")))
-	e.SetPrevEpochHash(mayBeHash("prevEpochHash"))
-	e.SetParents(HexToEventIDs(fields["parents"].([]interface{})))
-	e.SetLamport(idx.Lamport(mustBeUint64("lamport")))
-	e.SetCreationTime(Timestamp(mustBeUint64("creationTime")))
-	e.SetMedianTime(Timestamp(mustBeUint64("medianTime")))
-	e.SetExtra(mustBeBytes("extraData"))
-	e.SetPayloadHash(*mayBeHash("payloadHash"))
-	e.SetGasPowerUsed(mustBeUint64("gasPowerUsed"))
-	e.anyTxs = mustBeBool("anyTxs")
-	e.anyMisbehaviourProofs = mustBeBool("anyMisbehaviourProofs")
-	e.anyEpochVote = mustBeBool("anyEpochVote")
-	e.anyBlockVotes = mustBeBool("anyBlockVotes")
-
-	gas := GasPowerLeft{}
-	obj := fields["gasPowerLeft"].(map[string]interface{})
-	gas.Gas[ShortTermGas] = hexutil.MustDecodeUint64(obj["shortTerm"].(string))
-	gas.Gas[LongTermGas] = hexutil.MustDecodeUint64(obj["longTerm"].(string))
-	e.SetGasPowerLeft(gas)
-
-	return &e.Build().Event
 }
 
 // RPCMarshalEventPayload converts the given event to the RPC output which depends on fullTx. If inclTx is true transactions are
 // returned. When fullTx is true the returned block contains full transaction details, otherwise it will only contain
 // transaction hashes.
-func RPCMarshalEventPayload(event EventPayloadI, inclTx bool, fullTx bool) (map[string]interface{}, error) {
+func RPCMarshalEventPayload(event EventPayloadI, inclTx bool) (map[string]interface{}, error) {
 	fields := RPCMarshalEvent(event)
 	fields["size"] = hexutil.Uint64(event.Size())
 
 	if inclTx {
 		formatTx := func(tx *types.Transaction) (interface{}, error) {
 			return tx.Hash(), nil
-		}
-		if fullTx {
-			// TODO: full txs for events API
-			panic("is not implemented")
-			//formatTx = func(tx *types.Transaction) (interface{}, error) {
-			//	return newRPCTransactionFromBlockHash(event, tx.Hash()), nil
-			//}
 		}
 		txs := event.Txs()
 		transactions := make([]interface{}, len(txs))
@@ -544,15 +474,7 @@ func RPCMarshalEventPayload(event EventPayloadI, inclTx bool, fullTx bool) (map[
 func EventIDsToHex(ids hash.Events) []hexutil.Bytes {
 	res := make([]hexutil.Bytes, len(ids))
 	for i, id := range ids {
-		res[i] = hexutil.Bytes(id.Bytes())
-	}
-	return res
-}
-
-func HexToEventIDs(bb []interface{}) hash.Events {
-	res := make(hash.Events, len(bb))
-	for i, b := range bb {
-		res[i] = hash.BytesToEvent(hexutil.MustDecode(b.(string)))
+		res[i] = id.Bytes()
 	}
 	return res
 }

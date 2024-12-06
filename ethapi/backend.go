@@ -26,6 +26,7 @@ import (
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	notify "github.com/ethereum/go-ethereum/event"
@@ -50,11 +51,12 @@ type PeerProgress struct {
 
 // Backend interface provides the common API services (that are provided by
 // both full and light clients) with access to necessary functions.
+//
+//go:generate mockgen -source=backend.go -destination=mock_backend.go -package=ethapi
 type Backend interface {
 	// General Ethereum API
 	Progress() PeerProgress
 	SuggestGasTipCap(ctx context.Context, certainty uint64) *big.Int
-	EffectiveMinGasPrice(ctx context.Context) *big.Int
 	AccountManager() *accounts.Manager
 	ExtRPCEnabled() bool
 	RPCGasCap() uint64            // global gas cap for eth_call over rpc: DoS protection
@@ -71,8 +73,7 @@ type Backend interface {
 	ResolveRpcBlockNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (idx.Block, error)
 	BlockByHash(ctx context.Context, hash common.Hash) (*evmcore.EvmBlock, error)
 	GetReceiptsByNumber(ctx context.Context, number rpc.BlockNumber) (types.Receipts, error)
-	GetTd(hash common.Hash) *big.Int
-	GetEVM(ctx context.Context, msg evmcore.Message, state vm.StateDB, header *evmcore.EvmHeader, vmConfig *vm.Config) (*vm.EVM, func() error, error)
+	GetEVM(ctx context.Context, msg *core.Message, state vm.StateDB, header *evmcore.EvmHeader, vmConfig *vm.Config) (*vm.EVM, func() error, error)
 	MinGasPrice() *big.Int
 	MaxGasLimit() uint64
 
@@ -135,11 +136,6 @@ func GetAPIs(apiBackend Backend) []rpc.API {
 		}, {
 			Namespace: "debug",
 			Version:   "1.0",
-			Service:   NewPublicDebugAPI(apiBackend),
-			Public:    true,
-		}, {
-			Namespace: "debug",
-			Version:   "1.0",
 			Service:   NewPrivateDebugAPI(apiBackend),
 		}, {
 			Namespace: "eth",
@@ -155,12 +151,6 @@ func GetAPIs(apiBackend Backend) []rpc.API {
 			Namespace: "abft",
 			Version:   "1.0",
 			Service:   NewPublicAbftAPI(apiBackend),
-			Public:    true,
-		},
-		{
-			Namespace: "trace",
-			Version:   "1.0",
-			Service:   NewPublicTxTraceAPI(apiBackend),
 			Public:    true,
 		}, {
 			Namespace: "pre",

@@ -2,11 +2,12 @@ package gossip
 
 import (
 	"fmt"
-	"sync"
+	"math/big"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Fantom-foundation/go-opera/gossip/emitter"
 	"github.com/Fantom-foundation/go-opera/gossip/evmstore"
 	"github.com/Fantom-foundation/go-opera/logger"
 	"github.com/Fantom-foundation/go-opera/utils/eventid"
@@ -25,9 +26,9 @@ type Store struct {
 	dbs kvdb.FlushableDBProducer
 	cfg StoreConfig
 
-	mainDB          kvdb.Store
-	evm             *evmstore.Store
-	table           struct {
+	mainDB kvdb.Store
+	evm    *evmstore.Store
+	table  struct {
 		Version kvdb.Store `table:"_"`
 
 		// Main DAG tables
@@ -47,19 +48,9 @@ type Store struct {
 
 		// API-only
 		BlockHashes kvdb.Store `table:"B"`
-
-		LlrState           kvdb.Store `table:"S"`
-		LlrBlockResults    kvdb.Store `table:"R"`
-		LlrEpochResults    kvdb.Store `table:"Q"`
-		LlrBlockVotes      kvdb.Store `table:"T"`
-		LlrBlockVotesIndex kvdb.Store `table:"J"`
-		LlrEpochVotes      kvdb.Store `table:"E"`
-		LlrEpochVoteIndex  kvdb.Store `table:"I"`
-		LlrLastBlockVotes  kvdb.Store `table:"G"`
-		LlrLastEpochVote   kvdb.Store `table:"F"`
 	}
 
-	prevFlushTime time.Time
+	prevFlushTime atomic.Value
 
 	epochStore atomic.Value
 
@@ -70,22 +61,11 @@ type Store struct {
 		Blocks                 *wlru.Cache  `cache:"-"` // store by pointer
 		BlockHashes            *wlru.Cache  `cache:"-"` // store by value
 		BRHashes               *wlru.Cache  `cache:"-"` // store by value
-		EvmBlocks              *wlru.Cache  `cache:"-"` // store by pointer
 		BlockEpochStateHistory *wlru.Cache  `cache:"-"` // store by pointer
 		BlockEpochState        atomic.Value // store by value
 		HighestLamport         atomic.Value // store by value
-		LastBVs                atomic.Value // store by pointer
-		LastEV                 atomic.Value // store by pointer
-		LlrState               atomic.Value // store by value
-		KvdbEvmSnap            atomic.Value // store by pointer
 		UpgradeHeights         atomic.Value // store by pointer
 		Genesis                atomic.Value // store by value
-		LlrBlockVotesIndex     *VotesCache  // store by pointer
-		LlrEpochVoteIndex      *VotesCache  // store by pointer
-	}
-
-	mutex struct {
-		WriteLlrState sync.Mutex
 	}
 
 	rlp rlpstore.Helper
@@ -114,9 +94,10 @@ func NewStore(dbs kvdb.FlushableDBProducer, cfg StoreConfig) (*Store, error) {
 		cfg:           cfg,
 		mainDB:        mainDB,
 		Instance:      logger.New("gossip-store"),
-		prevFlushTime: time.Now(),
-		rlp:           rlpstore.Helper{logger.New("rlp")},
+		prevFlushTime: atomic.Value{},
+		rlp:           rlpstore.Helper{Instance: logger.New("rlp")},
 	}
+	s.prevFlushTime.Store(time.Now())
 
 	table.MigrateTables(&s.table, s.mainDB)
 
@@ -148,9 +129,6 @@ func (s *Store) initCache() {
 	blockEpochStatesNum := s.cfg.Cache.BlockEpochStateNum
 	blockEpochStatesSize := nominalSize * uint(blockEpochStatesNum)
 	s.cache.BlockEpochStateHistory = s.makeCache(blockEpochStatesSize, blockEpochStatesNum)
-
-	s.cache.LlrBlockVotesIndex = NewVotesCache(s.cfg.Cache.LlrBlockVotesIndexes, s.flushLlrBlockVoteWeight)
-	s.cache.LlrEpochVoteIndex = NewVotesCache(s.cfg.Cache.LlrEpochVotesIndexes, s.flushLlrEpochVoteWeight)
 }
 
 // Close closes underlying database.
@@ -182,7 +160,7 @@ func (s *Store) IsCommitNeeded() bool {
 func (s *Store) isCommitNeeded(sc, tc uint64) bool {
 	period := s.cfg.MaxNonFlushedPeriod * time.Duration(sc) / 1000
 	size := (uint64(s.cfg.MaxNonFlushedSize) / 2) * tc / 1000
-	return time.Since(s.prevFlushTime) > period ||
+	return time.Since(s.prevFlushTime.Load().(time.Time)) > period ||
 		uint64(s.dbs.NotFlushedSizeEst()) > size
 }
 
@@ -190,11 +168,6 @@ func (s *Store) isCommitNeeded(sc, tc uint64) bool {
 func (s *Store) Commit() error {
 	s.FlushBlockEpochState()
 	s.FlushHighestLamport()
-	s.FlushLastBVs()
-	s.FlushLastEV()
-	s.FlushLlrState()
-	s.cache.LlrBlockVotesIndex.FlushMutated(s.flushLlrBlockVoteWeight)
-	s.cache.LlrEpochVoteIndex.FlushMutated(s.flushLlrEpochVoteWeight)
 	es := s.getAnyEpochStore()
 	if es != nil {
 		es.FlushHeads()
@@ -204,13 +177,26 @@ func (s *Store) Commit() error {
 }
 
 func (s *Store) flushDBs() error {
-	s.prevFlushTime = time.Now()
-	flushID := bigendian.Uint64ToBytes(uint64(s.prevFlushTime.UnixNano()))
+	now := time.Now()
+	s.prevFlushTime.Store(now)
+	flushID := bigendian.Uint64ToBytes(uint64(now.UnixNano()))
 	return s.dbs.Flush(flushID)
 }
 
 func (s *Store) EvmStore() *evmstore.Store {
 	return s.evm
+}
+
+func (s *Store) AsBaseFeeSource() emitter.BaseFeeSource {
+	return &baseFeeSource{store: s}
+}
+
+type baseFeeSource struct {
+	store *Store
+}
+
+func (s *baseFeeSource) GetCurrentBaseFee() *big.Int {
+	return s.store.GetBlock(s.store.GetLatestBlockIndex()).BaseFee
 }
 
 /*
