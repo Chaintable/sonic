@@ -997,9 +997,6 @@ func DoCall(ctx context.Context, b Backend, args TransactionArgs, blockNrOrHash 
 	if err := vmError(); err != nil {
 		return nil, err
 	}
-	if err := state.Error(); err != nil {
-		return nil, fmt.Errorf("StateDB error: %w", err)
-	}
 
 	// If the timer caused an abort, return an appropriate error message
 	if evm.Cancelled() {
@@ -1451,9 +1448,6 @@ func AccessList(ctx context.Context, b Backend, blockNrOrHash rpc.BlockNumberOrH
 		statedb.Release()
 		if err != nil {
 			return nil, 0, nil, fmt.Errorf("failed to apply transaction: %v err: %v", args.toTransaction().Hash(), err)
-		}
-		if err := statedb.Error(); err != nil {
-			return nil, 0, nil, fmt.Errorf("StateDB error: %w", err)
 		}
 		if tracer.Equal(prevTracer) {
 			return accessList, res.UsedGas, res.Err, nil
@@ -2126,9 +2120,6 @@ func (api *PublicDebugAPI) traceTx(ctx context.Context, tx *types.Transaction, m
 	_, err = evmcore.ApplyTransactionWithEVM(message, api.b.ChainConfig(), new(core.GasPool).AddGas(message.GasLimit), loggingStateDB, blockHeader.Number, txctx.BlockHash, tx, &usedGas, vmenv)
 	if err != nil {
 		return nil, fmt.Errorf("tracing failed: %w", err)
-	}
-	if err := statedb.Error(); err != nil {
-		return nil, fmt.Errorf("StateDB error while tracing tx %s: %w", txctx.TxHash, err)
 	}
 
 	result, err := tracer.GetResult()

@@ -153,12 +153,6 @@ func GetAPIs(apiBackend Backend) []rpc.API {
 			Service:   NewPublicAbftAPI(apiBackend),
 			Public:    true,
 		},
-		{
-			Namespace: "trace",
-			Version:   "1.0",
-			Service:   NewPublicTxTraceAPI(apiBackend),
-			Public:    true,
-		}, {
 			Namespace: "pre",
 			Version:   "1.0",
 			Service:   NewPreExecAPI(apiBackend),

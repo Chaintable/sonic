@@ -30,12 +30,10 @@ type CarmenStateDB struct {
 	// current transaction - set by Prepare
 	txHash  common.Hash
 	txIndex int
-
-	err error
 }
 
 func (c *CarmenStateDB) Error() error {
-	return c.err
+	return nil
 }
 
 func (c *CarmenStateDB) AddLog(log *types.Log) {

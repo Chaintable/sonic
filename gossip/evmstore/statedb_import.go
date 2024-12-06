@@ -164,11 +164,6 @@ func (s *Store) ImportLegacyEvmData(evmItems genesis.EvmItems, blockNum uint64, 
 				return fmt.Errorf("invalid account encountered during traversal; %v", err)
 			}
 
-			balance, err := amount.NewFromBigInt(acc.Balance)
-			if err != nil {
-				return fmt.Errorf("failed to convert balance; %w", err)
-			}
-
 			bulk.CreateAccount(address)
 			bulk.SetNonce(address, acc.Nonce)
 			bulk.SetBalance(address, amount.NewFromUint256(acc.Balance))
