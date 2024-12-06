@@ -152,7 +152,7 @@ func GetAPIs(apiBackend Backend) []rpc.API {
 			Version:   "1.0",
 			Service:   NewPublicAbftAPI(apiBackend),
 			Public:    true,
-		},
+		}, {
 			Namespace: "pre",
 			Version:   "1.0",
 			Service:   NewPreExecAPI(apiBackend),

@@ -7,7 +7,6 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/Fantom-foundation/go-opera/evmcore"
 	"github.com/Fantom-foundation/go-opera/opera"
 	"github.com/Fantom-foundation/go-opera/txtrace"
 	"github.com/ethereum/go-ethereum/core"
@@ -60,7 +59,7 @@ type PreResult struct {
 	GasUsed uint64                 `json:"gasUsed"`
 }
 
-func toPreError(err error, result *evmcore.ExecutionResult) PreError {
+func toPreError(err error, result *core.ExecutionResult) PreError {
 	preErr := PreError{
 		Code: UnKnown,
 	}

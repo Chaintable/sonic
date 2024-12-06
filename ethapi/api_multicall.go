@@ -12,7 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 )
@@ -114,8 +114,8 @@ var (
 	)
 )
 
-func handleNative(ctx context.Context, state state.StateDB, msg types.Message) ([]byte, int, error) {
-	data := msg.Data()
+func handleNative(ctx context.Context, state state.StateDB, msg *core.Message) ([]byte, int, error) {
+	data := msg.Data
 	method, err := erc20ABI.MethodById(data)
 	if err != nil {
 		return nil, errNativeMethodNotFound, err
@@ -148,7 +148,7 @@ func handleNative(ctx context.Context, state state.StateDB, msg types.Message) (
 		if !ok {
 			return nil, errNativeMethodInputAddress, fmt.Errorf("input address error")
 		}
-		balance, err := method.Outputs.Pack(state.GetBalance(address))
+		balance, err := method.Outputs.Pack(state.GetBalance(address).ToBig())
 		if err != nil {
 			return nil, errNativeMethodOutput, err
 		}
@@ -178,7 +178,7 @@ func doOneCall(ctx context.Context, b Backend, state state.StateDB, header *evmc
 	}
 
 	// skip EVM if requests for native token
-	if strings.ToLower(msg.To().Hex()) == nativeAddr {
+	if strings.ToLower(msg.To.Hex()) == nativeAddr {
 		res, code, err := handleNative(ctx, state, msg)
 		if err != nil {
 			result.Code = code
