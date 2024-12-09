@@ -7,12 +7,8 @@ on:
   workflow_dispatch:
 
 env:
-  BUILT_BINARY_PATH: ./build
-  S3_ARCHIVE_BUCKET: debank-build-artifacts
-  S3_ARCHIVE_FILE_PREFIX: downloads/sonic
-  S3_REGION: ap-northeast-1
   REGISTRY: 294354037686.dkr.ecr.ap-northeast-1.amazonaws.com
-  IMAGE: blockchain-ftm
+  IMAGE: blockchain-sonic
   DOCKERFILE: Dockerfile
 
 jobs:
@@ -25,41 +21,22 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v2
         with:
-          go-version: 1.21.x
+          go-version: 1.22.x
 
       - name: Checkout code
         uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - uses: tibdex/github-app-token@v1
+      - uses: tibdex/github-app-token@v2
         id: generate-token
         with:
           app_id: ${{ secrets.RELEASE_MANAGER_APP_ID }}
           private_key: ${{ secrets.RELEASE_MANAGER_APP_SECRET }}
 
-      - name: Make binaries
-        run: |
-          git config --global url."https://x-access-token:${{ steps.generate-token.outputs.token }}@github.com/DeBankDeFi".insteadOf "https://github.com/DeBankDeFi"
-          make all
-
       - name: Set env
         run: |
           echo "REVISION=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
-          echo "ARCHIVE_DIR=fantom-sonic-$(git rev-parse --short HEAD)-linux-${{ matrix.arch }}" >> $GITHUB_ENV
-
-      - name: Archive artifacts
-        run: |
-          mkdir $ARCHIVE_DIR
-          cp $BUILT_BINARY_PATH/* $ARCHIVE_DIR/
-          sha256sum $ARCHIVE_DIR/sonicd --tag >> $ARCHIVE_DIR/sha256.checksum
-          chmod u+x $ARCHIVE_DIR/sonicd
-          tar cvfz $ARCHIVE_DIR.tar.gz $ARCHIVE_DIR
-
-      - name: Copy artifacts to s3
-        run: |
-          aws s3 cp $ARCHIVE_DIR.tar.gz s3://$S3_ARCHIVE_BUCKET/$S3_ARCHIVE_FILE_PREFIX/$ARCHIVE_DIR.tar.gz --acl public-read
-          rm -f $ARCHIVE_DIR.tar.gz
 
       - name: Build image and push to ECR
         uses: docker/build-push-action@v5
@@ -93,4 +70,4 @@ jobs:
       - name: Lark Notification
         continue-on-error: true
         run: |
-          notiv3 "Blockchain fantom image pushed 🎉" ${REGISTRY}/${IMAGE}:${REVISION}
+          notiv3 "Blockchain sonic image pushed 🎉" ${REGISTRY}/${IMAGE}:${REVISION}

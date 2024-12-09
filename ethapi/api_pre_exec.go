@@ -3,7 +3,6 @@ package ethapi
 import (
 	"context"
 	"fmt"
-	"math"
 	"math/big"
 	"strings"
 
@@ -139,6 +138,7 @@ func (api *PreExecAPI) TraceMany(ctx context.Context, origins []PreExecTx) ([]Pr
 		vmConfig := opera.DefaultVMConfig
 		txTracer := txtrace.NewTraceStructLogger(block, uint(i))
 		vmConfig.Tracer = txTracer.Hooks()
+		vmConfig.ChargeExcessGas = false
 		vmConfig.NoBaseFee = true
 
 		evm, _, err := api.b.GetEVM(ctx, msg, state, header, &vmConfig)
@@ -152,7 +152,7 @@ func (api *PreExecAPI) TraceMany(ctx context.Context, origins []PreExecTx) ([]Pr
 			continue
 		}
 		// Execute the message.
-		gp := new(core.GasPool).AddGas(math.MaxUint64)
+		gp := new(core.GasPool).AddGas(msg.GasLimit)
 		state.SetTxContext(txHash, int(i))
 
 		//result, err := evmcore.ApplyTransactionWithEVM(msg, api.b.ChainConfig(), gp, state, header.Number, block.Hash, txArgs.toTransaction(), &usedGas, evm)
