@@ -163,7 +163,7 @@ func (api *PreExecAPI) TraceMany(ctx context.Context, origins []PreExecTx) ([]Pr
 			continue
 		}
 		traceActions := txTracer.GetResult()
-		state.Finalise()
+		//state.Finalise()
 
 		preRes := PreResult{
 			Trace:   traceActions,
