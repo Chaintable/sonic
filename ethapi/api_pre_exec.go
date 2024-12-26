@@ -6,11 +6,11 @@ import (
 	"math/big"
 	"strings"
 
+	"github.com/Fantom-foundation/go-opera/evmcore"
 	"github.com/Fantom-foundation/go-opera/opera"
 	"github.com/Fantom-foundation/go-opera/txtrace"
 	"github.com/ethereum/go-ethereum/core"
 
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -58,21 +58,15 @@ type PreResult struct {
 	GasUsed uint64                 `json:"gasUsed"`
 }
 
-func toPreError(err error, result *core.ExecutionResult) PreError {
+func toPreError(err error) PreError {
 	preErr := PreError{
 		Code: UnKnown,
 	}
 	if err != nil {
 		preErr.Msg = err.Error()
 	}
-	if result != nil && result.Err != nil {
-		preErr.Msg = result.Err.Error()
-	}
 	if strings.HasPrefix(preErr.Msg, "execution reverted") {
 		preErr.Code = Reverted
-		if result != nil {
-			preErr.Msg, _ = abi.UnpackRevert(result.Revert())
-		}
 	}
 	if strings.HasPrefix(preErr.Msg, "out of gas") {
 		preErr.Code = Reverted
@@ -155,29 +149,26 @@ func (api *PreExecAPI) TraceMany(ctx context.Context, origins []PreExecTx) ([]Pr
 		gp := new(core.GasPool).AddGas(msg.GasLimit)
 		state.SetTxContext(txHash, int(i))
 
-		//result, err := evmcore.ApplyTransactionWithEVM(msg, api.b.ChainConfig(), gp, state, header.Number, block.Hash, txArgs.toTransaction(), &usedGas, evm)
-		result, err := core.ApplyMessage(evm, msg, gp)
+		var usedGas uint64
+		result, err := evmcore.ApplyTransactionWithEVM(msg, api.b.ChainConfig(), gp, state, header.Number, block.Hash, txArgs.toTransaction(), &usedGas, evm)
+		//result, err := core.ApplyMessage(evm, msg, gp)
 		if err != nil {
 			preRes := PreResult{
-				Error: toPreError(err, result),
+				Error: toPreError(err),
 			}
 			if result != nil {
-				preRes.GasUsed = result.UsedGas
+				preRes.GasUsed = result.GasUsed
 			}
 			preResList = append(preResList, preRes)
 			continue
 		}
 		traceActions := txTracer.GetResult()
+		state.Finalise()
 
 		preRes := PreResult{
-			Trace: traceActions,
-			Logs:  state.GetLogs(txHash, header.Hash),
-		}
-		if result != nil {
-			preRes.GasUsed = result.UsedGas
-			if result.Failed() {
-				preRes.Error = toPreError(err, result)
-			}
+			Trace:   traceActions,
+			Logs:    result.Logs,
+			GasUsed: result.GasUsed,
 		}
 
 		if preRes.Error.Msg == "" && len(*preRes.Trace) > 0 && (*preRes.Trace)[0].Error != "" {
