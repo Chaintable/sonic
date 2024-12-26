@@ -167,7 +167,7 @@ func (api *PreExecAPI) TraceMany(ctx context.Context, origins []PreExecTx) ([]Pr
 
 		preRes := PreResult{
 			Trace:   traceActions,
-			Logs:    result.Logs,
+			Logs:    state.GetLogs(txHash, header.Hash),
 			GasUsed: result.GasUsed,
 		}
 
