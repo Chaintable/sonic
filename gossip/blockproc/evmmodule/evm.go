@@ -1,6 +1,7 @@
 package evmmodule
 
 import (
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -121,6 +122,15 @@ func (p *OperaEVMProcessor) Execute(txs types.Transactions) types.Receipts {
 
 	// Process txs
 	evmBlock := p.evmBlockWith(txs)
+
+	if opera.DefaultVMConfig.Tracer != nil && opera.DefaultVMConfig.Tracer.OnBlockStart != nil {
+		opera.DefaultVMConfig.Tracer.OnBlockStart(tracing.BlockEvent{
+			Block:     evmBlock.EthBlock(),
+			Finalized: evmBlock.Header().EthHeader(),
+			Safe:      evmBlock.Header().EthHeader(),
+		})
+	}
+
 	receipts, _, skipped, err := evmProcessor.Process(evmBlock, p.statedb, opera.DefaultVMConfig, &p.gasUsed, func(l *types.Log) {
 		// Note: l.Index is properly set before
 		l.TxIndex += txsOffset
