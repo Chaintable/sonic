@@ -61,6 +61,12 @@ func (p *StateProcessor) Process(
 ) (
 	receipts types.Receipts, allLogs []*types.Log, skipped []uint32, err error,
 ) {
+	if cfg.Tracer != nil && cfg.Tracer.OnCommit != nil {
+		defer func() {
+			statedb.SetOnCommit(cfg.Tracer.OnCommit)
+		}()
+	}
+
 	skipped = make([]uint32, 0, len(block.Transactions))
 	var (
 		gp           = new(core.GasPool).AddGas(block.GasLimit)

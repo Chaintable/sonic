@@ -149,6 +149,10 @@ func consensusCallbackBeginBlockFn(
 					Time:    atroposTime,
 					Atropos: cBlock.Atropos,
 				}
+				if blockCtx.Idx == 1 && opera.DefaultVMConfig.Tracer != nil && opera.DefaultVMConfig.Tracer.OnGenesisBlock != nil {
+					// TODO
+					//opera.DefaultVMConfig.Tracer.OnGenesisBlock()
+				}
 				// Note:
 				// it's possible that a previous Atropos observes current Atropos (1)
 				// (even stronger statement is true - it's possible that current Atropos is equal to a previous Atropos).
