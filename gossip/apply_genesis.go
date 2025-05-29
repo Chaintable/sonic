@@ -3,6 +3,7 @@ package gossip
 import (
 	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum/log"
 
 	"github.com/Fantom-foundation/go-opera/inter/iblockproc"
 	"github.com/Fantom-foundation/go-opera/inter/ibr"
@@ -30,6 +31,9 @@ func (s *Store) ApplyGenesis(g genesis.Genesis) (err error) {
 		if topEr == nil {
 			topEr = &er
 		}
+		// TODO : for test
+		log.Info("genesis block info", "er", er)
+
 		s.WriteFullEpochRecord(er)
 		return true
 	})
@@ -54,6 +58,8 @@ func (s *Store) ApplyGenesis(g genesis.Genesis) (err error) {
 	// write blocks
 	var lastBlock ibr.LlrIdxFullBlockRecord
 	g.Blocks.ForEach(func(br ibr.LlrIdxFullBlockRecord) bool {
+		// TODO : for test
+		log.Info("genesis block info", "br", br)
 		err = s.WriteFullBlockRecord(br)
 		if err != nil {
 			s.Log.Crit(err.Error())

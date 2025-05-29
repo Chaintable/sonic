@@ -1,5 +1,5 @@
-github.com/Chaintable/Carmen/go v0.0.0-20250525182219-c7d3f0410bdb h1:qPNjRsA8ty+r2uMoSkWzNkiZ9JTs9EfHGh8QfcwVsr0=
-github.com/Chaintable/Carmen/go v0.0.0-20250525182219-c7d3f0410bdb/go.mod h1:6g0ueIbQqFjMu1rNO3W+SXqjmB217bV5ed+oDJSFLWY=
+github.com/Chaintable/Carmen/go v0.0.0-20250613062456-d97f3a98a9f1 h1:teV8/GLSwBmZm7DJRFM5xtBDPlC5zu8J5R/hl2RFY/s=
+github.com/Chaintable/Carmen/go v0.0.0-20250613062456-d97f3a98a9f1/go.mod h1:6g0ueIbQqFjMu1rNO3W+SXqjmB217bV5ed+oDJSFLWY=
 github.com/Chaintable/go-ethereum-sonic v0.0.0-20250529173459-9966aa76d649 h1:nUBmQ6tZjpMn/r8L6vwpcwqtLjfrDGMNnzDdaO8rEOc=
 github.com/Chaintable/go-ethereum-sonic v0.0.0-20250529173459-9966aa76d649/go.mod h1:Ae6zqeuL6HebiE91e5jltfsdQ3PAkwY/akzi0mQktWs=
 github.com/Chaintable/pipeline v0.0.47-0.20250528165403-97ec14812eb7 h1:wJpToa6EmB80KNwcRhTqTqL1N4GW6PjPvT4rM5PrlHo=

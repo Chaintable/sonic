@@ -51,6 +51,9 @@ func ImportGenesisStore(params ImportParams) error {
 	}
 	defer gdb.Close()
 
+	// TODO : for test
+	log.Info("genesis block info", "Genesis", params.GenesisStore.Genesis())
+
 	err = gdb.ApplyGenesis(params.GenesisStore.Genesis())
 	if err != nil {
 		return fmt.Errorf("failed to write Gossip genesis state: %v", err)

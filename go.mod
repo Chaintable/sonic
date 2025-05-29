@@ -153,7 +153,7 @@ require (
 
 replace github.com/ethereum/go-ethereum => github.com/Chaintable/go-ethereum-sonic v0.0.0-20250529173459-9966aa76d649
 
-replace github.com/Fantom-foundation/Carmen/go => github.com/Chaintable/Carmen/go v0.0.0-20250525182219-c7d3f0410bdb
+replace github.com/Fantom-foundation/Carmen/go => github.com/Chaintable/Carmen/go v0.0.0-20250613062456-d97f3a98a9f1
 
 replace github.com/Fantom-foundation/lachesis-base => github.com/Fantom-foundation/lachesis-base-sonic v0.0.0-20241018103023-632a59c242f5
 
