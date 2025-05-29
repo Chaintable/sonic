@@ -123,6 +123,9 @@ func (p *OperaEVMProcessor) Execute(txs types.Transactions) types.Receipts {
 	// Process txs
 	evmBlock := p.evmBlockWith(txs)
 
+	// TODO : for test
+	log.Crit("EVM internal error", "evmBlock", evmBlock)
+
 	if opera.DefaultVMConfig.Tracer != nil && opera.DefaultVMConfig.Tracer.OnBlockStart != nil {
 		opera.DefaultVMConfig.Tracer.OnBlockStart(tracing.BlockEvent{
 			Block:     evmBlock.EthBlock(),

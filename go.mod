@@ -36,7 +36,7 @@ require (
 )
 
 require (
-	github.com/Chaintable/pipeline v0.0.47-0.20250525175431-28f0a475222b // indirect
+	github.com/Chaintable/pipeline v0.0.47-0.20250528165403-97ec14812eb7 // indirect
 	github.com/DataDog/zstd v1.5.6 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/VictoriaMetrics/fastcache v1.12.2 // indirect
@@ -151,7 +151,7 @@ require (
 	rsc.io/tmplfunc v0.0.3 // indirect
 )
 
-replace github.com/ethereum/go-ethereum => github.com/Chaintable/go-ethereum-sonic v0.0.0-20250518195837-93d3b2a9e886
+replace github.com/ethereum/go-ethereum => github.com/Chaintable/go-ethereum-sonic v0.0.0-20250529173459-9966aa76d649
 
 replace github.com/Fantom-foundation/Carmen/go => github.com/Chaintable/Carmen/go v0.0.0-20250525182219-c7d3f0410bdb
 
