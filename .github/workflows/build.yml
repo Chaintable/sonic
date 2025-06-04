@@ -1,34 +1,30 @@
-name: "Build"
+name: "Build new artifacts"
 
 on:
   pull_request:
     branches:
-      - "main"
+      - "debank"
   workflow_dispatch:
 
 env:
   REGISTRY: 294354037686.dkr.ecr.ap-northeast-1.amazonaws.com
-  IMAGE: blockchain-sonic
+  IMAGE: blockchain-sonicx
   DOCKERFILE: Dockerfile
+  AWS_REGION: ap-northeast-1
 
 jobs:
   build-artifacts:
     strategy:
       matrix:
-        arch: [amd64, arm64]
+        arch: [amd64]
     runs-on: [self-hosted, "${{ matrix.arch }}"]
     steps:
-      - name: Install Go
-        uses: actions/setup-go@v2
-        with:
-          go-version: 1.22.x
-
       - name: Checkout code
         uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - uses: tibdex/github-app-token@v2
+      - uses: tibdex/github-app-token@v1
         id: generate-token
         with:
           app_id: ${{ secrets.RELEASE_MANAGER_APP_ID }}
@@ -36,10 +32,19 @@ jobs:
 
       - name: Set env
         run: |
-          echo "REVISION=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "REVISION=$(git rev-parse --short=8 HEAD)" >> $GITHUB_ENV
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build image and push to ECR
-        uses: docker/build-push-action@v5
+        uses:  docker/build-push-action@v5
         with:
           file: ${{ env.DOCKERFILE }}
           context: .
@@ -48,26 +53,27 @@ jobs:
           build-args: ACCESS_TOKEN=${{ steps.generate-token.outputs.token }}
           provenance: false
 
-  merge-docker-manifest:
-    runs-on: [self-hosted, ops]
-    needs: build-artifacts
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Set env
-        run: |
-          echo "REVISION=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+  # merge-docker-manifest:
+  #   runs-on: [self-hosted, ops]
+  #   needs: build-artifacts
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v2
+  #       with:
+  #         ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Merge manifest
-        run: |
-          docker pull --platform=linux/amd64 ${REGISTRY}/${IMAGE}:amd64-${REVISION}
-          docker pull --platform=linux/arm64 ${REGISTRY}/${IMAGE}:arm64-${REVISION}
-          docker buildx imagetools create --tag ${REGISTRY}/${IMAGE}:${REVISION} ${REGISTRY}/${IMAGE}:amd64-${REVISION} ${REGISTRY}/${IMAGE}:arm64-${REVISION}
+  #     - name: Set env
+  #       run: |
+  #         echo "REVISION=$(git rev-parse --short=8 HEAD)" >> $GITHUB_ENV
 
-      - name: Lark Notification
-        continue-on-error: true
-        run: |
-          notiv3 "Blockchain sonic image pushed 🎉" ${REGISTRY}/${IMAGE}:${REVISION}
+  #     - name: Merge manifest
+  #       run: |
+  #         docker pull --platform=linux/amd64 ${REGISTRY}/${IMAGE}:amd64-${REVISION}
+  #         docker pull --platform=linux/arm64 ${REGISTRY}/${IMAGE}:arm64-${REVISION}
+  #         docker buildx imagetools create --tag ${REGISTRY}/${IMAGE}:${REVISION} ${REGISTRY}/${IMAGE}:amd64-${REVISION} ${REGISTRY}/${IMAGE}:arm64-${REVISION}
+
+  #     - name: Lark Notification
+  #       continue-on-error: true
+  #       run: |
+  #         notiv3 "Blockchain Ethereum image pushed 🎉" ${REGISTRY}/${IMAGE}:${REVISION}
