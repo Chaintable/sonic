@@ -1,5 +1,5 @@
-github.com/Chaintable/Carmen/go v0.0.0-20250604092318-8d283cd570a0 h1:UAEiyj06YqIg/5F5lJl01iEDErnDMpCtKprrWotHTD0=
-github.com/Chaintable/Carmen/go v0.0.0-20250604092318-8d283cd570a0/go.mod h1:ub3l/+moUAtCbD7IM4AaYCPJQgs/tNDgNjmub4NmXSo=
+github.com/Chaintable/Carmen/go v0.0.0-20250604092615-db156692a12f h1:BjDNbqCeLyBSgr6EF27aXk3iDXkHTQHE1gL1NqLk7fc=
+github.com/Chaintable/Carmen/go v0.0.0-20250604092615-db156692a12f/go.mod h1:ub3l/+moUAtCbD7IM4AaYCPJQgs/tNDgNjmub4NmXSo=
 github.com/DataDog/zstd v1.5.6 h1:LbEglqepa/ipmmQJUDnSsfvA8e8IStVcGaFWDuxvGOY=
 github.com/DataDog/zstd v1.5.6/go.mod h1:g4AWEaM3yOg3HYfnJ3YIawPnVdXJh9QME85blwSAmyw=
 github.com/Fantom-foundation/Tosca v0.0.0-20241028082205-7b33705a4675 h1:Meqtt0eM9UAw1ceQ1tGiD497V0IVfqj8c6UrFJhkFNE=

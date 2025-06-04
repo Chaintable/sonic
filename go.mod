@@ -136,4 +136,4 @@ replace github.com/Fantom-foundation/lachesis-base => github.com/Fantom-foundati
 
 replace github.com/dvyukov/go-fuzz => github.com/guzenok/go-fuzz v0.0.0-20210201043429-a8e90a2a4f88
 
-replace github.com/Fantom-foundation/Carmen/go => github.com/Chaintable/Carmen/go v0.0.0-20250604092318-8d283cd570a0
+replace github.com/Fantom-foundation/Carmen/go => github.com/Chaintable/Carmen/go v0.0.0-20250604092615-db156692a12f
