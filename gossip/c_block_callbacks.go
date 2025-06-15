@@ -149,9 +149,12 @@ func consensusCallbackBeginBlockFn(
 					Time:    atroposTime,
 					Atropos: cBlock.Atropos,
 				}
-				if blockCtx.Idx == 1 && opera.DefaultVMConfig.Tracer != nil && opera.DefaultVMConfig.Tracer.OnGenesisBlock != nil {
-					// TODO
-					//opera.DefaultVMConfig.Tracer.OnGenesisBlock()
+				if blockCtx.Idx == 2 && opera.DefaultVMConfig.Tracer != nil && opera.DefaultVMConfig.Tracer.OnGenesisBlock != nil {
+					// genesis block will write genesis block and block 1.
+					log.Info("Init trace genesis")
+					opera.DefaultVMConfig.Tracer.OnGenesisBlock(types.NewBlock(&evmcore.GenesisHeader, nil, nil, nil), evmcore.GenesisAlloc)
+
+					// TODO block1 genesis
 				}
 				// Note:
 				// it's possible that a previous Atropos observes current Atropos (1)
