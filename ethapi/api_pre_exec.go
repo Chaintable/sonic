@@ -2,7 +2,12 @@ package ethapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/Chaintable/pipeline/tracer"
+	"github.com/ethereum/go-ethereum/core/tracing"
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/trie"
 	"math/big"
 	"strings"
 
@@ -179,4 +184,144 @@ func (api *PreExecAPI) TraceMany(ctx context.Context, origins []PreExecTx) ([]Pr
 		preResList = append(preResList, preRes)
 	}
 	return preResList, nil
+}
+
+func (api *PreExecAPI) TracePipelineBlock(ctx context.Context, number rpc.BlockNumber, TracerConfig json.RawMessage) ([]PreResult, error) {
+	log.Info("param number", "number", number, "TracerConfig", TracerConfig)
+	block, err := api.b.BlockByNumber(ctx, number)
+	if err != nil || block == nil {
+		return nil, err
+	}
+	receipts, err := api.getBlockReceipts(ctx, rpc.BlockNumber(block.NumberU64()))
+	if err != nil {
+		return nil, err
+	}
+	fullBlock, err := RPCMarshalBlock(block, receipts, true, true)
+	if err != nil {
+		return nil, err
+	}
+
+	preResList := make([]PreResult, 0)
+	pBlock, err := api.b.BlockByNumber(ctx, rpc.BlockNumber(block.NumberU64()-1))
+	if err != nil {
+		return nil, err
+	}
+
+	state, header, err := api.b.StateAndHeaderByNumberOrHash(ctx, rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(pBlock.NumberU64())))
+	if state == nil || err != nil {
+		return nil, err
+	}
+
+	pipelineTracer, err := tracer.NewPipelineTracer(TracerConfig)
+	if err != nil {
+		log.Error("Failed to create pipeline tracer", "err", err)
+	}
+	vmConfig := opera.DefaultVMConfig
+	vmConfig.Tracer = &tracing.Hooks{
+		// VM events
+		OnTxStart: pipelineTracer.OnTxStart,
+		OnTxEnd:   pipelineTracer.OnTxEnd,
+		OnEnter:   pipelineTracer.OnEnter,
+		OnExit:    pipelineTracer.OnExit,
+		OnOpcode:  pipelineTracer.OnOpcode,
+		// Chain events
+		OnClose:      pipelineTracer.OnClose,
+		OnBlockStart: pipelineTracer.OnBlockStart,
+		OnBlockEnd:   pipelineTracer.OnBlockEnd,
+		// State events
+		OnLog: pipelineTracer.OnLog,
+		// custom hook
+		OnCommit: pipelineTracer.OnCommit,
+	}
+	vmConfig.ChargeExcessGas = false
+	vmConfig.NoBaseFee = true
+
+	evmBlock := types.Header{
+		ParentHash:      fullBlock.ParentHash,
+		UncleHash:       fullBlock.UncleHash,
+		Root:            fullBlock.Root,
+		TxHash:          fullBlock.TxHash,
+		ReceiptHash:     fullBlock.ReceiptHash,
+		Number:          fullBlock.Number.ToInt(),
+		Time:            uint64(fullBlock.Time),
+		GasLimit:        uint64(fullBlock.GasLimit),
+		GasUsed:         uint64(fullBlock.GasUsed),
+		BaseFee:         fullBlock.BaseFee.ToInt(),
+		MixDigest:       fullBlock.PrevRandao,
+		Extra:           fullBlock.Extra,
+		Coinbase:        fullBlock.Miner,
+		Difficulty:      fullBlock.Difficulty.ToInt(),
+		WithdrawalsHash: fullBlock.WithdrawalsHash,
+		//BlobGasUsed:     fullBlock.BlobGasUsed,
+		//ExcessBlobGas:   fullBlock.ExcessBlobGas,
+		Nonce: fullBlock.Nonce,
+		Bloom: fullBlock.Bloom,
+	}
+
+	pipelineTracer.OnBlockStart(tracing.BlockEvent{
+		Block: types.NewBlockForPipelineTrace(&evmBlock, nil, receipts, trie.NewStackTrie(nil)),
+	})
+
+	txs := block.Transactions
+	signer := types.MakeSigner(api.b.ChainConfig(), block.Number, uint64(block.Time.Unix()))
+
+	for i := 0; i < len(txs); i++ {
+		tx := txs[i]
+		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee)
+
+		txHash := common.BigToHash(big.NewInt(int64(i)))
+
+		evm, _, err := api.b.GetEVM(ctx, msg, state, header, &vmConfig)
+		if err != nil {
+			preResList = append(preResList, PreResult{
+				Error: PreError{
+					Code: UnKnown,
+					Msg:  err.Error(),
+				},
+			})
+			continue
+		}
+		// Execute the message.
+		gp := new(core.GasPool).AddGas(msg.GasLimit)
+		state.SetTxContext(txHash, int(i))
+
+		var usedGas uint64
+		result, err := evmcore.ApplyTransactionWithEVM(msg, api.b.ChainConfig(), gp, state, header.Number, block.Hash, tx, &usedGas, evm)
+		//result, err := core.ApplyMessage(evm, msg, gp)
+		if err != nil {
+			preRes := PreResult{
+				Error: toPreError(err),
+			}
+			if result != nil {
+				preRes.GasUsed = result.GasUsed
+			}
+			preResList = append(preResList, preRes)
+			continue
+		}
+
+		logs := state.GetLogs(txHash, block.Hash)
+
+		pipelineTracer.OnCommit(pBlock.Hash, block.Hash, nil, nil, nil, nil, nil, nil)
+
+		preRes := PreResult{
+			Logs:    logs,
+			GasUsed: result.GasUsed,
+		}
+
+		if preRes.Error.Msg == "" && preRes.Trace != nil && len(*preRes.Trace) > 0 && (*preRes.Trace)[0].Error != "" {
+			preRes.Error = PreError{
+				Code: Reverted,
+				Msg:  (*preRes.Trace)[0].Error,
+			}
+		}
+		preResList = append(preResList, preRes)
+	}
+	return preResList, nil
+}
+
+func (s *PreExecAPI) getBlockReceipts(ctx context.Context, blkNumber rpc.BlockNumber) (types.Receipts, error) {
+	if blkNumber == rpc.EarliestBlockNumber {
+		return types.Receipts{}, nil
+	}
+	return s.b.GetReceiptsByNumber(ctx, blkNumber)
 }

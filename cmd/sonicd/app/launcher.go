@@ -257,7 +257,9 @@ func lachesisMain(ctx *cli.Context) error {
 			return fmt.Errorf("failed to create tracer %s: %v", "pipeline", err)
 		}
 		opera.VmTracer = t
+		opera.DefaultVMConfig.Tracer = t
 		t.OnBlockchainInit(&params.ChainConfig{ChainID: big.NewInt(146)})
+		log.Info("success init vm tracer", "flags.VmTrace", flags.VmTrace.Name)
 	}
 
 	node, _, nodeClose, err := config.MakeNode(ctx, cfg)

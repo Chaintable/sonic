@@ -123,10 +123,14 @@ func (p *OperaEVMProcessor) Execute(txs types.Transactions) types.Receipts {
 	// Process txs
 	evmBlock := p.evmBlockWith(txs)
 
-	// TODO : for test
-	log.Crit("EVM evmBlock info", "evmBlock", evmBlock)
-
 	if opera.DefaultVMConfig.Tracer != nil && opera.DefaultVMConfig.Tracer.OnBlockStart != nil {
+		// TODO : for test
+		log.Info("Tracer Tracer OnBlockStart", "evmBlock", tracing.BlockEvent{
+			Block:     evmBlock.EthBlock(),
+			Finalized: evmBlock.Header().EthHeader(),
+			Safe:      evmBlock.Header().EthHeader(),
+		})
+
 		opera.DefaultVMConfig.Tracer.OnBlockStart(tracing.BlockEvent{
 			Block:     evmBlock.EthBlock(),
 			Finalized: evmBlock.Header().EthHeader(),

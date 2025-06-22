@@ -1,9 +1,9 @@
 github.com/Chaintable/Carmen/go v0.0.0-20250613062456-d97f3a98a9f1 h1:teV8/GLSwBmZm7DJRFM5xtBDPlC5zu8J5R/hl2RFY/s=
 github.com/Chaintable/Carmen/go v0.0.0-20250613062456-d97f3a98a9f1/go.mod h1:6g0ueIbQqFjMu1rNO3W+SXqjmB217bV5ed+oDJSFLWY=
-github.com/Chaintable/go-ethereum-sonic v0.0.0-20250529173459-9966aa76d649 h1:nUBmQ6tZjpMn/r8L6vwpcwqtLjfrDGMNnzDdaO8rEOc=
-github.com/Chaintable/go-ethereum-sonic v0.0.0-20250529173459-9966aa76d649/go.mod h1:Ae6zqeuL6HebiE91e5jltfsdQ3PAkwY/akzi0mQktWs=
-github.com/Chaintable/pipeline v0.0.47-0.20250528165403-97ec14812eb7 h1:wJpToa6EmB80KNwcRhTqTqL1N4GW6PjPvT4rM5PrlHo=
-github.com/Chaintable/pipeline v0.0.47-0.20250528165403-97ec14812eb7/go.mod h1:Y44mkRAOfaWgp7/ELKyhGyb+GalBwKBKJdfX1DF/MUs=
+github.com/Chaintable/go-ethereum-sonic v0.0.0-20250626180323-31814e5f51fc h1:FdLOTZUfvfNz3UfcL7gQ+1z+8VLl/ZCQ6mO7yauM+1U=
+github.com/Chaintable/go-ethereum-sonic v0.0.0-20250626180323-31814e5f51fc/go.mod h1:Ae6zqeuL6HebiE91e5jltfsdQ3PAkwY/akzi0mQktWs=
+github.com/Chaintable/pipeline v0.0.47-0.20250530072551-8d0f2ef2fdba h1:eT2M6WDr1G3TnkExmFW+tvD6oaKtbMlrd7irUtFOnQo=
+github.com/Chaintable/pipeline v0.0.47-0.20250530072551-8d0f2ef2fdba/go.mod h1:Y44mkRAOfaWgp7/ELKyhGyb+GalBwKBKJdfX1DF/MUs=
 github.com/DataDog/zstd v1.5.6 h1:LbEglqepa/ipmmQJUDnSsfvA8e8IStVcGaFWDuxvGOY=
 github.com/DataDog/zstd v1.5.6/go.mod h1:g4AWEaM3yOg3HYfnJ3YIawPnVdXJh9QME85blwSAmyw=
 github.com/Fantom-foundation/Tosca v0.0.0-20241028082205-7b33705a4675 h1:Meqtt0eM9UAw1ceQ1tGiD497V0IVfqj8c6UrFJhkFNE=

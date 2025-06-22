@@ -2,6 +2,7 @@ package gossip
 
 import (
 	"fmt"
+	"github.com/ethereum/go-ethereum/trie"
 	"math/big"
 	"sort"
 	"sync"
@@ -149,12 +150,19 @@ func consensusCallbackBeginBlockFn(
 					Time:    atroposTime,
 					Atropos: cBlock.Atropos,
 				}
+
+				// TODO : for test
+				log.Info("EndBlock", "blockCtx", blockCtx)
+
 				if blockCtx.Idx == 2 && opera.DefaultVMConfig.Tracer != nil && opera.DefaultVMConfig.Tracer.OnGenesisBlock != nil {
 					// genesis block will write genesis block and block 1.
 					log.Info("Init trace genesis")
-					opera.DefaultVMConfig.Tracer.OnGenesisBlock(types.NewBlock(&evmcore.GenesisHeader, nil, nil, nil), evmcore.GenesisAlloc)
+					opera.DefaultVMConfig.Tracer.OnGenesisBlock(types.NewBlockForPipelineTrace(&evmcore.GenesisHeader, nil, nil, trie.NewStackTrie(nil)), evmcore.GenesisAlloc)
 
 					// TODO block1 genesis
+					log.Info("waiting for trigger block 1 trace")
+					time.Sleep(60 * time.Second)
+					log.Info("end waiting trace block 1")
 				}
 				// Note:
 				// it's possible that a previous Atropos observes current Atropos (1)

@@ -5,6 +5,7 @@ go 1.23.0
 toolchain go1.23.8
 
 require (
+	github.com/Chaintable/pipeline v0.0.47-0.20250530072551-8d0f2ef2fdba
 	github.com/Fantom-foundation/Carmen/go v0.0.0-20241129202153-690bc10fa624
 	github.com/Fantom-foundation/Tosca v0.0.0-20241028082205-7b33705a4675
 	github.com/Fantom-foundation/lachesis-base v0.0.0-20240116072301-a75735c4ef00
@@ -36,7 +37,6 @@ require (
 )
 
 require (
-	github.com/Chaintable/pipeline v0.0.47-0.20250528165403-97ec14812eb7 // indirect
 	github.com/DataDog/zstd v1.5.6 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/VictoriaMetrics/fastcache v1.12.2 // indirect
@@ -151,7 +151,7 @@ require (
 	rsc.io/tmplfunc v0.0.3 // indirect
 )
 
-replace github.com/ethereum/go-ethereum => github.com/Chaintable/go-ethereum-sonic v0.0.0-20250529173459-9966aa76d649
+replace github.com/ethereum/go-ethereum => github.com/Chaintable/go-ethereum-sonic v0.0.0-20250626180323-31814e5f51fc
 
 replace github.com/Fantom-foundation/Carmen/go => github.com/Chaintable/Carmen/go v0.0.0-20250613062456-d97f3a98a9f1
 
