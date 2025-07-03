@@ -23,7 +23,6 @@ var GenesisHeader = types.Header{
 	GasUsed:         0,
 	BaseFee:         bigFromBase10("10000000000"),
 	MixDigest:       common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000001"),
-	Extra:           common.Hex2Bytes("0x000000000000000000000000"),
 	Coinbase:        common.HexToAddress("0x0000000000000000000000000000000000000000"),
 	Difficulty:      bigFromBase10("0"),
 	WithdrawalsHash: &types.EmptyWithdrawalsHash,

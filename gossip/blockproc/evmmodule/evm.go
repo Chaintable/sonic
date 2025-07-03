@@ -116,6 +116,8 @@ func (p *OperaEVMProcessor) evmBlockWith(txs types.Transactions) *evmcore.EvmBlo
 	return evmcore.NewEvmBlock(h, txs)
 }
 
+var currentBlockIdx = uint64(0)
+
 func (p *OperaEVMProcessor) Execute(txs types.Transactions) types.Receipts {
 	evmProcessor := evmcore.NewStateProcessor(p.evmCfg, p.reader)
 	txsOffset := uint(len(p.incomingTxs))
@@ -123,13 +125,9 @@ func (p *OperaEVMProcessor) Execute(txs types.Transactions) types.Receipts {
 	// Process txs
 	evmBlock := p.evmBlockWith(txs)
 
-	if opera.DefaultVMConfig.Tracer != nil && opera.DefaultVMConfig.Tracer.OnBlockStart != nil {
-		// TODO : for test
-		log.Info("Tracer Tracer OnBlockStart", "evmBlock", tracing.BlockEvent{
-			Block:     evmBlock.EthBlock(),
-			Finalized: evmBlock.Header().EthHeader(),
-			Safe:      evmBlock.Header().EthHeader(),
-		})
+	if opera.DefaultVMConfig.Tracer != nil && opera.DefaultVMConfig.Tracer.OnBlockStart != nil && currentBlockIdx != evmBlock.EthBlock().NumberU64() {
+		currentBlockIdx = evmBlock.EthBlock().NumberU64()
+		log.Info("Tracer Tracer OnBlockStart", "block idx", evmBlock.EthBlock().Number(), "block hash", evmBlock.EthBlock().Hash().Hex(), "txs", len(txs))
 
 		opera.DefaultVMConfig.Tracer.OnBlockStart(tracing.BlockEvent{
 			Block:     evmBlock.EthBlock(),

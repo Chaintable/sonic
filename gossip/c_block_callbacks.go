@@ -2,6 +2,9 @@ package gossip
 
 import (
 	"fmt"
+	"github.com/Chaintable/pipeline/tracer"
+	ptypes "github.com/Chaintable/pipeline/types"
+	"github.com/Chaintable/pipeline/util"
 	"github.com/ethereum/go-ethereum/trie"
 	"math/big"
 	"sort"
@@ -150,20 +153,6 @@ func consensusCallbackBeginBlockFn(
 					Time:    atroposTime,
 					Atropos: cBlock.Atropos,
 				}
-
-				// TODO : for test
-				log.Info("EndBlock", "blockCtx", blockCtx)
-
-				if blockCtx.Idx == 2 && opera.DefaultVMConfig.Tracer != nil && opera.DefaultVMConfig.Tracer.OnGenesisBlock != nil {
-					// genesis block will write genesis block and block 1.
-					log.Info("Init trace genesis")
-					opera.DefaultVMConfig.Tracer.OnGenesisBlock(types.NewBlockForPipelineTrace(&evmcore.GenesisHeader, nil, nil, trie.NewStackTrie(nil)), evmcore.GenesisAlloc)
-
-					// TODO block1 genesis
-					log.Info("waiting for trigger block 1 trace")
-					time.Sleep(60 * time.Second)
-					log.Info("end waiting trace block 1")
-				}
 				// Note:
 				// it's possible that a previous Atropos observes current Atropos (1)
 				// (even stronger statement is true - it's possible that current Atropos is equal to a previous Atropos).
@@ -183,6 +172,15 @@ func consensusCallbackBeginBlockFn(
 					store.SetBlockEpochState(bs, es)
 					log.Debug("Frame is skipped", "atropos", cBlock.Atropos.String())
 					return nil
+				}
+
+				// TODO : for test
+				log.Info("EndBlock", "blockCtx", blockCtx)
+
+				if blockCtx.Idx == 2 && opera.DefaultVMConfig.Tracer != nil && opera.DefaultVMConfig.Tracer.OnGenesisBlock != nil {
+					log.Info("waiting for trigger block 0&1 trace")
+					time.Sleep(60 * time.Second)
+					log.Info("end waiting trace block 0&1")
 				}
 
 				sealer := blockProc.SealerModule.Start(blockCtx, bs, es)
@@ -238,7 +236,6 @@ func consensusCallbackBeginBlockFn(
 
 				// At this point, newValidators may be returned and the rest of the code may be executed in a parallel thread
 				blockFn := func() {
-
 					// Start assembling the resulting block.
 					number := uint64(blockCtx.Idx)
 					lastBlockHeader := evmStateReader.GetHeaderByNumber(number - 1)
@@ -379,6 +376,70 @@ func consensusCallbackBeginBlockFn(
 
 					for _, tx := range blockBuilder.GetTransactions() {
 						store.evm.SetTx(tx.Hash(), tx)
+					}
+
+					evmBlockHeader := &types.Header{
+						ParentHash:  block.ParentHash,
+						UncleHash:   types.EmptyUncleHash,
+						Coinbase:    common.Address{}, // < in Sonic, the coinbase is always 0
+						Root:        block.StateRoot,
+						TxHash:      block.TransactionsHashRoot,
+						ReceiptHash: block.ReceiptsHashRoot,
+						Bloom:       block.LogBloom,
+						Difficulty:  big.NewInt(int64(block.Difficulty)),
+						Number:      big.NewInt(int64(block.Number)),
+						GasLimit:    block.GasLimit,
+						GasUsed:     block.GasUsed,
+						Time:        uint64(block.Time.Time().Unix()),
+						Extra: inter.EncodeExtraData(
+							block.Time.Time(),
+							time.Duration(block.Duration)*time.Nanosecond,
+						),
+						MixDigest: block.PrevRandao,
+						Nonce:     types.BlockNonce{}, // constant 0 in Ethereum
+						BaseFee:   block.BaseFee,
+
+						// Sonic does not have a beacon chain and no withdrawals.
+						WithdrawalsHash: &types.EmptyWithdrawalsHash,
+
+						// Sonic does not support blobs, so no blob gas is used and there is
+						// no excess blob gas.
+						BlobGasUsed:   new(uint64), // = 0
+						ExcessBlobGas: new(uint64), // = 0
+					}
+
+					if opera.DefaultVMConfig.Tracer != nil && opera.DefaultVMConfig.Tracer.OnCommit != nil {
+						// hack override block header for pipeline tracer, writer from OnBlockStart
+						tracer.BlockCtx.BlockHeader = util.BuildPilelineBlockHeader(types.NewBlockForPipelineTrace(evmBlockHeader, nil, nil, trie.NewStackTrie(nil)))
+						tracer.BlockCtx.BlockFile.Block = util.BuildPipelineBlock(types.NewBlockForPipelineTrace(evmBlockHeader, nil, nil, trie.NewStackTrie(nil)))
+
+						pBlock := evmStateReader.GetBlock(common.Hash{}, block.Number-1)
+
+						log.Info("OnBlockEnd", "block idx", block.Number, "block hash", block.Hash().Hex(), "txs", len(block.TransactionHashes), "state root", block.StateRoot.Hex(), "parent root", pBlock.Root.Hex())
+
+						opera.DefaultVMConfig.Tracer.OnCommit(pBlock.Root, block.StateRoot, nil, nil, nil, nil, nil, nil)
+
+						defer func() {
+							blockChange := &ptypes.BlockChangeNotification{
+								ChangeType: 1, // 1 for new, 2 for fork
+								NewBlocks: []ptypes.BlockContext{
+									{
+										Hash:        block.Hash(),
+										ParentHash:  block.ParentHash,
+										BlockNumber: block.Number,
+										Timestamp:   uint64(block.Time.Unix()),
+									},
+								},
+							}
+
+							start := time.Now()
+							err = tracer.NodeXPusher.PushBlockChangeNotification(blockChange)
+							if err == nil {
+								log.Info("Push kafka", "dropBlocks", blockChange.DropBlocks, "newBlocks", blockChange.NewBlocks, "kafka elapsed", common.PrettyDuration(time.Since(start)))
+							} else {
+								log.Error("Failed to push kafka", "err", err, "dropBlocks", blockChange.DropBlocks, "newBlocks", blockChange.NewBlocks)
+							}
+						}()
 					}
 
 					store.SetBlock(blockCtx.Idx, block)
