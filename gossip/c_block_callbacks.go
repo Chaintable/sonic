@@ -174,7 +174,6 @@ func consensusCallbackBeginBlockFn(
 					return nil
 				}
 
-				// TODO : for test
 				log.Info("EndBlock", "blockCtx", blockCtx)
 
 				if blockCtx.Idx == 2 && opera.DefaultVMConfig.Tracer != nil && opera.DefaultVMConfig.Tracer.OnGenesisBlock != nil {

@@ -5,7 +5,7 @@ go 1.23.0
 toolchain go1.23.8
 
 require (
-	github.com/Chaintable/pipeline v0.0.47-0.20250530072551-8d0f2ef2fdba
+	github.com/Chaintable/pipeline v0.0.53-sonic-v1.14.8-debank-1
 	github.com/Fantom-foundation/Carmen/go v0.0.0-20241129202153-690bc10fa624
 	github.com/Fantom-foundation/Tosca v0.0.0-20241028082205-7b33705a4675
 	github.com/Fantom-foundation/lachesis-base v0.0.0-20240116072301-a75735c4ef00
@@ -151,7 +151,7 @@ require (
 	rsc.io/tmplfunc v0.0.3 // indirect
 )
 
-replace github.com/ethereum/go-ethereum => github.com/Chaintable/go-ethereum-sonic v0.0.0-20250626180323-31814e5f51fc
+replace github.com/ethereum/go-ethereum => github.com/Chaintable/go-ethereum-sonic v0.0.0-20250708094743-4d011af2cfeb
 
 replace github.com/Fantom-foundation/Carmen/go => github.com/Chaintable/Carmen/go v0.0.0-20250613062456-d97f3a98a9f1
 

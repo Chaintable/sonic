@@ -51,7 +51,6 @@ func ImportGenesisStore(params ImportParams) error {
 	}
 	defer gdb.Close()
 
-	// TODO : for test
 	log.Info("genesis block info", "Genesis", params.GenesisStore.Genesis())
 
 	err = gdb.ApplyGenesis(params.GenesisStore.Genesis())
