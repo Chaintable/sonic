@@ -30,6 +30,7 @@ func (s *Store) ApplyGenesis(g genesis.Genesis) (err error) {
 		if topEr == nil {
 			topEr = &er
 		}
+
 		s.WriteFullEpochRecord(er)
 		return true
 	})

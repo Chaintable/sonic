@@ -61,6 +61,12 @@ func (p *StateProcessor) Process(
 ) (
 	receipts types.Receipts, allLogs []*types.Log, skipped []uint32, err error,
 ) {
+	if cfg.Tracer != nil && cfg.Tracer.OnCommit != nil {
+		defer func() {
+			statedb.SetOnCommit(cfg.Tracer.OnCommit)
+		}()
+	}
+
 	skipped = make([]uint32, 0, len(block.Transactions))
 	var (
 		gp           = new(core.GasPool).AddGas(block.GasLimit)
@@ -171,6 +177,11 @@ func applyTransaction(
 	bool,
 	error,
 ) {
+	if hooks := evm.Config.Tracer; hooks != nil {
+		if hooks.OnTxStart != nil {
+			hooks.OnTxStart(evm.GetVMContext(), tx, msg.From)
+		}
+	}
 	// Create a new context to be used in the EVM environment.
 	txContext := NewEVMTxContext(msg)
 	evm.Reset(txContext, statedb)
@@ -227,6 +238,13 @@ func applyTransaction(
 	receipt.Bloom = types.CreateBloom(types.Receipts{receipt})
 	receipt.BlockNumber = blockNumber
 	receipt.TransactionIndex = uint(statedb.TxIndex())
+
+	if hooks := evm.Config.Tracer; hooks != nil {
+		if hooks.OnTxEnd != nil {
+			defer func() { hooks.OnTxEnd(receipt, err) }()
+		}
+	}
+
 	return receipt, result.UsedGas, false, err
 }
 

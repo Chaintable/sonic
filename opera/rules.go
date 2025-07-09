@@ -2,6 +2,7 @@ package opera
 
 import (
 	"encoding/json"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"math/big"
 	"time"
 
@@ -31,6 +32,8 @@ const (
 	defaultEventEmitterInterval = 600 * time.Millisecond
 )
 
+var VmTracer *tracing.Hooks
+
 var DefaultVMConfig = func() vm.Config {
 
 	// For transaction processing, Tosca's LFVM is used.
@@ -57,6 +60,7 @@ var DefaultVMConfig = func() vm.Config {
 		IgnoreGasFeeCap:                 true,
 		InsufficientBalanceIsNotAnError: true,
 		SkipTipPaymentToCoinbase:        true,
+		Tracer:                          VmTracer,
 	}
 }()
 

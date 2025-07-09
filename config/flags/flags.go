@@ -365,4 +365,16 @@ var (
 			"Setting this value to <=2000 will result in pre-confugired cache capacity of 2KB", CacheFlag.Name),
 		Value: 0,
 	}
+
+	VmTrace = cli.StringFlag{
+		Name:  "vmtrace",
+		Usage: fmt.Sprintf("type of vm trace", CacheFlag.Name),
+		Value: "",
+	}
+
+	VMTraceJsonConfig = cli.StringFlag{
+		Name:  "vmtrace.jsonconfig",
+		Usage: fmt.Sprintf("vm trace config", CacheFlag.Name),
+		Value: "{}",
+	}
 )

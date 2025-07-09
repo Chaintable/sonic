@@ -1,7 +1,12 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
+	"github.com/Fantom-foundation/go-opera/opera"
+	"github.com/ethereum/go-ethereum/eth/tracers"
+	"github.com/ethereum/go-ethereum/params"
+	"math/big"
 	"os"
 	"os/signal"
 	"sort"
@@ -46,6 +51,7 @@ var (
 	operaFlags       []cli.Flag
 	rpcFlags         []cli.Flag
 	metricsFlags     []cli.Flag
+	traceFlags       []cli.Flag
 )
 
 func initFlags() {
@@ -155,6 +161,11 @@ func initFlags() {
 		tracing.EnableFlag,
 	}
 
+	traceFlags = []cli.Flag{
+		flags.VmTrace,
+		flags.VMTraceJsonConfig,
+	}
+
 	nodeFlags = []cli.Flag{}
 	nodeFlags = append(nodeFlags, gpoFlags...)
 	nodeFlags = append(nodeFlags, accountFlags...)
@@ -162,6 +173,7 @@ func initFlags() {
 	nodeFlags = append(nodeFlags, networkingFlags...)
 	nodeFlags = append(nodeFlags, txpoolFlags...)
 	nodeFlags = append(nodeFlags, operaFlags...)
+	nodeFlags = append(nodeFlags, traceFlags...)
 }
 
 // init the CLI app.
@@ -232,6 +244,22 @@ func lachesisMain(ctx *cli.Context) error {
 	archiveCache := ctx.GlobalInt64(flags.ArchiveCacheFlag.Name)
 	if archiveCache > 0 {
 		cfg.OperaStore.EVM.StateDb.ArchiveCache = archiveCache
+	}
+
+	if ctx.GlobalString(flags.VmTrace.Name) != "" {
+		traceConfig := json.RawMessage("{}")
+		conf := ctx.GlobalString(flags.VMTraceJsonConfig.Name)
+		if conf != "" {
+			traceConfig = json.RawMessage(conf)
+		}
+		t, err := tracers.LiveDirectory.New(ctx.GlobalString(flags.VmTrace.Name), traceConfig)
+		if err != nil {
+			return fmt.Errorf("failed to create tracer %s: %v", "pipeline", err)
+		}
+		opera.VmTracer = t
+		opera.DefaultVMConfig.Tracer = t
+		t.OnBlockchainInit(&params.ChainConfig{ChainID: big.NewInt(146)})
+		log.Info("success init vm tracer", "flags.VmTrace", flags.VmTrace.Name)
 	}
 
 	node, _, nodeClose, err := config.MakeNode(ctx, cfg)

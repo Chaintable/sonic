@@ -279,6 +279,10 @@ func (c *CarmenStateDB) EndBlock(number uint64) {
 	}
 }
 
+func (c *CarmenStateDB) SetOnCommit(onCommit tracing.CommitHook) {
+	c.db.SetOnCommit(onCommit)
+}
+
 func (c *CarmenStateDB) GetStateHash() common.Hash {
 	return common.Hash(c.db.GetHash())
 }
