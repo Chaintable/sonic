@@ -104,7 +104,7 @@ func (p *StateProcessor) Process(
 }
 
 // ApplyTransactionWithEVM attempts to apply a transaction to the given state database
-// and uses the input parameters for its environment similar to ApplyTransaction. However,
+// and uses the input parameters for its environment similar to applyTransaction. However,
 // this method takes an already created EVM instance as input.
 func ApplyTransactionWithEVM(msg *core.Message, config *params.ChainConfig, gp *core.GasPool, statedb state.StateDB, blockNumber *big.Int, blockHash common.Hash, tx *types.Transaction, usedGas *uint64, evm *vm.EVM) (receipt *types.Receipt, err error) {
 	if evm.Config.Tracer != nil && evm.Config.Tracer.OnTxStart != nil {
@@ -118,6 +118,17 @@ func ApplyTransactionWithEVM(msg *core.Message, config *params.ChainConfig, gp *
 	// Create a new context to be used in the EVM environment.
 	txContext := NewEVMTxContext(msg)
 	evm.Reset(txContext, statedb)
+
+	evm.Config.NoBaseFee = msg.SkipAccountChecks
+
+	// For now, Sonic only supports Blob transactions without blob data.
+	if msg.BlobHashes != nil {
+		if len(msg.BlobHashes) > 0 {
+			return nil, fmt.Errorf("blob data is not supported")
+		}
+		// PreCheck requires non-nil blobHashes not to be empty
+		msg.BlobHashes = nil
+	}
 
 	// Apply the transaction to the current state (included in the env).
 	result, err := core.ApplyMessage(evm, msg, gp)
@@ -156,6 +167,13 @@ func ApplyTransactionWithEVM(msg *core.Message, config *params.ChainConfig, gp *
 		receipt.Logs = statedb.GetLogs(tx.Hash(), blockHash) // don't store logs when tracing
 		receipt.Bloom = types.CreateBloom(types.Receipts{receipt})
 	}
+
+	logs := statedb.GetLogs(tx.Hash(), common.Hash{})
+	//for _, l := range logs {
+	//	onNewLog(l)
+	//}
+
+	receipt.Logs = logs
 	receipt.BlockHash = blockHash
 	receipt.BlockNumber = blockNumber
 	receipt.TransactionIndex = uint(statedb.TxIndex())

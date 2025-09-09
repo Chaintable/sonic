@@ -43,6 +43,10 @@ type EthAPIBackend struct {
 	allowUnprotectedTxs bool
 }
 
+func (b *EthAPIBackend) GetEvmStateReader() evmcore.DummyChain {
+	return b.state
+}
+
 // SetExtRPCEnabled updates extRPCEnabled
 func (b *EthAPIBackend) SetExtRPCEnabled(v bool) {
 	b.extRPCEnabled = v

@@ -103,6 +103,8 @@ type Backend interface {
 	GetDowntime(ctx context.Context, vid idx.ValidatorID) (idx.Block, inter.Timestamp, error)
 	GetUptime(ctx context.Context, vid idx.ValidatorID) (*big.Int, error)
 	GetOriginatedFee(ctx context.Context, vid idx.ValidatorID) (*big.Int, error)
+
+	GetEvmStateReader() evmcore.DummyChain
 }
 
 func GetAPIs(apiBackend Backend) []rpc.API {
@@ -156,6 +158,11 @@ func GetAPIs(apiBackend Backend) []rpc.API {
 			Namespace: "pre",
 			Version:   "1.0",
 			Service:   NewPreExecAPI(apiBackend),
+			Public:    true,
+		}, {
+			Namespace: "trace",
+			Version:   "1.0",
+			Service:   NewDebankAPI(apiBackend),
 			Public:    true,
 		},
 	}
