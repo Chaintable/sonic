@@ -1,17 +1,36 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package app
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 
-	"github.com/Fantom-foundation/go-opera/cmd/sonictool/db"
-	"github.com/Fantom-foundation/go-opera/cmd/sonictool/genesis"
-	"github.com/Fantom-foundation/go-opera/config/flags"
-	"github.com/Fantom-foundation/go-opera/integration/makefakegenesis"
-	"github.com/Fantom-foundation/go-opera/opera/genesisstore"
-	futils "github.com/Fantom-foundation/go-opera/utils"
-	"github.com/Fantom-foundation/go-opera/utils/memory"
+	"github.com/0xsoniclabs/sonic/cmd/sonictool/db"
+	"github.com/0xsoniclabs/sonic/cmd/sonictool/genesis"
+	"github.com/0xsoniclabs/sonic/config/flags"
+	"github.com/0xsoniclabs/sonic/integration/makefakegenesis"
+	"github.com/0xsoniclabs/sonic/opera"
+	"github.com/0xsoniclabs/sonic/opera/genesisstore"
+	futils "github.com/0xsoniclabs/sonic/utils"
+	"github.com/0xsoniclabs/sonic/utils/caution"
+	"github.com/0xsoniclabs/sonic/utils/memory"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/Fantom-foundation/lachesis-base/utils/cachescale"
 	"github.com/ethereum/go-ethereum/log"
@@ -29,9 +48,14 @@ var (
 		Name:  "experimental",
 		Usage: "Allow experimental features",
 	}
+	FakeUpgrades = cli.StringFlag{
+		Name:  "upgrades",
+		Usage: "Feature set enabled in the fake network, sonic|allegro.",
+		Value: "sonic",
+	}
 )
 
-func gfileGenesisImport(ctx *cli.Context) error {
+func gfileGenesisImport(ctx *cli.Context) (err error) {
 	if len(ctx.Args()) < 1 {
 		return fmt.Errorf("this command requires an argument - the genesis file to import")
 	}
@@ -52,13 +76,13 @@ func gfileGenesisImport(ctx *cli.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to open the genesis file: %w", err)
 	}
-	defer genesisReader.Close()
+	// note, genesisStore closes the reader, no need to defer close it here
 
 	genesisStore, genesisHashes, err := genesisstore.OpenGenesisStore(genesisReader)
 	if err != nil {
-		return fmt.Errorf("failed to read genesis file: %w", err)
+		return errors.Join(fmt.Errorf("failed to read genesis file: %w", err), genesisReader.Close())
 	}
-	defer genesisStore.Close()
+	defer caution.CloseAndReportError(&err, genesisStore, "failed to close the genesis store")
 	if err := genesis.IsGenesisTrusted(genesisStore, genesisHashes); err != nil {
 		if ctx.IsSet(ExperimentalFlag.Name) {
 			log.Warn("Experimental genesis file is used", "err", err)
@@ -76,7 +100,7 @@ func gfileGenesisImport(ctx *cli.Context) error {
 	})
 }
 
-func jsonGenesisImport(ctx *cli.Context) error {
+func jsonGenesisImport(ctx *cli.Context) (err error) {
 	if len(ctx.Args()) < 1 {
 		return fmt.Errorf("this command requires an argument - the genesis file to import")
 	}
@@ -100,22 +124,24 @@ func jsonGenesisImport(ctx *cli.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to load JSON genesis: %w", err)
 	}
+
 	genesisStore, err := makefakegenesis.ApplyGenesisJson(genesisJson)
 	if err != nil {
 		return fmt.Errorf("failed to prepare JSON genesis: %w", err)
 	}
-	defer genesisStore.Close()
+	defer caution.CloseAndReportError(&err, genesisStore, "failed to close the genesis store")
 	return genesis.ImportGenesisStore(genesis.ImportParams{
-		GenesisStore:  genesisStore,
-		DataDir:       dataDir,
-		ValidatorMode: validatorMode,
-		CacheRatio:    cacheRatio,
-		LiveDbCache:   ctx.GlobalInt64(flags.LiveDbCacheFlag.Name),
-		ArchiveCache:  ctx.GlobalInt64(flags.ArchiveCacheFlag.Name),
+		GenesisStore:     genesisStore,
+		DataDir:          dataDir,
+		ValidatorMode:    validatorMode,
+		CacheRatio:       cacheRatio,
+		LiveDbCache:      ctx.GlobalInt64(flags.LiveDbCacheFlag.Name),
+		ArchiveCache:     ctx.GlobalInt64(flags.ArchiveCacheFlag.Name),
+		StateDbCacheSize: ctx.GlobalInt64(flags.StateDbCacheCapacityFlag.Name),
 	})
 }
 
-func fakeGenesisImport(ctx *cli.Context) error {
+func fakeGenesisImport(ctx *cli.Context) (err error) {
 	if len(ctx.Args()) < 1 {
 		return fmt.Errorf("this command requires an argument - the number of validators in the fake network")
 	}
@@ -139,8 +165,24 @@ func fakeGenesisImport(ctx *cli.Context) error {
 		return err
 	}
 
-	genesisStore := makefakegenesis.FakeGenesisStore(idx.Validator(validatorsNumber), futils.ToFtm(1000000000), futils.ToFtm(5000000))
-	defer genesisStore.Close()
+	var upgrades opera.Upgrades
+	upgradesString := ctx.String(FakeUpgrades.Name)
+	switch upgradesString {
+	case "sonic":
+		upgrades = opera.GetSonicUpgrades()
+	case "allegro":
+		upgrades = opera.GetAllegroUpgrades()
+	default:
+		return fmt.Errorf("invalid profile %v - must be 'sonic' or 'allegro'", upgradesString)
+	}
+
+	genesisStore := makefakegenesis.FakeGenesisStore(
+		idx.Validator(validatorsNumber),
+		futils.ToFtm(1_000_000_000),
+		futils.ToFtm(5_000_000),
+		upgrades,
+	)
+	defer caution.CloseAndReportError(&err, genesisStore, "failed to close the genesis store")
 	return genesis.ImportGenesisStore(genesis.ImportParams{
 		GenesisStore:  genesisStore,
 		DataDir:       dataDir,

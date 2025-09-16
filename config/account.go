@@ -1,11 +1,28 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package config
 
 import (
 	"fmt"
+
+	"github.com/0xsoniclabs/sonic/utils/prompt"
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/console/prompt"
 	"github.com/ethereum/go-ethereum/log"
 )
 
@@ -84,12 +101,12 @@ func GetPassPhrase(msg string, confirmation bool, i int, passwords []string) (st
 	if msg != "" {
 		fmt.Println(msg)
 	}
-	password, err := prompt.Stdin.PromptPassword("Passphrase: ")
+	password, err := prompt.UserPrompt.PromptPassword("Passphrase: ")
 	if err != nil {
 		return "", fmt.Errorf("failed to read passphrase: %v", err)
 	}
 	if confirmation {
-		confirm, err := prompt.Stdin.PromptPassword("Repeat passphrase: ")
+		confirm, err := prompt.UserPrompt.PromptPassword("Repeat passphrase: ")
 		if err != nil {
 			return "", fmt.Errorf("failed to read passphrase confirmation: %v", err)
 		}

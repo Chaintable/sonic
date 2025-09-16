@@ -1,18 +1,42 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package evmstore
 
 import (
-	cc "github.com/Fantom-foundation/Carmen/go/common"
-	"github.com/Fantom-foundation/Carmen/go/common/amount"
-	"github.com/Fantom-foundation/Carmen/go/common/witness"
-	carmen "github.com/Fantom-foundation/Carmen/go/state"
-	"github.com/Fantom-foundation/go-opera/inter/state"
+	"bytes"
+
+	cc "github.com/0xsoniclabs/carmen/go/common"
+	"github.com/0xsoniclabs/carmen/go/common/amount"
+	"github.com/0xsoniclabs/carmen/go/common/witness"
+	carmen "github.com/0xsoniclabs/carmen/go/state"
+	"github.com/0xsoniclabs/sonic/inter/state"
 	"github.com/ethereum/go-ethereum/common"
+	geth_state "github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie/utils"
 	"github.com/holiman/uint256"
+)
+
+const (
+	// Number of address->curve point associations to keep.
+	pointCacheSize = 4096
 )
 
 func CreateCarmenStateDb(carmenStateDb carmen.VmStateDB) state.StateDB {
@@ -30,6 +54,9 @@ type CarmenStateDB struct {
 	// current transaction - set by Prepare
 	txHash  common.Hash
 	txIndex int
+
+	// collecting all events accessing state information
+	accessEvents *geth_state.AccessEvents
 }
 
 func (c *CarmenStateDB) Error() error {
@@ -181,12 +208,16 @@ func (c *CarmenStateDB) HasSelfDestructed(addr common.Address) bool {
 	return c.db.HasSuicided(cc.Address(addr))
 }
 
-func (c *CarmenStateDB) AddBalance(addr common.Address, value *uint256.Int, reason tracing.BalanceChangeReason) {
+func (c *CarmenStateDB) AddBalance(addr common.Address, value *uint256.Int, reason tracing.BalanceChangeReason) uint256.Int {
+	before := c.db.GetBalance(cc.Address(addr)).Uint256()
 	c.db.AddBalance(cc.Address(addr), amount.NewFromUint256(value))
+	return before
 }
 
-func (c *CarmenStateDB) SubBalance(addr common.Address, value *uint256.Int, reason tracing.BalanceChangeReason) {
+func (c *CarmenStateDB) SubBalance(addr common.Address, value *uint256.Int, reason tracing.BalanceChangeReason) uint256.Int {
+	before := c.db.GetBalance(cc.Address(addr)).Uint256()
 	c.db.SubBalance(cc.Address(addr), amount.NewFromUint256(value))
+	return before
 }
 
 func (c *CarmenStateDB) SetBalance(addr common.Address, balance *uint256.Int) {
@@ -198,16 +229,20 @@ func (c *CarmenStateDB) SetBalance(addr common.Address, balance *uint256.Int) {
 	}
 }
 
-func (c *CarmenStateDB) SetNonce(addr common.Address, nonce uint64) {
+func (c *CarmenStateDB) SetNonce(addr common.Address, nonce uint64, _ tracing.NonceChangeReason) {
 	c.db.SetNonce(cc.Address(addr), nonce)
 }
 
-func (c *CarmenStateDB) SetCode(addr common.Address, code []byte) {
+func (c *CarmenStateDB) SetCode(addr common.Address, code []byte) []byte {
+	old := bytes.Clone(c.db.GetCode(cc.Address(addr)))
 	c.db.SetCode(cc.Address(addr), code)
+	return old
 }
 
-func (c *CarmenStateDB) SetState(addr common.Address, key, value common.Hash) {
+func (c *CarmenStateDB) SetState(addr common.Address, key, value common.Hash) common.Hash {
+	before := c.db.GetState(cc.Address(addr), cc.Key(key))
 	c.db.SetState(cc.Address(addr), cc.Key(key), cc.Value(value))
+	return common.Hash(before)
 }
 
 func (c *CarmenStateDB) SetTransientState(addr common.Address, key, value common.Hash) {
@@ -215,15 +250,34 @@ func (c *CarmenStateDB) SetTransientState(addr common.Address, key, value common
 }
 
 func (c *CarmenStateDB) SetStorage(addr common.Address, storage map[common.Hash]common.Hash) {
-	panic("not supported")
-}
+	origCode := c.db.GetCode(cc.Address(addr))
+	origNonce := c.db.GetNonce(cc.Address(addr))
+	origBalance := c.db.GetBalance(cc.Address(addr))
 
-func (c *CarmenStateDB) SelfDestruct(addr common.Address) {
+	// Suicide the account to clear the storage
 	c.db.Suicide(cc.Address(addr))
+	c.db.CreateAccount(cc.Address(addr))
+
+	// insert new storage
+	for key, value := range storage {
+		c.db.SetState(cc.Address(addr), cc.Key(key), cc.Value(value))
+	}
+
+	// recover properties of the original account
+	c.db.SetCode(cc.Address(addr), origCode)
+	c.db.SetNonce(cc.Address(addr), origNonce)
+	c.db.AddBalance(cc.Address(addr), origBalance)
 }
 
-func (c *CarmenStateDB) Selfdestruct6780(addr common.Address) {
-	c.db.SuicideNewContract(cc.Address(addr))
+func (c *CarmenStateDB) SelfDestruct(addr common.Address) uint256.Int {
+	prevBalance := *c.GetBalance(addr)
+	c.db.Suicide(cc.Address(addr))
+	return prevBalance
+}
+
+func (c *CarmenStateDB) SelfDestruct6780(addr common.Address) (uint256.Int, bool) {
+	prevBalance := *c.GetBalance(addr)
+	return prevBalance, c.db.SuicideNewContract(cc.Address(addr))
 }
 
 func (c *CarmenStateDB) CreateAccount(addr common.Address) {
@@ -254,8 +308,12 @@ func (c *CarmenStateDB) GetRefund() uint64 {
 	return c.db.GetRefund()
 }
 
-func (c *CarmenStateDB) Finalise() {
+func (c *CarmenStateDB) EndTransaction() {
 	c.db.EndTransaction()
+}
+
+func (c *CarmenStateDB) Finalise(bool) {
+	// ignored
 }
 
 // SetTxContext sets the current transaction hash and index which are
@@ -267,6 +325,8 @@ func (c *CarmenStateDB) SetTxContext(txHash common.Hash, txIndex int) {
 }
 
 func (c *CarmenStateDB) BeginBlock(number uint64) {
+	utils.NewPointCache(pointCacheSize)
+	c.accessEvents = geth_state.NewAccessEvents(nil)
 	c.blockNum = number
 	if db, ok := c.db.(carmen.StateDB); ok {
 		db.BeginBlock()
@@ -279,9 +339,9 @@ func (c *CarmenStateDB) EndBlock(number uint64) {
 	}
 }
 
-func (c *CarmenStateDB) SetOnCommit(onCommit tracing.CommitHook) {
-	c.db.SetOnCommit(onCommit)
-}
+//func (c *CarmenStateDB) SetOnCommit(onCommit tracing.CommitHook) {
+//	c.db.SetOnCommit(onCommit)
+//}
 
 func (c *CarmenStateDB) GetStateHash() common.Hash {
 	return common.Hash(c.db.GetHash())
@@ -338,4 +398,10 @@ func (c *CarmenStateDB) Release() {
 	if db, ok := c.db.(carmen.NonCommittableStateDB); ok {
 		db.Release()
 	}
+}
+
+// AccessEvents returns an empty list of accessed states. In ethereum, this is used to
+// collect the accessed states for the stateless client.
+func (c *CarmenStateDB) AccessEvents() *geth_state.AccessEvents {
+	return c.accessEvents
 }

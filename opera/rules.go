@@ -1,20 +1,40 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package opera
 
 import (
+	"cmp"
 	"encoding/json"
-	"github.com/ethereum/go-ethereum/core/tracing"
+	"math"
 	"math/big"
+	"slices"
 	"time"
 
-	"github.com/Fantom-foundation/lachesis-base/inter/idx"
+	"github.com/0xsoniclabs/sonic/opera/contracts/evmwriter"
+	"github.com/0xsoniclabs/tosca/go/geth_adapter"
+	"github.com/0xsoniclabs/tosca/go/interpreter/lfvm"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/vm"
+
+	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	ethparams "github.com/ethereum/go-ethereum/params"
 
-	"github.com/Fantom-foundation/Tosca/go/geth_adapter"
-	"github.com/Fantom-foundation/Tosca/go/interpreter/lfvm"
-	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/Fantom-foundation/go-opera/opera/contracts/evmwriter"
+	"github.com/0xsoniclabs/sonic/inter"
 )
 
 const (
@@ -25,10 +45,18 @@ const (
 	berlinBit              = 1 << 0
 	londonBit              = 1 << 1
 	llrBit                 = 1 << 2
-	sonicBit               = 1 << 3
 
-	defaultMaxBlockGas          = 1_000_000_000
-	defaultTargetGasRate        = 15_000_000 // 15 MGas/s
+	// hard-forks
+	sonicBit   = 1 << 3
+	allegroBit = 1 << 4
+	brioBit    = 1 << 5
+
+	// optional features
+	singleProposerBlockFormationBit = 1 << 63
+
+	MinimumMaxBlockGas          = 5_000_000_000 // < must be large enough to allow internal transactions to seal blocks
+	MaximumMaxBlockGas          = math.MaxInt64 // < should fit into 64-bit signed integers to avoid parsing errors in third-party libraries
+	defaultTargetGasRate        = 15_000_000    // 15 MGas/s
 	defaultEventEmitterInterval = 600 * time.Millisecond
 )
 
@@ -86,7 +114,7 @@ type RulesRLP struct {
 	Upgrades Upgrades `rlp:"-"`
 }
 
-// Rules describes opera net.
+// Rules describes sonic net.
 // Note keep track of all the non-copiable variables in Copy()
 type Rules RulesRLP
 
@@ -127,9 +155,7 @@ type DagRules struct {
 // EmitterRules contains options for the emitter of Lachesis events.
 type EmitterRules struct {
 	// Interval defines the length of the period
-	// between events produced by the emitter in milliseconds.
-	// If set to zero, a heuristic is used producing irregular
-	// intervals.
+	// between events produced by the emitter in nanoseconds.
 	//
 	// The Interval is used to control the rate of event
 	// production by the emitter. It thus indirectly controls
@@ -143,7 +169,7 @@ type EmitterRules struct {
 
 	// StallThreshold defines a maximum time the confirmation of
 	// new events may be delayed before the emitter considers the
-	// network stalled.
+	// network stalled in nanoseconds.
 	//
 	// The emitter has two modes: normal and stalled. In normal
 	// mode, the emitter produces events at a regular interval, as
@@ -157,7 +183,7 @@ type EmitterRules struct {
 	StallThreshold inter.Timestamp
 
 	// StallInterval defines the length of the period between
-	// events produced by the emitter in milliseconds when the
+	// events produced by the emitter in nanoseconds when the
 	// network is stalled.
 	StalledInterval inter.Timestamp
 }
@@ -176,11 +202,11 @@ type EconomyRules struct {
 
 	// MinGasPrice defines a lower boundary for the gas price
 	// on the network. However, its interpretation is different
-	// in the context of the Fantom and Sonic networks.
+	// in the context of the Sonic networks.
 	//
-	// On the Fantom network: MinGasPrice is the minimum gas price
+	// On the Sonic network: MinGasPrice is the minimum gas price
 	// defining the base fee of a block. The MinGasPrice is set by
-	// the node driver and SFC on the Fantom network and adjusted
+	// the node driver and SFC on the Sonic network and adjusted
 	// based on load observed during an epoch. Base fees charged
 	// on the network correspond exactly to the MinGasPrice.
 	//
@@ -190,7 +216,7 @@ type EconomyRules struct {
 
 	// MinBaseFee is a lower bound for the base fee on the network.
 	// This option is only supported by the Sonic network. On the
-	// Fantom network it is ignored.
+	// Sonic network it is ignored.
 	//
 	// On the Sonic network, base fees are automatically adjusted
 	// after each block based on the observed gas consumption rate.
@@ -212,84 +238,141 @@ type BlocksRules struct {
 }
 
 type Upgrades struct {
+	// -- Sonic Chain --
 	Berlin bool
 	London bool
 	Llr    bool
-	Sonic  bool
+
+	// -- Sonic Chain Hard Forks --
+	Sonic   bool // < launch version of the Sonic chain, introducing Cancun features
+	Allegro bool // < first hard fork of the Sonic chain, introducing Prague features
+	Brio    bool // < second hard fork of the Sonic chain, introducing Osaka features
+
+	// -- Optional Features --
+
+	// SingleProposerBlockFormation enables the creation of full block proposals
+	// by a single proposer, rather than a distributed event-based protocol.
+	// This feature is introduced by V2.1 of the Sonic client. It thus
+	//
+	//    MUST ONLY BE ENABLED WHEN ALL NODES ARE RUNNING V2.1 OR LATER
+	//
+	// Any node not running V2.1 or later will ignore this flag, will not be
+	// able to process the new payload format used by this protocol, and
+	// eventually drop of the network due to the inability to stay synced.
+	//
+	// Given the conditions stated above, the feature is considered optional.
+	// It can be enabled or disabled at any time. Changes in the feature state
+	// become effective at the start of the next epoch.
+	SingleProposerBlockFormation bool
 }
 
+// UpgradeHeight contains the information about the block height at which
+// the upgrades become effective. The upgrades are defined by the Upgrades
+// struct, which contains the feature flags for the Sonic chain.
+// The Height field is the block height at which the upgrades become effective.
+// The Time field is the timestamp, in the current implementation, it is ignored
+// (See [CreateTransientEvmChainConfig] for details).
 type UpgradeHeight struct {
 	Upgrades Upgrades
 	Height   idx.Block
 	Time     inter.Timestamp
 }
 
-var BaseChainConfig = ethparams.ChainConfig{
-	ChainID:                       big.NewInt(1337),
-	HomesteadBlock:                big.NewInt(0),
-	DAOForkBlock:                  nil,
-	DAOForkSupport:                false,
-	EIP150Block:                   big.NewInt(0),
-	EIP155Block:                   big.NewInt(0),
-	EIP158Block:                   big.NewInt(0),
-	ByzantiumBlock:                big.NewInt(0),
-	ConstantinopleBlock:           big.NewInt(0),
-	PetersburgBlock:               big.NewInt(0),
-	IstanbulBlock:                 big.NewInt(0),
-	MuirGlacierBlock:              big.NewInt(0), // EIP-2384: Muir Glacier Difficulty Bomb Delay - relevant for ethereum only
-	BerlinBlock:                   nil,           // to be overwritten in EvmChainConfig
-	LondonBlock:                   nil,           // to be overwritten in EvmChainConfig
-	ArrowGlacierBlock:             nil,           // EIP-4345: Difficulty Bomb Delay - relevant for ethereum only
-	GrayGlacierBlock:              nil,           // EIP-5133: Delaying Difficulty Bomb - relevant for ethereum only
-	MergeNetsplitBlock:            nil,
-	ShanghaiTime:                  nil, // to be overwritten in EvmChainConfig
-	CancunTime:                    nil, // to be overwritten in EvmChainConfig
-	PragueTime:                    nil,
-	VerkleTime:                    nil,
-	TerminalTotalDifficulty:       nil,
-	TerminalTotalDifficultyPassed: true,
-	Ethash:                        new(ethparams.EthashConfig),
-	Clique:                        nil,
-}
+// CreateTransientEvmChainConfig creates an instance of ethparams.ChainConfig
+// for the given block height. The instance of ethparams.ChainConfig shall not be
+// stored for later use, and it should not be considered as a canonical source of
+// information about the chain configuration. It is only valid for the given block
+// height and should be used only for the purpose of configuring Geth tooling.
+//
+// - chainID is semantically equivalent to the Rules.NetworkID
+// - upgradeHeights is a list of UpgradeHeight instances that define the
+// block heights at which upgrades become effective.
+// - currentBlockHeight is the current block height at which the chain config is
+// created.
+//
+// Note about timestamps:
+// go-ethereum's ChainConfig uses timestamps to determine the activation of
+// upgrades from Shanghai onwards. However, Sonic timestamps are measure in
+// nanoseconds, go-ethereum routines use seconds, and the Sonic network has a
+// sub second cadence.  Therefore it is not possible to use timestamps to
+// determine the activation of upgrades. Instead, Sonic relies solely on block
+// heights.
+// Timestamps contained in the returned instance are always set to 0, which
+// considered to be always a past timestamp. This is the reason why the returned
+// ChainConfig is not valid processing any other block height than the one
+// specified by CurrentBlockHeight.
+func CreateTransientEvmChainConfig(
+	chainID uint64,
+	upgradeHeights []UpgradeHeight,
+	currentBlockHeight idx.Block,
+) *ethparams.ChainConfig {
 
-// EvmChainConfig returns ChainConfig for transactions signing and execution
-func (r Rules) EvmChainConfig(hh []UpgradeHeight) *ethparams.ChainConfig {
-	cfg := BaseChainConfig
-	cfg.ChainID = new(big.Int).SetUint64(r.NetworkID)
-	for i, h := range hh {
-		height := new(big.Int)
-		timestamp := new(uint64)
-		if i > 0 {
-			height.SetUint64(uint64(h.Height))
-			*timestamp = uint64(h.Time)
-		}
-		if cfg.BerlinBlock == nil && h.Upgrades.Berlin {
-			cfg.BerlinBlock = height
-		}
-		if !h.Upgrades.Berlin {
-			// disabling upgrade breaks the history replay - should be never used
-			cfg.BerlinBlock = nil
-		}
+	timestampInThePast := uint64(0)
 
-		if cfg.LondonBlock == nil && h.Upgrades.London {
-			cfg.LondonBlock = height
-		}
-		if !h.Upgrades.London {
-			// disabling upgrade breaks the history replay - should be never used
-			cfg.LondonBlock = nil
-		}
+	cfg := ethparams.ChainConfig{
+		ChainID: new(big.Int).SetUint64(chainID),
+		// Following upgrades are always enabled in Sonic (from block height 0):
+		HomesteadBlock:      big.NewInt(0),
+		EIP150Block:         big.NewInt(0),
+		EIP155Block:         big.NewInt(0),
+		EIP158Block:         big.NewInt(0),
+		ByzantiumBlock:      big.NewInt(0),
+		ConstantinopleBlock: big.NewInt(0),
+		PetersburgBlock:     big.NewInt(0),
+		IstanbulBlock:       big.NewInt(0),
+		BerlinBlock:         big.NewInt(0),
+		LondonBlock:         big.NewInt(0),
+		// Following upgrades are always enabled in Sonic (past timestamp):
+		ShanghaiTime: &timestampInThePast,
+		CancunTime:   &timestampInThePast,
+	}
 
-		if cfg.CancunTime == nil && h.Upgrades.Sonic {
-			cfg.ShanghaiTime = timestamp
-			cfg.CancunTime = timestamp
-		}
-		if !h.Upgrades.Sonic {
-			// disabling upgrade breaks the history replay - should be never used
-			cfg.ShanghaiTime = nil
-			cfg.CancunTime = nil
+	sortedUpgradeHeights := make([]UpgradeHeight, len(upgradeHeights))
+	copy(sortedUpgradeHeights, upgradeHeights)
+
+	slices.SortFunc(sortedUpgradeHeights, func(a, b UpgradeHeight) int {
+		return cmp.Compare(a.Height, b.Height)
+	})
+
+	// reverse iterate through the upgrade heights
+	for i := len(sortedUpgradeHeights) - 1; i >= 0; i-- {
+		if sortedUpgradeHeights[i].Height <= currentBlockHeight {
+			upgrade := sortedUpgradeHeights[i].Upgrades
+
+			if upgrade.Allegro {
+				cfg.PragueTime = &timestampInThePast
+			}
+
+			if upgrade.Brio {
+				cfg.OsakaTime = &timestampInThePast
+			}
+
+			break
 		}
 	}
 	return &cfg
+}
+
+// GetSonicUpgrades contains the feature flags for the Sonic upgrade.
+func GetSonicUpgrades() Upgrades {
+	return Upgrades{
+		Berlin:  true,
+		London:  true,
+		Llr:     false,
+		Sonic:   true,
+		Allegro: false,
+	}
+}
+
+// GetAllegroUpgrades contains the feature flags for the Allegro upgrade.
+func GetAllegroUpgrades() Upgrades {
+	return Upgrades{
+		Berlin:  true,
+		London:  true,
+		Llr:     false,
+		Sonic:   true,
+		Allegro: true,
+	}
 }
 
 func MainNetRules() Rules {
@@ -301,13 +384,14 @@ func MainNetRules() Rules {
 		Epochs:    DefaultEpochsRules(),
 		Economy:   DefaultEconomyRules(),
 		Blocks: BlocksRules{
-			MaxBlockGas:             defaultMaxBlockGas,
+			MaxBlockGas:             MinimumMaxBlockGas,
 			MaxEmptyBlockSkipPeriod: inter.Timestamp(1 * time.Minute),
 		},
+		Upgrades: GetAllegroUpgrades(),
 	}
 }
 
-func FakeNetRules() Rules {
+func FakeNetRules(upgrades Upgrades) Rules {
 	return Rules{
 		Name:      "fake",
 		NetworkID: FakeNetworkID,
@@ -316,15 +400,10 @@ func FakeNetRules() Rules {
 		Epochs:    FakeNetEpochsRules(),
 		Economy:   FakeEconomyRules(),
 		Blocks: BlocksRules{
-			MaxBlockGas:             defaultMaxBlockGas,
-			MaxEmptyBlockSkipPeriod: inter.Timestamp(3 * time.Second),
+			MaxBlockGas:             MinimumMaxBlockGas,
+			MaxEmptyBlockSkipPeriod: inter.Timestamp(4 * time.Second),
 		},
-		Upgrades: Upgrades{
-			Berlin: true,
-			London: true,
-			Llr:    false,
-			Sonic:  true,
-		},
+		Upgrades: upgrades,
 	}
 }
 
@@ -365,7 +444,7 @@ func DefaultEmitterRules() EmitterRules {
 func DefaultEpochsRules() EpochsRules {
 	return EpochsRules{
 		MaxEpochGas:      defaultTargetGasRate * 300, // ~5 minute epoch
-		MaxEpochDuration: inter.Timestamp(4 * time.Hour),
+		MaxEpochDuration: inter.Timestamp(1 * time.Hour),
 	}
 }
 
@@ -418,7 +497,33 @@ func DefaultGasPowerRules() GasPowerRules {
 func (r Rules) Copy() Rules {
 	cp := r
 	cp.Economy.MinGasPrice = new(big.Int).Set(r.Economy.MinGasPrice)
+
+	// there is a bug in pre-Allegro versions that MinBaseFee is not deep copied.
+	// Since switching to deep-copy is not possible in a network running combination
+	// of Allegro and pre-Allegro versions, we need to enable this fix only when Allegro is applied.
+	if cp.Upgrades.Allegro {
+		cp.Economy.MinBaseFee = new(big.Int).Set(r.Economy.MinBaseFee)
+	}
+
 	return cp
+}
+
+// Validate checks the rules for consistency and safety. Rules are considered safe if
+// they do not risk stalling the network or preventing future rule updates.
+//
+// Note: the validation is very liberal to allow a maximum flexibility in the rules.
+// It merely checks for the most critical configuration errors that may lead to network
+// stalls or rule update issues. However, many valid configurations may still result
+// in undesirable network behavior. Rule-setters need to be aware of the implications
+// of their choices and should always test their rules in a controlled environment.
+// This validation is not a substitute for proper testing.
+//
+// previous Rules is used to check for changes in the rules that may conflict with
+// currently running network. It is expected that the rules are validated before
+// they are applied to the network, and that the previous rules are the rules currently
+// running.
+func (r Rules) Validate(previous Rules) error {
+	return validate(previous, r)
 }
 
 func (r Rules) String() string {

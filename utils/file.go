@@ -1,7 +1,22 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package utils
 
 import (
-	"io"
 	"os"
 	"path/filepath"
 
@@ -27,28 +42,4 @@ func OpenFile(path string, isSyncMode bool) *os.File {
 func FileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
-}
-
-func FilePut(path string, content []byte, isSyncMode bool) {
-	fh := OpenFile(path, isSyncMode)
-	defer fh.Close()
-	if err := fh.Truncate(0); err != nil {
-		log.Crit("Failed to truncate file", "file", path, "err", err)
-	}
-	if _, err := fh.Write(content); err != nil {
-		log.Crit("Failed to write to file", "file", path, "err", err)
-	}
-}
-
-func FileGet(path string) []byte {
-	if !FileExists(path) {
-		return nil
-	}
-	fh, err := os.Open(path)
-	if err != nil {
-		log.Crit("Failed to open file", "file", path, "err", err)
-	}
-	defer fh.Close()
-	res, _ := io.ReadAll(fh)
-	return res
 }

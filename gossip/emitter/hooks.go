@@ -1,9 +1,25 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package emitter
 
 import (
 	"time"
 
-	"github.com/Fantom-foundation/go-opera/utils/txtime"
+	"github.com/0xsoniclabs/sonic/utils/txtime"
 
 	"github.com/Fantom-foundation/lachesis-base/emitter/ancestor"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
@@ -11,10 +27,10 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 
-	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/Fantom-foundation/go-opera/opera/contracts/emitterdriver"
-	"github.com/Fantom-foundation/go-opera/utils"
-	"github.com/Fantom-foundation/go-opera/utils/adapters/vecmt2dagidx"
+	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/opera/contracts/emitterdriver"
+	"github.com/0xsoniclabs/sonic/utils"
+	"github.com/0xsoniclabs/sonic/utils/adapters/vecmt2dagidx"
 )
 
 // OnNewEpoch should be called after each epoch change, and on startup
@@ -27,16 +43,19 @@ func (em *Emitter) OnNewEpoch(newValidators *pos.Validators, newEpoch idx.Epoch)
 	if em.maxParents > rules.Dag.MaxParents {
 		em.maxParents = rules.Dag.MaxParents
 	}
-	if em.validators != nil && em.isValidator() && !em.validators.Exists(em.config.Validator.ID) && newValidators.Exists(em.config.Validator.ID) {
+	validators := em.validators.Load()
+	if validators != nil && em.isValidator() && !validators.Exists(em.config.Validator.ID) && newValidators.Exists(em.config.Validator.ID) {
 		em.syncStatus.becameValidator = time.Now()
 	}
 
-	em.validators, em.epoch = newValidators, newEpoch
+	em.validators.Store(newValidators)
+	em.epoch.Store(uint32(newEpoch))
 
 	if !em.isValidator() {
 		return
 	}
-	em.prevEmittedAtTime = em.loadPrevEmitTime()
+	lastEmit := em.loadPrevEmitTime()
+	em.prevEmittedAtTime.Store(&lastEmit)
 
 	em.originatedTxs.Clear()
 	em.pendingGas = 0
@@ -67,8 +86,13 @@ func (em *Emitter) OnNewEpoch(newValidators *pos.Validators, newEpoch idx.Epoch)
 	}
 
 	// sanity check to ensure that durations aren't too small/large
+	em.intervalsMinLock.Lock()
 	em.intervals.Min = maxDuration(minDuration(em.config.EmitIntervals.Min*20, extMinInterval), em.config.EmitIntervals.Min/4)
-	em.globalConfirmingInterval = maxDuration(minDuration(em.config.EmitIntervals.Confirming*20, extConfirmingInterval), em.config.EmitIntervals.Confirming/4)
+	em.intervalsMinLock.Unlock()
+	em.globalConfirmingInterval.Store(
+		uint64(maxDuration(
+			minDuration(em.config.EmitIntervals.Confirming*20, extConfirmingInterval),
+			em.config.EmitIntervals.Confirming/4)))
 	em.recountConfirmingIntervals(newValidators)
 
 	if switchToFCIndexer {
@@ -86,6 +110,9 @@ func (em *Emitter) OnNewEpoch(newValidators *pos.Validators, newEpoch idx.Epoch)
 			return updMetric(median, current, update, validatorIdx, newValidators)
 		})
 	em.payloadIndexer = ancestor.NewPayloadIndexer(PayloadIndexerSize)
+
+	// forget all seen proposals of the previous epoch
+	em.proposalTracker.Reset()
 }
 
 // OnEventConnected tracks new events
@@ -98,9 +125,9 @@ func (em *Emitter) OnEventConnected(e inter.EventPayloadI) {
 	} else if em.quorumIndexer != nil {
 		em.quorumIndexer.ProcessEvent(e, e.Creator() == em.config.Validator.ID)
 	}
-	em.payloadIndexer.ProcessEvent(e, ancestor.Metric(e.Txs().Len()))
-	for _, tx := range e.Txs() {
-		addr, _ := types.Sender(em.world.TxSigner, tx)
+	em.payloadIndexer.ProcessEvent(e, ancestor.Metric(e.Transactions().Len()))
+	for _, tx := range e.Transactions() {
+		addr, _ := types.Sender(em.world.TransactionSigner, tx)
 		em.originatedTxs.Inc(addr)
 	}
 	em.pendingGas += e.GasPowerUsed()
@@ -112,6 +139,11 @@ func (em *Emitter) OnEventConnected(e inter.EventPayloadI) {
 	delete(em.challenges, e.Creator())
 	// mark validator as online
 	delete(em.offlineValidators, e.Creator())
+
+	// track proposals to avoid proposing blocks that are already pending
+	if proposal := e.Payload().Proposal; proposal != nil {
+		em.proposalTracker.RegisterSeenProposal(e.Frame(), proposal.Number)
+	}
 }
 
 func (em *Emitter) OnEventConfirmed(he inter.EventI) {
@@ -127,8 +159,8 @@ func (em *Emitter) OnEventConfirmed(he inter.EventI) {
 	}
 	if he.AnyTxs() {
 		e := em.world.GetEventPayload(he.ID())
-		for _, tx := range e.Txs() {
-			addr, _ := types.Sender(em.world.TxSigner, tx)
+		for _, tx := range e.Transactions() {
+			addr, _ := types.Sender(em.world.TransactionSigner, tx)
 			em.originatedTxs.Dec(addr)
 
 			if he.Creator() == em.config.Validator.ID {

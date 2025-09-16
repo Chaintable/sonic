@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package iodb
 
 import (
@@ -6,30 +22,8 @@ import (
 	"github.com/Fantom-foundation/lachesis-base/common/bigendian"
 	"github.com/Fantom-foundation/lachesis-base/kvdb"
 
-	"github.com/Fantom-foundation/go-opera/utils/ioread"
+	"github.com/0xsoniclabs/sonic/utils/ioread"
 )
-
-func Write(writer io.Writer, it kvdb.Iterator) error {
-	for it.Next() {
-		_, err := writer.Write(bigendian.Uint32ToBytes(uint32(len(it.Key()))))
-		if err != nil {
-			return err
-		}
-		_, err = writer.Write(it.Key())
-		if err != nil {
-			return err
-		}
-		_, err = writer.Write(bigendian.Uint32ToBytes(uint32(len(it.Value()))))
-		if err != nil {
-			return err
-		}
-		_, err = writer.Write(it.Value())
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
 
 func NewIterator(reader io.Reader) kvdb.Iterator {
 	return &Iterator{

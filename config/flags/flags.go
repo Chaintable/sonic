@@ -20,8 +20,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Fantom-foundation/go-opera/evmcore"
-	"github.com/Fantom-foundation/go-opera/gossip"
+	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/gossip"
 	"github.com/Fantom-foundation/lachesis-base/utils/cachescale"
 	pcsclite "github.com/gballet/go-libpcsclite"
 	"gopkg.in/urfave/cli.v1"
@@ -88,8 +88,13 @@ var (
 	}
 	TxPoolPriceLimitFlag = cli.Uint64Flag{
 		Name:  "txpool.pricelimit",
-		Usage: "Minimum gas price limit to enforce for acceptance into the pool",
-		Value: evmcore.DefaultTxPoolConfig.PriceLimit,
+		Usage: "This flag will be DEPRECATED, please use txpool.mintip instead. Minimum gas tip required for a transaction to be accepted into the pool",
+		Value: evmcore.DefaultTxPoolConfig.MinimumTip,
+	}
+	TxPoolMinTipFlag = cli.Uint64Flag{
+		Name:  "txpool.mintip",
+		Usage: "Minimum gas tip required for a transaction to be accepted into the pool",
+		Value: evmcore.DefaultTxPoolConfig.MinimumTip,
 	}
 	TxPoolPriceBumpFlag = cli.Uint64Flag{
 		Name:  "txpool.pricebump",
@@ -269,6 +274,10 @@ var (
 		Name:  "config",
 		Usage: "TOML configuration file",
 	}
+	DumpConfigFileFlag = cli.StringFlag{
+		Name:  "dump-config",
+		Usage: "write configuration in TOML file and exit",
+	}
 	CacheFlag = cli.IntFlag{
 		Name:  "cache",
 		Usage: "Megabytes of memory allocated to internal caching",
@@ -355,26 +364,46 @@ var (
 		Name: "statedb.livecache",
 		Usage: fmt.Sprintf("Size of live db cache in bytes. Leaving this blank (which is generally recommended),"+
 			"or setting this to <1 will automatically allocate cache size depending on how much cache you use with %s."+
-			"Setting this value to <=2000 will result in pre-confugired cache capacity of 2KB", CacheFlag.Name),
+			"Setting this value to <=2000 will result in pre-configured cache capacity of 2KB", CacheFlag.Name),
 		Value: 0,
 	}
 	ArchiveCacheFlag = cli.IntFlag{
 		Name: "statedb.archivecache",
 		Usage: fmt.Sprintf("Size of archive cache in bytes. Leaving this blank (which is generally recommended),"+
 			"or setting this to <1 will automatically allocate cache size depending on how much cache you use with %s."+
-			"Setting this value to <=2000 will result in pre-confugired cache capacity of 2KB", CacheFlag.Name),
+			"Setting this value to <=2000 will result in pre-configured cache capacity of 2KB", CacheFlag.Name),
 		Value: 0,
 	}
 
-	VmTrace = cli.StringFlag{
-		Name:  "vmtrace",
-		Usage: fmt.Sprintf("type of vm trace", CacheFlag.Name),
-		Value: "",
+	//VmTrace = cli.StringFlag{
+	//	Name:  "vmtrace",
+	//	Usage: fmt.Sprintf("type of vm trace", CacheFlag.Name),
+	//	Value: "",
+	//}
+	//
+	//VMTraceJsonConfig = cli.StringFlag{
+	//	Name:  "vmtrace.jsonconfig",
+	//	Usage: fmt.Sprintf("vm trace config", CacheFlag.Name),
+	//	Value: "{}",
+	//}
+	StateDbCacheCapacityFlag = cli.IntFlag{
+		Name: "statedb.cache",
+		Usage: "The number of cached data elements by each StateDb instance. Since this is an experimental feature " +
+			"used mainly by tests it is generally recommended leaving this blank. In tests no value lower than 1024 " +
+			"is recommended. Setting this to <1 will automatically set the cache capacity to a DB defined default value.",
+		Value: 0,
+	}
+	StateDbCheckPointInterval = cli.IntFlag{
+		Name:   "statedb.checkpointinterval",
+		Hidden: true, // Intended for testing
+		Usage: "The number of blocks after which a db healing checkpoint will be created. " +
+			"Setting this to <1 will automatically set the value to a DB defined default.",
+		Value: 0,
 	}
 
-	VMTraceJsonConfig = cli.StringFlag{
-		Name:  "vmtrace.jsonconfig",
-		Usage: fmt.Sprintf("vm trace config", CacheFlag.Name),
-		Value: "{}",
+	// --- Testing Only ---
+	TEST_ONLY_DisableTransactionPoolValidation = cli.BoolFlag{
+		Name:  "disable-txPool-validation",
+		Usage: "Disable transaction pool validation",
 	}
 )

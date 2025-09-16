@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package vecmt
 
 import (
@@ -6,36 +22,36 @@ import (
 	"github.com/Fantom-foundation/lachesis-base/vecengine"
 	"github.com/Fantom-foundation/lachesis-base/vecfc"
 
-	"github.com/Fantom-foundation/go-opera/inter"
+	"github.com/0xsoniclabs/sonic/inter"
 )
 
 type CreationTimer interface {
 	CreationTime() inter.Timestamp
 }
 
-func (b *HighestBefore) InitWithEvent(i idx.Validator, e dag.Event) {
-	b.VSeq.InitWithEvent(i, e)
-	b.VTime.Set(i, e.(CreationTimer).CreationTime())
+func (hb *HighestBefore) InitWithEvent(i idx.Validator, e dag.Event) {
+	hb.VSeq.InitWithEvent(i, e)
+	hb.VTime.Set(i, e.(CreationTimer).CreationTime())
 }
 
-func (b *HighestBefore) IsEmpty(i idx.Validator) bool {
-	return b.VSeq.IsEmpty(i)
+func (hb *HighestBefore) IsEmpty(i idx.Validator) bool {
+	return hb.VSeq.IsEmpty(i)
 }
 
-func (b *HighestBefore) IsForkDetected(i idx.Validator) bool {
-	return b.VSeq.IsForkDetected(i)
+func (hb *HighestBefore) IsForkDetected(i idx.Validator) bool {
+	return hb.VSeq.IsForkDetected(i)
 }
 
-func (b *HighestBefore) Seq(i idx.Validator) idx.Event {
-	return b.VSeq.Seq(i)
+func (hb *HighestBefore) Seq(i idx.Validator) idx.Event {
+	return hb.VSeq.Seq(i)
 }
 
-func (b *HighestBefore) MinSeq(i idx.Validator) idx.Event {
-	return b.VSeq.MinSeq(i)
+func (hb *HighestBefore) MinSeq(i idx.Validator) idx.Event {
+	return hb.VSeq.MinSeq(i)
 }
 
-func (b *HighestBefore) SetForkDetected(i idx.Validator) {
-	b.VSeq.SetForkDetected(i)
+func (hb *HighestBefore) SetForkDetected(i idx.Validator) {
+	hb.VSeq.SetForkDetected(i)
 }
 
 func (hb *HighestBefore) CollectFrom(_other vecengine.HighestBeforeI, num idx.Validator) {

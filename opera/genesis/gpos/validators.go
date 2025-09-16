@@ -1,10 +1,26 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package gpos
 
 import (
-	"github.com/Fantom-foundation/go-opera/inter"
+	"github.com/0xsoniclabs/sonic/inter"
 	"github.com/ethereum/go-ethereum/common"
 
-	"github.com/Fantom-foundation/go-opera/inter/validatorpk"
+	"github.com/0xsoniclabs/sonic/inter/validatorpk"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 )
 
@@ -31,22 +47,4 @@ func (gv Validators) Map() map[idx.ValidatorID]Validator {
 		validators[val.ID] = val
 	}
 	return validators
-}
-
-// PubKeys returns not sorted genesis pub keys
-func (gv Validators) PubKeys() []validatorpk.PubKey {
-	res := make([]validatorpk.PubKey, 0, len(gv))
-	for _, v := range gv {
-		res = append(res, v.PubKey)
-	}
-	return res
-}
-
-// Addresses returns not sorted genesis addresses
-func (gv Validators) Addresses() []common.Address {
-	res := make([]common.Address, 0, len(gv))
-	for _, v := range gv {
-		res = append(res, v.Address)
-	}
-	return res
 }

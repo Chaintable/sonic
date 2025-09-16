@@ -1,8 +1,22 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package emitter
 
 import (
-	"github.com/Fantom-foundation/lachesis-base/emitter/ancestor"
-	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/Fantom-foundation/lachesis-base/utils/piecefunc"
 )
 
@@ -57,74 +71,4 @@ var (
 			Y: 0.9999 * piecefunc.DecimalUnit,
 		},
 	})
-	// eventMetricF is a piecewise function for event metric adjustment depending on a non-adjusted event metric
-	eventMetricF = piecefunc.NewFunc([]piecefunc.Dot{
-		{ // event metric is never zero
-			X: 0,
-			Y: 0.005 * piecefunc.DecimalUnit,
-		},
-		{
-			X: 0.01 * piecefunc.DecimalUnit,
-			Y: 0.03 * piecefunc.DecimalUnit,
-		},
-		{ // if metric is below ~0.2, then validator shouldn't emit event unless waited very long
-			X: 0.2 * piecefunc.DecimalUnit,
-			Y: 0.05 * piecefunc.DecimalUnit,
-		},
-		{
-			X: 0.3 * piecefunc.DecimalUnit,
-			Y: 0.22 * piecefunc.DecimalUnit,
-		},
-		{ // ~0.3-0.5 is an optimal metric to emit an event
-			X: 0.4 * piecefunc.DecimalUnit,
-			Y: 0.45 * piecefunc.DecimalUnit,
-		},
-		{
-			X: 1.0 * piecefunc.DecimalUnit,
-			Y: 1.0 * piecefunc.DecimalUnit,
-		},
-	})
-	validatorsToOverheadF = piecefunc.NewFunc([]piecefunc.Dot{
-		{
-			X: 0,
-			Y: 0,
-		},
-		{
-			X: 70,
-			Y: 0.05 * piecefunc.DecimalUnit,
-		},
-		{
-			X: 100,
-			Y: 0.1 * piecefunc.DecimalUnit,
-		},
-		{
-			X: 120,
-			Y: 0.3 * piecefunc.DecimalUnit,
-		},
-		{
-			X: 150,
-			Y: 0.5 * piecefunc.DecimalUnit,
-		},
-		{
-			X: 200,
-			Y: 0.8 * piecefunc.DecimalUnit,
-		},
-		{
-			X: 220,
-			Y: 0.95 * piecefunc.DecimalUnit,
-		},
-		{
-			X: 100000,
-			Y: 1.0 * piecefunc.DecimalUnit,
-		},
-	})
-	overheadF = func(validatorsNum idx.Validator, busyRate uint64) uint64 {
-		if busyRate > piecefunc.DecimalUnit {
-			busyRate = piecefunc.DecimalUnit
-		}
-		return validatorsToOverheadF(uint64(validatorsNum)) * busyRate / piecefunc.DecimalUnit
-	}
-	overheadAdjustedEventMetricF = func(validatorsNum idx.Validator, busyRate uint64, eventMetric ancestor.Metric) ancestor.Metric {
-		return ancestor.Metric(piecefunc.DecimalUnit-overheadF(validatorsNum, busyRate)) * eventMetric / piecefunc.DecimalUnit
-	}
 )

@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package emitter
 
 import (
@@ -11,11 +27,11 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
 
-	"github.com/Fantom-foundation/go-opera/eventcheck/epochcheck"
-	"github.com/Fantom-foundation/go-opera/eventcheck/gaspowercheck"
-	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/Fantom-foundation/go-opera/utils"
-	"github.com/Fantom-foundation/go-opera/utils/txtime"
+	"github.com/0xsoniclabs/sonic/eventcheck/epochcheck"
+	"github.com/0xsoniclabs/sonic/eventcheck/gaspowercheck"
+	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/utils"
+	"github.com/0xsoniclabs/sonic/utils/txtime"
 )
 
 const (
@@ -42,7 +58,7 @@ func (em *Emitter) maxGasPowerToUse(e *inter.MutableEventPayload) uint64 {
 		upperThreshold := em.config.LimitedTpsThreshold
 		downThreshold := em.config.NoTxsThreshold
 
-		estimatedAlloc := gaspowercheck.CalcValidatorGasPower(e, e.CreationTime(), e.MedianTime(), 0, em.validators, gaspowercheck.Config{
+		estimatedAlloc := gaspowercheck.CalcValidatorGasPower(e, e.CreationTime(), e.MedianTime(), 0, em.validators.Load(), gaspowercheck.Config{
 			Idx:                inter.LongTermGas,
 			AllocPerSec:        rules.Economy.LongGasPower.AllocPerSec * 4 / 5,
 			MaxAllocPeriod:     inter.Timestamp(time.Minute),
@@ -148,11 +164,22 @@ func (em *Emitter) addTxs(e *inter.MutableEventPayload, sorted *transactionsByPr
 		return
 	}
 
+	totalTxSizeInBytes := uint64(0)
+
 	// sort transactions by price and nonce
 	rules := em.world.GetRules()
 	for tx, _ := sorted.Peek(); tx != nil; tx, _ = sorted.Peek() {
 		resolvedTx := tx.Resolve()
-		sender, _ := types.Sender(em.world.TxSigner, resolvedTx)
+
+		// check transaction size limits
+		txSize := resolvedTx.Size()
+		if totalTxSizeInBytes+txSize > maxTotalTransactionsSizeInEventInBytes {
+			txsSkippedSizeLimit.Inc(1)
+			sorted.Pop()
+			continue
+		}
+
+		sender, _ := types.Sender(em.world.TransactionSigner, resolvedTx)
 		// check transaction epoch rules (tx type, gas price)
 		if epochcheck.CheckTxs(types.Transactions{resolvedTx}, rules) != nil {
 			txsSkippedEpochRules.Inc(1)
@@ -176,7 +203,7 @@ func (em *Emitter) addTxs(e *inter.MutableEventPayload, sorted *transactionsByPr
 			continue
 		}
 		// my turn, i.e. try to not include the same tx simultaneously by different validators
-		if !em.isMyTxTurn(tx.Hash, sender, resolvedTx.Nonce(), time.Now(), em.validators, e.Creator(), em.epoch) {
+		if !em.isMyTxTurn(tx.Hash, sender, resolvedTx.Nonce(), time.Now(), em.validators.Load(), e.Creator(), idx.Epoch(em.epoch.Load())) {
 			txsSkippedNotMyTurn.Inc(1)
 			sorted.Pop()
 			continue
@@ -190,7 +217,8 @@ func (em *Emitter) addTxs(e *inter.MutableEventPayload, sorted *transactionsByPr
 		// add
 		e.SetGasPowerUsed(e.GasPowerUsed() + tx.Gas)
 		e.SetGasPowerLeft(e.GasPowerLeft().Sub(tx.Gas))
-		e.SetTxs(append(e.Txs(), resolvedTx))
+		e.SetTxs(append(e.Transactions(), resolvedTx))
+		totalTxSizeInBytes += txSize
 		sorted.Shift()
 	}
 }

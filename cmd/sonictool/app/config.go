@@ -1,10 +1,28 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package app
 
 import (
 	"fmt"
-	"github.com/Fantom-foundation/go-opera/config"
-	"gopkg.in/urfave/cli.v1"
 	"os"
+
+	"github.com/0xsoniclabs/sonic/config"
+	"github.com/0xsoniclabs/sonic/utils/caution"
+	"gopkg.in/urfave/cli.v1"
 )
 
 func checkConfig(ctx *cli.Context) error {
@@ -17,7 +35,7 @@ func checkConfig(ctx *cli.Context) error {
 }
 
 // dumpConfig is the dumpconfig command.
-func dumpConfig(ctx *cli.Context) error {
+func dumpConfig(ctx *cli.Context) (err error) {
 	cfg, err := config.MakeAllConfigs(ctx)
 	if err != nil {
 		return err
@@ -35,10 +53,12 @@ func dumpConfig(ctx *cli.Context) error {
 		if err != nil {
 			return err
 		}
-		defer dump.Close()
+		defer caution.CloseAndReportError(&err, dump, "failed to close config file")
 	}
-	dump.WriteString(comment)
-	dump.Write(out)
-
-	return nil
+	_, err = dump.WriteString(comment)
+	if err != nil {
+		return err
+	}
+	_, err = dump.Write(out)
+	return err
 }

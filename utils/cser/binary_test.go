@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package cser
 
 import (
@@ -9,7 +25,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/Fantom-foundation/go-opera/utils/fast"
+	"github.com/0xsoniclabs/sonic/utils/fast"
 )
 
 func TestEmpty(t *testing.T) {
@@ -155,8 +171,8 @@ func TestVals(t *testing.T) {
 	var (
 		expBigInt     = []*big.Int{big.NewInt(0), big.NewInt(0xFFFFF)}
 		expBool       = []bool{true, false}
-		expFixedBytes = [][]byte{[]byte{}, randBytes(0xFF)}
-		expSliceBytes = [][]byte{[]byte{}, randBytes(0xFF)}
+		expFixedBytes = [][]byte{{}, randBytes(0xFF)}
+		expSliceBytes = [][]byte{{}, randBytes(0xFF)}
 		expU8         = []uint8{0, 1, 0xFF}
 		expU16        = []uint16{0, 1, 0xFFFF}
 		expU32        = []uint32{0, 1, 0xFFFFFFFF}

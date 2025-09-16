@@ -1,21 +1,39 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package app
 
 import (
 	"fmt"
-	"github.com/Fantom-foundation/lachesis-base/utils/cachescale"
 	"os"
 	"strings"
 	"testing"
 
-	"github.com/Fantom-foundation/go-opera/cmd/sonictool/genesis"
-	"github.com/Fantom-foundation/go-opera/config"
-	"github.com/Fantom-foundation/go-opera/integration/makefakegenesis"
-	futils "github.com/Fantom-foundation/go-opera/utils"
+	"github.com/Fantom-foundation/lachesis-base/utils/cachescale"
+
+	"github.com/0xsoniclabs/sonic/cmd/sonictool/genesis"
+	"github.com/0xsoniclabs/sonic/config"
+	"github.com/0xsoniclabs/sonic/integration/makefakegenesis"
+	"github.com/0xsoniclabs/sonic/opera"
+	futils "github.com/0xsoniclabs/sonic/utils"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/docker/docker/pkg/reexec"
 	"github.com/ethereum/go-ethereum/common"
 
-	"github.com/Fantom-foundation/go-opera/cmd/cmdtest"
+	"github.com/0xsoniclabs/sonic/cmd/cmdtest"
 )
 
 func tmpdir(t *testing.T) string {
@@ -23,8 +41,17 @@ func tmpdir(t *testing.T) string {
 }
 
 func initFakenetDatadir(dataDir string, validatorsNum idx.Validator) {
-	genesisStore := makefakegenesis.FakeGenesisStore(validatorsNum, futils.ToFtm(1000000000), futils.ToFtm(5000000))
-	defer genesisStore.Close()
+	genesisStore := makefakegenesis.FakeGenesisStore(
+		validatorsNum,
+		futils.ToFtm(1000000000),
+		futils.ToFtm(5000000),
+		opera.GetSonicUpgrades(),
+	)
+	defer func() {
+		if err := genesisStore.Close(); err != nil {
+			panic(fmt.Errorf("failed to close genesis store: %v", err))
+		}
+	}()
 
 	if err := genesis.ImportGenesisStore(genesis.ImportParams{
 		GenesisStore: genesisStore,
@@ -33,7 +60,7 @@ func initFakenetDatadir(dataDir string, validatorsNum idx.Validator) {
 		LiveDbCache:  1, // Set lowest cache
 		ArchiveCache: 1, // Set lowest cache
 	}); err != nil {
-		panic(err)
+		panic(fmt.Errorf("failed to import genesis store: %v", err))
 	}
 }
 
@@ -53,9 +80,9 @@ func (tt *testcli) readConfig() {
 }
 
 func init() {
-	// Run the app if we've been exec'd as "opera-test" in exec().
-	reexec.Register("opera-test", func() {
-		initApp()
+	// Run the app if we've been exec'd as "sonic-test" in exec().
+	reexec.Register("sonic-test", func() {
+		app := initApp()
 		initAppHelp()
 		if err := app.Run(os.Args); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -81,12 +108,10 @@ func exec(t *testing.T, args ...string) *testcli {
 
 	if len(args) < 1 || args[0] != "attach" {
 		// make datadir
-		for i, arg := range args {
-			switch {
-			case arg == "-datadir" || arg == "--datadir":
-				if i < len(args)-1 {
-					tt.Datadir = args[i+1]
-				}
+		for i := range len(args) - 1 {
+			arg := args[i]
+			if arg == "-datadir" || arg == "--datadir" {
+				tt.Datadir = args[i+1]
 			}
 		}
 		if tt.Datadir == "" {
@@ -95,7 +120,11 @@ func exec(t *testing.T, args ...string) *testcli {
 		}
 
 		// Remove the temporary datadir.
-		tt.Cleanup = func() { os.RemoveAll(tt.Datadir) }
+		tt.Cleanup = func() {
+			if err := os.RemoveAll(tt.Datadir); err != nil {
+				t.Fatalf("failed to remove temporary datadir: %v", err)
+			}
+		}
 		defer func() {
 			if t.Failed() {
 				tt.Cleanup()
@@ -103,9 +132,9 @@ func exec(t *testing.T, args ...string) *testcli {
 		}()
 	}
 
-	// Boot "opera". This actually runs the test binary but the TestMain
+	// Boot "sonic". This actually runs the test binary but the TestMain
 	// function will prevent any tests from running.
-	tt.Run("opera-test", args...)
+	tt.Run("sonic-test", args...)
 
 	// Read the generated key
 	tt.readConfig()

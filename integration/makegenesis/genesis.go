@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package makegenesis
 
 import (
@@ -10,33 +26,36 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/Fantom-foundation/go-opera/inter"
+	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/scc/cert"
+	"github.com/0xsoniclabs/sonic/utils/objstream"
 	"github.com/ethereum/go-ethereum/core/tracing"
 
 	"github.com/Fantom-foundation/lachesis-base/hash"
+	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rlp"
 
-	"github.com/Fantom-foundation/go-opera/evmcore"
-	"github.com/Fantom-foundation/go-opera/gossip/blockproc"
-	"github.com/Fantom-foundation/go-opera/gossip/blockproc/drivermodule"
-	"github.com/Fantom-foundation/go-opera/gossip/blockproc/eventmodule"
-	"github.com/Fantom-foundation/go-opera/gossip/blockproc/evmmodule"
-	"github.com/Fantom-foundation/go-opera/gossip/blockproc/sealmodule"
-	"github.com/Fantom-foundation/go-opera/gossip/evmstore"
-	"github.com/Fantom-foundation/go-opera/gossip/gasprice"
-	"github.com/Fantom-foundation/go-opera/inter/iblockproc"
-	"github.com/Fantom-foundation/go-opera/inter/ibr"
-	"github.com/Fantom-foundation/go-opera/inter/ier"
-	"github.com/Fantom-foundation/go-opera/inter/state"
-	"github.com/Fantom-foundation/go-opera/opera"
-	"github.com/Fantom-foundation/go-opera/opera/genesis"
-	"github.com/Fantom-foundation/go-opera/opera/genesisstore"
-	"github.com/Fantom-foundation/go-opera/utils"
+	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/drivermodule"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/eventmodule"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/evmmodule"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/sealmodule"
+	"github.com/0xsoniclabs/sonic/gossip/evmstore"
+	"github.com/0xsoniclabs/sonic/gossip/gasprice"
+	"github.com/0xsoniclabs/sonic/inter/iblockproc"
+	"github.com/0xsoniclabs/sonic/inter/ibr"
+	"github.com/0xsoniclabs/sonic/inter/ier"
+	"github.com/0xsoniclabs/sonic/inter/state"
+	"github.com/0xsoniclabs/sonic/opera"
+	"github.com/0xsoniclabs/sonic/opera/genesis"
+	"github.com/0xsoniclabs/sonic/opera/genesisstore"
+	"github.com/0xsoniclabs/sonic/utils"
 
-	mptIo "github.com/Fantom-foundation/Carmen/go/database/mpt/io"
-	carmen "github.com/Fantom-foundation/Carmen/go/state"
+	mptIo "github.com/0xsoniclabs/carmen/go/database/mpt/io"
+	carmen "github.com/0xsoniclabs/carmen/go/state"
 )
 
 type GenesisBuilder struct {
@@ -49,6 +68,9 @@ type GenesisBuilder struct {
 	blocks       []ibr.LlrIdxFullBlockRecord
 	epochs       []ier.LlrIdxFullEpochRecord
 	currentEpoch ier.LlrIdxFullEpochRecord
+
+	genesisCommitteeCertificate cert.CommitteeCertificate
+	genesisBlockCertificates    []cert.BlockCertificate
 }
 
 type BlockProc struct {
@@ -90,7 +112,7 @@ func (b *GenesisBuilder) SetNonce(acc common.Address, nonce uint64) {
 	if len(b.blocks) > 0 {
 		panic("cannot add nonce after block zero is finalized")
 	}
-	b.tmpStateDB.SetNonce(acc, nonce)
+	b.tmpStateDB.SetNonce(acc, nonce, tracing.NonceChangeGenesis)
 }
 
 func (b *GenesisBuilder) SetStorage(acc common.Address, key, val common.Hash) {
@@ -119,16 +141,18 @@ func NewGenesisBuilder() *GenesisBuilder {
 		panic(fmt.Errorf("failed to create temporary dir for GenesisBuilder: %v", err))
 	}
 	carmenState, err := carmen.NewState(carmen.Parameters{
-		Variant:   "go-file",
-		Schema:    carmen.Schema(5),
-		Archive:   carmen.S5Archive,
-		Directory: carmenDir,
-		LiveCache: 1, // use minimum cache (not default)
+		Variant:      "go-file",
+		Schema:       carmen.Schema(5),
+		Archive:      carmen.S5Archive,
+		Directory:    carmenDir,
+		LiveCache:    1, // use minimum cache (not default)
+		ArchiveCache: 1, // use minimum cache (not default)
 	})
 	if err != nil {
 		panic(fmt.Errorf("failed to create carmen state; %s", err))
 	}
-	carmenStateDb := carmen.CreateStateDBUsing(carmenState)
+	// Set cache size to lowest value possible
+	carmenStateDb := carmen.CreateCustomStateDBUsing(carmenState, 1024)
 	tmpStateDB := evmstore.CreateCarmenStateDb(carmenStateDb)
 	return &GenesisBuilder{
 		tmpStateDB:    tmpStateDB,
@@ -168,6 +192,12 @@ func (b *GenesisBuilder) FinalizeBlockZero(
 		return common.Hash{}, common.Hash{}, errors.New("block zero already finalized")
 	}
 
+	if rules.Upgrades.Allegro {
+		if err := rules.Validate(opera.Rules{}); err != nil {
+			return common.Hash{}, common.Hash{}, fmt.Errorf("invalid rules: %w", err)
+		}
+	}
+
 	// construct state root of initial state
 	b.tmpStateDB.EndBlock(0)
 	genesisStateRoot := b.tmpStateDB.GetStateHash()
@@ -185,11 +215,20 @@ func (b *GenesisBuilder) FinalizeBlockZero(
 		WithBaseFee(gasprice.GetInitialBaseFee(rules.Economy)).
 		WithPrevRandao(common.Hash{31: 1})
 
-	llrBlock := ibr.FullBlockRecordFor(blockBuilder.Build(), nil, nil)
+	block := blockBuilder.Build()
+	llrBlock := ibr.FullBlockRecordFor(block, nil, nil)
 	b.blocks = append(b.blocks, ibr.LlrIdxFullBlockRecord{
 		LlrFullBlockRecord: *llrBlock,
 		Idx:                0,
 	})
+
+	// register an empty certificate for block zero
+	b.AddBlockCertificate(cert.NewCertificate(cert.NewBlockStatement(
+		rules.NetworkID,
+		idx.Block(0),
+		block.Hash(),
+		block.StateRoot,
+	)))
 
 	return common.Hash(b.blocks[0].BlockHash), genesisStateRoot, nil
 }
@@ -210,22 +249,30 @@ func (b *GenesisBuilder) ExecuteGenesisTxs(blockProc BlockProc, genesisTxs types
 
 	sealer := blockProc.SealerModule.Start(blockCtx, bs, es)
 	txListener := blockProc.TxListenerModule.Start(blockCtx, bs, es, b.tmpStateDB)
-	evmProcessor := blockProc.EVMModule.Start(blockCtx, b.tmpStateDB, dummyHeaderReturner{b.blocks}, func(l *types.Log) {
-		txListener.OnNewLog(l)
-	}, es.Rules, es.Rules.EvmChainConfig([]opera.UpgradeHeight{
-		{
+	chainConfig := opera.CreateTransientEvmChainConfig(
+		es.Rules.NetworkID,
+		// apply upgrades described in genesis rules, effect immediately
+		[]opera.UpgradeHeight{{
 			Upgrades: es.Rules.Upgrades,
-			Height:   0,
-		},
-	}), common.Hash{0x01}) // non-zero PrevRandao necessary to enable Cancun
+			Height:   blockCtx.Idx,
+		}},
+		blockCtx.Idx,
+	)
+	evmProcessor := blockProc.EVMModule.Start(
+		blockCtx, b.tmpStateDB, dummyHeaderReturner{b.blocks},
+		func(l *types.Log) { txListener.OnNewLog(l) },
+		es.Rules,
+		chainConfig,
+		common.Hash{0x01}, // non-zero PrevRandao necessary to enable Cancun
+	)
 
 	// Execute genesis transactions
-	evmProcessor.Execute(genesisTxs)
+	evmProcessor.Execute(genesisTxs, es.Rules.Blocks.MaxBlockGas)
 	bs = txListener.Finalize()
 
 	// Execute pre-internal transactions
 	preInternalTxs := blockProc.PreTxTransactor.PopInternalTxs(blockCtx, bs, es, true, b.tmpStateDB)
-	evmProcessor.Execute(preInternalTxs)
+	evmProcessor.Execute(preInternalTxs, es.Rules.Blocks.MaxBlockGas)
 	bs = txListener.Finalize()
 
 	// Seal epoch
@@ -235,7 +282,7 @@ func (b *GenesisBuilder) ExecuteGenesisTxs(blockProc BlockProc, genesisTxs types
 
 	// Execute post-internal transactions
 	internalTxs := blockProc.PostTxTransactor.PopInternalTxs(blockCtx, bs, es, true, b.tmpStateDB)
-	evmProcessor.Execute(internalTxs)
+	evmProcessor.Execute(internalTxs, es.Rules.Blocks.MaxBlockGas)
 
 	evmBlock, skippedTxs, receipts := evmProcessor.Finalize()
 	for i, r := range receipts {
@@ -277,7 +324,8 @@ func (b *GenesisBuilder) ExecuteGenesisTxs(blockProc BlockProc, genesisTxs types
 		blockBuilder.AddTransaction(transaction, receipts[txIndex])
 	}
 
-	llrBlock := ibr.FullBlockRecordFor(blockBuilder.Build(), evmBlock.Transactions, receiptsStorage)
+	block := blockBuilder.Build()
+	llrBlock := ibr.FullBlockRecordFor(block, evmBlock.Transactions, receiptsStorage)
 	b.blocks = append(b.blocks, ibr.LlrIdxFullBlockRecord{
 		LlrFullBlockRecord: *llrBlock,
 		Idx:                blockCtx.Idx,
@@ -293,7 +341,31 @@ func (b *GenesisBuilder) ExecuteGenesisTxs(blockProc BlockProc, genesisTxs types
 		Idx: es.Epoch,
 	}
 	b.epochs = append(b.epochs, b.currentEpoch)
+
+	// add a block certificate for the created block
+	b.AddBlockCertificate(cert.NewCertificate(cert.NewBlockStatement(
+		es.Rules.NetworkID,
+		idx.Block(block.Number),
+		block.Hash(),
+		block.StateRoot,
+	)))
+
 	return nil
+}
+
+func (b *GenesisBuilder) SetGenesisCommitteeCertificate(
+	committeeCertificate cert.CommitteeCertificate,
+) {
+	b.genesisCommitteeCertificate = committeeCertificate
+}
+
+func (b *GenesisBuilder) AddBlockCertificate(
+	blockCertificate cert.BlockCertificate,
+) {
+	b.genesisBlockCertificates = append(
+		b.genesisBlockCertificates,
+		blockCertificate,
+	)
 }
 
 type memFile struct {
@@ -335,6 +407,22 @@ func (b *GenesisBuilder) Build(head genesis.Header) *genesisstore.Store {
 			if err != nil {
 				return nil, err
 			}
+		}
+		if name == genesisstore.SccCommitteeSection(0) {
+			out := objstream.NewWriter[cert.Certificate[cert.CommitteeStatement]](buf)
+			err := out.Write(b.genesisCommitteeCertificate)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if name == genesisstore.SccBlockSection(0) {
+			out := objstream.NewWriter[cert.Certificate[cert.BlockStatement]](buf)
+			for _, bc := range b.genesisBlockCertificates {
+				if err := out.Write(bc); err != nil {
+					return nil, err
+				}
+			}
+			return buf, nil
 		}
 		if buf.Len() == 0 {
 			return nil, errors.New("not found")

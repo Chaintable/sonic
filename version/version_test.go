@@ -1,41 +1,68 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package version
 
 import (
-	"math"
 	"testing"
-
-	"github.com/stretchr/testify/require"
 )
 
-type testcase struct {
-	vMajor, vMinor, vPatch uint16
-	result                 uint64
-	str                    string
+func TestMakeVersion_AcceptValidVersionNumber(t *testing.T) {
+	tests := map[string]struct {
+		major, minor, patch int
+		preRelease          string
+	}{
+		"1.2.3":        {major: 1, minor: 2, patch: 3},
+		"1.2.0-dev":    {major: 1, minor: 2, preRelease: "dev"},
+		"1.2.3-rc.4":   {major: 1, minor: 2, patch: 3, preRelease: "rc.4"},
+		"1.2.3-rc.255": {major: 1, minor: 2, patch: 3, preRelease: "rc.255"},
+	}
+
+	for want, test := range tests {
+		version, err := makeVersion(test.major, test.minor, test.patch, test.preRelease)
+		if err != nil {
+			t.Errorf("version %s returned an error: %v", want, err)
+		}
+		if got := version.String(); got != want {
+			t.Errorf("version %s produces wrong result, got %q", want, got)
+		}
+	}
 }
 
-func TestAsBigInt(t *testing.T) {
-	require := require.New(t)
+func TestMakeVersion_DetectsInvalidVersionNumber(t *testing.T) {
+	tests := map[string]struct {
+		major, minor, patch int
+		preRelease          string
+	}{
+		"invalid pre-release format":        {major: 1, minor: 2, patch: 3, preRelease: "xy"},
+		"invalid release candidate":         {major: 1, minor: 2, patch: 3, preRelease: "rc"},
+		"missing dot in release candidate":  {major: 1, minor: 2, patch: 3, preRelease: "rc1"},
+		"non-numeric release candidate":     {major: 1, minor: 2, patch: 3, preRelease: "rc.X"},
+		"negative release candidate":        {major: 1, minor: 2, patch: 3, preRelease: "rc.-1"},
+		"release candidate 0":               {major: 1, minor: 2, patch: 3, preRelease: "rc.0"},
+		"release candidate exceeding 8-bit": {major: 1, minor: 2, patch: 3, preRelease: "rc.256"},
+		"patch version in development":      {major: 1, minor: 2, patch: 3, preRelease: "dev"},
+	}
 
-	prev := testcase{0, 0, 0, 0, "0.0.0"}
-	for _, next := range []testcase{
-		{0, 0, 1, 1, "0.0.1"},
-		{0, 0, 2, 2, "0.0.2"},
-		{0, 1, 0, 1000000, "0.1.0"},
-		{0, 1, math.MaxUint16, 1065535, "0.1.65535"},
-		{1, 0, 0, 1000000000000, "1.0.0"},
-		{1, 0, math.MaxUint16, 1000000065535, "1.0.65535"},
-		{1, 1, 0, 1000001000000, "1.1.0"},
-		{2, 9, 9, 2000009000009, "2.9.9"},
-		{3, 1, 0, 3000001000000, "3.1.0"},
-		{math.MaxUint16, math.MaxUint16, math.MaxUint16, 65535065535065535, "65535.65535.65535"},
-	} {
-		a := ToU64(prev.vMajor, prev.vMinor, prev.vPatch)
-		b := ToU64(next.vMajor, next.vMinor, next.vPatch)
-		require.Equal(a, prev.result)
-		require.Equal(b, next.result)
-		require.Equal(U64ToString(a), prev.str)
-		require.Equal(U64ToString(b), next.str)
-		require.Greater(b, a)
-		prev = next
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := makeVersion(test.major, test.minor, test.patch, test.preRelease)
+			if err == nil {
+				t.Errorf("expected an error, got nil")
+			}
+		})
 	}
 }

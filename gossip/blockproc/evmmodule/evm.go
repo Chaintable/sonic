@@ -1,21 +1,34 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package evmmodule
 
 import (
-	"github.com/ethereum/go-ethereum/core/tracing"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 
-	"github.com/Fantom-foundation/go-opera/evmcore"
-	"github.com/Fantom-foundation/go-opera/gossip/blockproc"
-	"github.com/Fantom-foundation/go-opera/gossip/gasprice"
-	"github.com/Fantom-foundation/go-opera/inter/iblockproc"
-	"github.com/Fantom-foundation/go-opera/inter/state"
-	"github.com/Fantom-foundation/go-opera/opera"
-	"github.com/Fantom-foundation/go-opera/utils"
+	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc"
+	"github.com/0xsoniclabs/sonic/gossip/gasprice"
+	"github.com/0xsoniclabs/sonic/inter/iblockproc"
+	"github.com/0xsoniclabs/sonic/inter/state"
+	"github.com/0xsoniclabs/sonic/opera"
 )
 
 type EVMModule struct{}
@@ -40,7 +53,11 @@ func (p *EVMModule) Start(
 	} else {
 		header := reader.GetHeader(common.Hash{}, uint64(block.Idx-1))
 		prevBlockHash = header.Hash
-		baseFee = gasprice.GetBaseFeeForNextBlock(header, net.Economy)
+		baseFee = gasprice.GetBaseFeeForNextBlock(gasprice.ParentBlockInfo{
+			BaseFee:  header.BaseFee,
+			Duration: header.Duration,
+			GasUsed:  header.GasUsed,
+		}, net.Economy)
 	}
 
 	// Start block
@@ -53,10 +70,11 @@ func (p *EVMModule) Start(
 		onNewLog:      onNewLog,
 		net:           net,
 		evmCfg:        evmCfg,
-		blockIdx:      utils.U64toBig(uint64(block.Idx)),
+		blockIdx:      uint64(block.Idx),
 		prevBlockHash: prevBlockHash,
 		prevRandao:    prevrandao,
 		gasBaseFee:    baseFee,
+		rules:         net,
 	}
 }
 
@@ -68,7 +86,7 @@ type OperaEVMProcessor struct {
 	net      opera.Rules
 	evmCfg   *params.ChainConfig
 
-	blockIdx      *big.Int
+	blockIdx      uint64
 	prevBlockHash common.Hash
 	gasBaseFee    *big.Int
 
@@ -78,6 +96,8 @@ type OperaEVMProcessor struct {
 	skippedTxs  []uint32
 	receipts    types.Receipts
 	prevRandao  common.Hash
+
+	rules opera.Rules
 }
 
 func (p *OperaEVMProcessor) evmBlockWith(txs types.Transactions) *evmcore.EvmBlock {
@@ -89,7 +109,7 @@ func (p *OperaEVMProcessor) evmBlockWith(txs types.Transactions) *evmcore.EvmBlo
 	}
 
 	prevRandao := common.Hash{}
-	// This condition must be kept, otherwise Opera will not be able to synchronize
+	// This condition must be kept, otherwise Sonic will not be able to synchronize
 	if p.net.Upgrades.Sonic {
 		prevRandao = p.prevRandao
 	}
@@ -99,15 +119,17 @@ func (p *OperaEVMProcessor) evmBlockWith(txs types.Transactions) *evmcore.EvmBlo
 		withdrawalsHash = &types.EmptyWithdrawalsHash
 	}
 
+	blobBaseFee := evmcore.GetBlobBaseFee()
 	h := &evmcore.EvmHeader{
-		Number:          p.blockIdx,
+		Number:          new(big.Int).SetUint64(p.blockIdx),
 		ParentHash:      p.prevBlockHash,
-		Root:            common.Hash{},
+		Root:            common.Hash{}, // state root is added later
 		Time:            p.block.Time,
-		Coinbase:        common.Address{},
+		Coinbase:        evmcore.GetCoinbase(),
 		GasLimit:        p.net.Blocks.MaxBlockGas,
 		GasUsed:         p.gasUsed,
 		BaseFee:         baseFee,
+		BlobBaseFee:     blobBaseFee.ToBig(),
 		PrevRandao:      prevRandao,
 		WithdrawalsHash: withdrawalsHash,
 		Epoch:           p.block.Atropos.Epoch(),
@@ -116,34 +138,31 @@ func (p *OperaEVMProcessor) evmBlockWith(txs types.Transactions) *evmcore.EvmBlo
 	return evmcore.NewEvmBlock(h, txs)
 }
 
-var currentBlockIdx = uint64(0)
-
-func (p *OperaEVMProcessor) Execute(txs types.Transactions) types.Receipts {
+func (p *OperaEVMProcessor) Execute(txs types.Transactions, gasLimit uint64) types.Receipts {
 	evmProcessor := evmcore.NewStateProcessor(p.evmCfg, p.reader)
 	txsOffset := uint(len(p.incomingTxs))
+
+	vmConfig := opera.GetVmConfig(p.rules)
 
 	// Process txs
 	evmBlock := p.evmBlockWith(txs)
 
-	if opera.DefaultVMConfig.Tracer != nil && opera.DefaultVMConfig.Tracer.OnBlockStart != nil && currentBlockIdx != evmBlock.EthBlock().NumberU64() {
-		currentBlockIdx = evmBlock.EthBlock().NumberU64()
-		log.Info("Tracer Tracer OnBlockStart", "block idx", evmBlock.EthBlock().Number(), "block hash", evmBlock.EthBlock().Hash().Hex(), "txs", len(txs))
+	//if opera.DefaultVMConfig.Tracer != nil && opera.DefaultVMConfig.Tracer.OnBlockStart != nil && currentBlockIdx != evmBlock.EthBlock().NumberU64() {
+	//	currentBlockIdx = evmBlock.EthBlock().NumberU64()
+	//	log.Info("Tracer Tracer OnBlockStart", "block idx", evmBlock.EthBlock().Number(), "block hash", evmBlock.EthBlock().Hash().Hex(), "txs", len(txs))
+	//
+	//	opera.DefaultVMConfig.Tracer.OnBlockStart(tracing.BlockEvent{
+	//		Block:     evmBlock.EthBlock(),
+	//		Finalized: evmBlock.Header().EthHeader(),
+	//		Safe:      evmBlock.Header().EthHeader(),
+	//	})
+	//}
 
-		opera.DefaultVMConfig.Tracer.OnBlockStart(tracing.BlockEvent{
-			Block:     evmBlock.EthBlock(),
-			Finalized: evmBlock.Header().EthHeader(),
-			Safe:      evmBlock.Header().EthHeader(),
-		})
-	}
-
-	receipts, _, skipped, err := evmProcessor.Process(evmBlock, p.statedb, opera.DefaultVMConfig, &p.gasUsed, func(l *types.Log) {
+	receipts, _, skipped := evmProcessor.Process(evmBlock, p.statedb, vmConfig, gasLimit, &p.gasUsed, func(l *types.Log) {
 		// Note: l.Index is properly set before
 		l.TxIndex += txsOffset
 		p.onNewLog(l)
 	})
-	if err != nil {
-		log.Crit("EVM internal error", "err", err)
-	}
 
 	if txsOffset > 0 {
 		for i, n := range skipped {

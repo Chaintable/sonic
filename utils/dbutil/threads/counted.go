@@ -1,16 +1,28 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package threads
 
 import (
 	"github.com/Fantom-foundation/lachesis-base/kvdb"
 
-	"github.com/Fantom-foundation/go-opera/logger"
+	"github.com/0xsoniclabs/sonic/logger"
 )
 
 type (
-	countedDbProducer struct {
-		kvdb.DBProducer
-	}
-
 	countedFullDbProducer struct {
 		kvdb.FullDBProducer
 	}
@@ -25,18 +37,9 @@ type (
 	}
 )
 
-func CountedDBProducer(dbs kvdb.DBProducer) kvdb.DBProducer {
-	return &countedDbProducer{dbs}
-}
-
 // CountedFullDBProducer obtains one thread from the GlobalPool for each opened iterator.
 func CountedFullDBProducer(dbs kvdb.FullDBProducer) kvdb.FullDBProducer {
 	return &countedFullDbProducer{dbs}
-}
-
-func (p *countedDbProducer) OpenDB(name string) (kvdb.Store, error) {
-	s, err := p.DBProducer.OpenDB(name)
-	return &countedStore{s}, err
 }
 
 func (p *countedFullDbProducer) OpenDB(name string) (kvdb.Store, error) {

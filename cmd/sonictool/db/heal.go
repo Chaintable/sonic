@@ -1,11 +1,31 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package db
 
 import (
 	"fmt"
-	"github.com/Fantom-foundation/go-opera/config"
-	"github.com/Fantom-foundation/go-opera/gossip"
-	"github.com/Fantom-foundation/go-opera/integration"
-	"github.com/Fantom-foundation/go-opera/inter/iblockproc"
+	"strings"
+	"time"
+
+	"github.com/0xsoniclabs/sonic/config"
+	"github.com/0xsoniclabs/sonic/gossip"
+	"github.com/0xsoniclabs/sonic/integration"
+	"github.com/0xsoniclabs/sonic/inter/iblockproc"
+	"github.com/0xsoniclabs/sonic/utils/caution"
 	"github.com/Fantom-foundation/lachesis-base/abft"
 	"github.com/Fantom-foundation/lachesis-base/common/bigendian"
 	"github.com/Fantom-foundation/lachesis-base/hash"
@@ -16,26 +36,24 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/syndtr/goleveldb/leveldb/opt"
-	"strings"
-	"time"
 )
 
-func HealChaindata(chaindataDir string, cacheRatio cachescale.Func, cfg *config.Config, lastCarmenBlock idx.Block) (idx.Block, error) {
+func HealChaindata(chaindataDir string, cacheRatio cachescale.Func, cfg *config.Config, lastCarmenBlock idx.Block) (lastBlockId idx.Block, err error) {
 	producer := &DummyScopedProducer{integration.GetRawDbProducer(chaindataDir, integration.DBCacheConfig{
 		Cache:   cacheRatio.U64(480 * opt.MiB),
 		Fdlimit: makeDatabaseHandles(),
 	})}
-	defer producer.Close()
+	defer caution.CloseAndReportError(&err, producer, "failed to close db producer")
 
 	log.Info("Healing gossip db...")
-	epochState, lastBlock, err := healGossipDb(producer, cfg.OperaStore, lastCarmenBlock)
+	epochState, lastBlockId, err := healGossipDb(producer, cfg.OperaStore, lastCarmenBlock)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to heal gossip db: %w", err)
 	}
 
 	log.Info("Removing epoch DBs - will be recreated on next start")
 	if err = dropAllEpochDbs(producer); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to drop epoch DBs: %w", err)
 	}
 
 	log.Info("Recreating consensus database")
@@ -63,11 +81,11 @@ func HealChaindata(chaindataDir string, cacheRatio cachescale.Func, cfg *config.
 	}
 
 	log.Info("Clearing DBs dirty flags")
-	if err := clearDirtyFlags(producer); err != nil {
-		return 0, fmt.Errorf("failed to write clean FlushID: %w", err)
+	if err = clearDirtyFlags(producer); err != nil {
+		return 0, fmt.Errorf("failed to clear dirty flags: %w", err)
 	}
 
-	return lastBlock, nil
+	return lastBlockId, nil
 }
 
 // healGossipDb reverts the gossip database into state, into which can be reverted carmen
@@ -78,7 +96,7 @@ func healGossipDb(producer kvdb.FlushableDBProducer, cfg gossip.StoreConfig, las
 	if err != nil {
 		return nil, 0, err
 	}
-	defer gdb.Close()
+	defer caution.CloseAndReportError(&err, gdb, "failed to close gossip db")
 
 	// find the last closed epoch with the state available
 	epochIdx, blockState, epochState := getLastEpochWithState(gdb, lastCarmenBlock)

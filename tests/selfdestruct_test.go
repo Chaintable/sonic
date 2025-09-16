@@ -1,31 +1,44 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package tests
 
 import (
-	"context"
 	"crypto/rand"
 	"math/big"
 	"testing"
 
-	"github.com/Fantom-foundation/go-opera/tests/contracts/selfdestruct"
+	"github.com/0xsoniclabs/sonic/tests/contracts/selfdestruct"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSelfDestruct(t *testing.T) {
-	require := require.New(t)
 
-	net, err := StartIntegrationTestNet(t.TempDir())
-	require.NoError(err, "failed to start test network")
-	defer net.Stop()
+	net := StartIntegrationTestNet(t)
 
 	t.Run("constructor", func(t *testing.T) {
+		t.Parallel()
 		testSelfDestruct_Constructor(t, net)
 	})
 
 	t.Run("nested call", func(t *testing.T) {
+		t.Parallel()
 		testSelfDestruct_NestedCall(t, net)
 	})
 }
@@ -128,13 +141,16 @@ func testSelfDestruct_Constructor(t *testing.T, net *IntegrationTestNet) {
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			require := require.New(t)
+			t.Parallel()
+			session := net.SpawnSession(t)
 
 			// New beneficiary address for each test
 			beneficiaryAddress := common.Address{}
-			rand.Read(beneficiaryAddress[:])
+			_, err := rand.Read(beneficiaryAddress[:])
+			require.NoError(err)
 
 			// First transaction deploys contract
-			contract, deployReceipt, err := DeployContract(net,
+			contract, deployReceipt, err := DeployContract(session,
 				func(to *bind.TransactOpts, cb bind.ContractBackend) (common.Address, *types.Transaction, *selfdestruct.SelfDestruct, error) {
 					return test.deployTx(to, cb, beneficiaryAddress)
 				})
@@ -149,7 +165,7 @@ func testSelfDestruct_Constructor(t *testing.T, net *IntegrationTestNet) {
 			var executionReceipt *types.Receipt
 			// Second transaction executes some contract function (if any)
 			if test.executeTx != nil {
-				executionReceipt, err = net.Apply(func(opts *bind.TransactOpts) (*types.Transaction, error) {
+				executionReceipt, err = session.Apply(func(opts *bind.TransactOpts) (*types.Transaction, error) {
 					return test.executeTx(contract, opts, beneficiaryAddress)
 				})
 				require.NoError(err)
@@ -162,7 +178,7 @@ func testSelfDestruct_Constructor(t *testing.T, net *IntegrationTestNet) {
 			}
 
 			// create client to query the network about address properties
-			client, err := net.GetClient()
+			client, err := session.GetClient()
 			require.NoError(err)
 			defer client.Close()
 
@@ -177,7 +193,8 @@ func testSelfDestruct_Constructor(t *testing.T, net *IntegrationTestNet) {
 			}
 			for name, effect := range test.effects {
 				t.Run(name, func(t *testing.T) {
-					effect(require, &effectContext)
+					t.Parallel()
+					effect(t, &effectContext)
 				})
 			}
 		})
@@ -277,13 +294,16 @@ func testSelfDestruct_NestedCall(t *testing.T, net *IntegrationTestNet) {
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			require := require.New(t)
+			t.Parallel()
+			session := net.SpawnSession(t)
 
 			// generate a new beneficiary address for each test
 			beneficiaryAddress := common.Address{}
-			rand.Read(beneficiaryAddress[:])
+			_, err := rand.Read(beneficiaryAddress[:])
+			require.NoError(err)
 
 			// deploy factory contract
-			factory, receipt, err := DeployContract(net, selfdestruct.DeploySelfDestructFactory)
+			factory, receipt, err := DeployContract(session, selfdestruct.DeploySelfDestructFactory)
 			require.NoError(err)
 			require.Equal(
 				types.ReceiptStatusSuccessful,
@@ -295,7 +315,7 @@ func testSelfDestruct_NestedCall(t *testing.T, net *IntegrationTestNet) {
 
 			// execute all described transactions
 			for _, tx := range test.transactions {
-				receipt, err := net.Apply(func(opts *bind.TransactOpts) (*types.Transaction, error) {
+				receipt, err := session.Apply(func(opts *bind.TransactOpts) (*types.Transaction, error) {
 					return tx(factory, opts, beneficiaryAddress)
 				})
 				require.NoError(err)
@@ -315,7 +335,7 @@ func testSelfDestruct_NestedCall(t *testing.T, net *IntegrationTestNet) {
 			)
 
 			// create client to query the network about address properties
-			client, err := net.GetClient()
+			client, err := session.GetClient()
 			require.NoError(err)
 			defer client.Close()
 			newContract, err := selfdestruct.NewSelfDestruct(contractAddress, client)
@@ -332,7 +352,8 @@ func testSelfDestruct_NestedCall(t *testing.T, net *IntegrationTestNet) {
 			}
 			for name, effect := range test.effects {
 				t.Run(name, func(t *testing.T) {
-					effect(require, &effectContext)
+					t.Parallel()
+					effect(t, &effectContext)
 				})
 			}
 		})
@@ -345,7 +366,7 @@ func testSelfDestruct_NestedCall(t *testing.T, net *IntegrationTestNet) {
 // avoid clashes between tests. This struct will be filled with the results of
 // the each test setup.
 type effectContext struct {
-	client             *ethclient.Client                 //< client to interact with the network
+	client             *PooledEhtClient                  //< client to interact with the network
 	contract           *selfdestruct.SelfDestruct        //< contract to test (may have selfdestructed)
 	factory            *selfdestruct.SelfDestructFactory //< factory contract to deploy new contracts
 	executionReceipt   *types.Receipt                    //< receipt of the execution transaction for constructor tests
@@ -354,17 +375,18 @@ type effectContext struct {
 	beneficiaryAddress common.Address                    //< address of the beneficiary account
 }
 
-type effectFunction func(require *require.Assertions, ctx *effectContext)
+type effectFunction func(t testing.TB, ctx *effectContext)
 type deployTxFunction[T any] func(opts *bind.TransactOpts, backend bind.ContractBackend, beneficiaryAddress common.Address) (common.Address, *types.Transaction, *T, error)
 type executeTxFunction[T any] func(contract *T, opts *bind.TransactOpts, beneficiaryAddress common.Address) (*types.Transaction, error)
 
 // executionHalted checks that the execution stopped after selfdestruct
 // This is done by looking for logs
 func executionHalted() effectFunction {
-	return func(require *require.Assertions, ctx *effectContext) {
+	return func(t testing.TB, ctx *effectContext) {
 		for _, log := range ctx.allLogs {
 			_, err := ctx.contract.ParseLogAfterDestruct(*log)
 			require.Error(
+				t,
 				err,
 				"execution should have halted, log after selfdestruct should not be present",
 			)
@@ -378,29 +400,30 @@ func executionHalted() effectFunction {
 // the internal value of the contract storage will be emitted before the
 // transaction is  completed.
 func nestedContractValueAfterSelfDestructIs(value int64) effectFunction {
-	return func(require *require.Assertions, ctx *effectContext) {
+	return func(t testing.TB, ctx *effectContext) {
 		for _, log := range ctx.allLogs {
 			storage, err := ctx.factory.ParseLogContractStorage(*log)
 			if err != nil {
 				continue
 			}
 			require.Equal(
+				t,
 				value,
 				storage.Value.Int64(),
 				"storage value differs",
 			)
 			return
 		}
-		require.Fail("no log with storage value found")
+		require.Fail(t, "no log with storage value found")
 	}
 }
 
 // contractBalanceIs reads the contract balance and compare it to the expected value
 func contractBalanceIs(expected int64) effectFunction {
-	return func(require *require.Assertions, ctx *effectContext) {
-		balance, err := ctx.client.BalanceAt(context.Background(), ctx.contractAddress, nil)
-		require.NoError(err)
-		require.Equal(
+	return func(t testing.TB, ctx *effectContext) {
+		balance, err := ctx.client.BalanceAt(t.Context(), ctx.contractAddress, nil)
+		require.NoError(t, err)
+		require.Equal(t,
 			expected,
 			balance.Int64(),
 			"balance not expected",
@@ -410,11 +433,12 @@ func contractBalanceIs(expected int64) effectFunction {
 
 // contractStorageIs reads the contract storage and compare it to the expected value
 func contractStorageIs(expected int64) effectFunction {
-	return func(require *require.Assertions, ctx *effectContext) {
-		data, err := ctx.client.StorageAt(context.Background(), ctx.contractAddress, common.Hash{}, nil)
-		require.NoError(err)
+	return func(t testing.TB, ctx *effectContext) {
+		data, err := ctx.client.StorageAt(t.Context(), ctx.contractAddress, common.Hash{}, nil)
+		require.NoError(t, err)
 		storage := new(big.Int).SetBytes(data)
 		require.Equal(
+			t,
 			expected,
 			storage.Int64(),
 			"storage value differs",
@@ -423,10 +447,11 @@ func contractStorageIs(expected int64) effectFunction {
 }
 
 func beneficiaryBalanceIs(expected int64) effectFunction {
-	return func(require *require.Assertions, ctx *effectContext) {
-		balance, err := ctx.client.BalanceAt(context.Background(), ctx.beneficiaryAddress, nil)
-		require.NoError(err)
+	return func(t testing.TB, ctx *effectContext) {
+		balance, err := ctx.client.BalanceAt(t.Context(), ctx.beneficiaryAddress, nil)
+		require.NoError(t, err)
 		require.Equal(
+			t,
 			expected,
 			balance.Int64(),
 			"balance not expected",
@@ -435,10 +460,11 @@ func beneficiaryBalanceIs(expected int64) effectFunction {
 }
 
 func contractCodeSizeIs(expected int) effectFunction {
-	return func(require *require.Assertions, ctx *effectContext) {
-		code, err := ctx.client.CodeAt(context.Background(), ctx.contractAddress, nil)
-		require.NoError(err)
+	return func(t testing.TB, ctx *effectContext) {
+		code, err := ctx.client.CodeAt(t.Context(), ctx.contractAddress, nil)
+		require.NoError(t, err)
 		require.Equal(
+			t,
 			expected,
 			len(code),
 			"code size not expected",
@@ -447,10 +473,11 @@ func contractCodeSizeIs(expected int) effectFunction {
 }
 
 func contractCodeSizeIsNot(notExpected int) effectFunction {
-	return func(require *require.Assertions, ctx *effectContext) {
-		code, err := ctx.client.CodeAt(context.Background(), ctx.contractAddress, nil)
-		require.NoError(err)
+	return func(t testing.TB, ctx *effectContext) {
+		code, err := ctx.client.CodeAt(t.Context(), ctx.contractAddress, nil)
+		require.NoError(t, err)
 		require.NotEqual(
+			t,
 			notExpected,
 			len(code),
 			"code size not expected",

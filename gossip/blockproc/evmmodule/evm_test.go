@@ -1,12 +1,29 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package evmmodule
 
 import (
+	"math"
 	"math/big"
 	"testing"
 
-	"github.com/Fantom-foundation/go-opera/inter/iblockproc"
-	"github.com/Fantom-foundation/go-opera/inter/state"
-	"github.com/Fantom-foundation/go-opera/opera"
+	"github.com/0xsoniclabs/sonic/inter/iblockproc"
+	"github.com/0xsoniclabs/sonic/inter/state"
+	"github.com/0xsoniclabs/sonic/opera"
 	"github.com/ethereum/go-ethereum/common"
 	tracing "github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -30,17 +47,16 @@ func TestEvm_IgnoresGasPriceOfInternalTransactions(t *testing.T) {
 	stateDb.EXPECT().SubBalance(zeroAddress, zero, tracing.BalanceDecreaseGasBuy)
 	stateDb.EXPECT().Prepare(any, any, any, any, any, any).AnyTimes()
 	stateDb.EXPECT().GetNonce(zeroAddress).Return(uint64(14))
-	stateDb.EXPECT().SetNonce(zeroAddress, uint64(15))
+	stateDb.EXPECT().SetNonce(zeroAddress, uint64(15), any)
 	stateDb.EXPECT().Snapshot().Return(1)
 	stateDb.EXPECT().Exist(targetAddress).Return(true)
 	stateDb.EXPECT().SubBalance(zeroAddress, zero, tracing.BalanceChangeTransfer)
 	stateDb.EXPECT().AddBalance(targetAddress, zero, tracing.BalanceChangeTransfer)
-	stateDb.EXPECT().GetCode(targetAddress)
-	stateDb.EXPECT().Witness()
+	stateDb.EXPECT().GetCode(targetAddress).MinTimes(1)
 	stateDb.EXPECT().GetRefund().AnyTimes().Return(uint64(0))
 	stateDb.EXPECT().AddBalance(zeroAddress, zero, tracing.BalanceIncreaseGasReturn)
 	stateDb.EXPECT().GetLogs(any, any)
-	stateDb.EXPECT().Finalise()
+	stateDb.EXPECT().EndTransaction()
 	stateDb.EXPECT().TxIndex()
 
 	evmModule := New()
@@ -61,6 +77,7 @@ func TestEvm_IgnoresGasPriceOfInternalTransactions(t *testing.T) {
 			},
 		},
 		&params.ChainConfig{
+			ChainID:     big.NewInt(1),
 			LondonBlock: big.NewInt(0),
 		},
 		common.Hash{},
@@ -72,7 +89,7 @@ func TestEvm_IgnoresGasPriceOfInternalTransactions(t *testing.T) {
 	nonce := uint64(15)
 	inner := types.NewTransaction(nonce, targetAddress, common.Big0, 1e10, common.Big0, nil)
 
-	receipts := processor.Execute([]*types.Transaction{inner})
+	receipts := processor.Execute([]*types.Transaction{inner}, math.MaxUint64)
 
 	if len(receipts) != 1 {
 		t.Fatalf("Expected 1 receipt, got %d", len(receipts))

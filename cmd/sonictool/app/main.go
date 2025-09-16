@@ -1,26 +1,49 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package app
 
 import (
 	"os"
 	"sort"
 
-	"github.com/Fantom-foundation/go-opera/config"
-	"github.com/Fantom-foundation/go-opera/config/flags"
-	"github.com/Fantom-foundation/go-opera/version"
+	"github.com/0xsoniclabs/sonic/config/flags"
+	"github.com/0xsoniclabs/sonic/debug"
+	"github.com/0xsoniclabs/sonic/version"
 	"gopkg.in/urfave/cli.v1"
 )
 
 func Run() error {
+	return RunWithArgs(os.Args)
+}
+
+func RunWithArgs(args []string) error {
 	app := cli.NewApp()
 	app.Name = "sonictool"
 	app.Usage = "the Sonic management tool"
-	app.Version = version.VersionWithCommit(config.GitCommit, config.GitDate)
+	app.Version = version.StringWithCommit()
 	app.Flags = []cli.Flag{
 		flags.DataDirFlag,
 		flags.CacheFlag,
 		flags.LiveDbCacheFlag,
 		flags.ArchiveCacheFlag,
+		flags.StateDbCacheCapacityFlag,
 	}
+	app.Flags = append(app.Flags, debug.Flags...)
+
 	app.Commands = []cli.Command{
 		{
 			Name:  "genesis",
@@ -63,12 +86,14 @@ Initialize the database using data from the experimental genesis file.
 					Action:    fakeGenesisImport,
 					Flags: []cli.Flag{
 						ModeFlag,
+						FakeUpgrades,
 					},
 					Description: `
-    sonictool --datadir=<datadir> genesis fake <N> [--mode=validator]
+    sonictool --datadir=<datadir> genesis fake <N> [--mode=validator] [--upgrades=upgrades]
 
 Requires the number of validators in the fake network as the first argument.
 Initialize the database for a testing fakenet.
+--upgrades can be used to define the network features, default is sonic hardfork feature set.
 `,
 				},
 				{
@@ -354,7 +379,7 @@ Note that exporting your key in unencrypted format is NOT supported.
 
 Keys are stored under <DATADIR>/keystore/validator.
 It is safe to transfer the entire directory or the individual keys therein
-between Opera nodes by simply copying.
+between Sonic nodes by simply copying.
 
 Make sure you backup your keys regularly.
 `,
@@ -397,7 +422,16 @@ Converts an account private key to a validator private key and saves in the vali
 			},
 		},
 	}
+
+	app.Before = func(ctx *cli.Context) error {
+		return debug.Setup(ctx)
+	}
+	app.After = func(ctx *cli.Context) error {
+		debug.Exit()
+		return nil
+	}
+
 	sort.Sort(cli.CommandsByName(app.Commands))
 
-	return app.Run(os.Args)
+	return app.Run(args)
 }

@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package evmstore
 
 import (
@@ -8,12 +24,13 @@ import (
 	"os"
 	"path/filepath"
 
-	cc "github.com/Fantom-foundation/Carmen/go/common"
-	"github.com/Fantom-foundation/Carmen/go/common/amount"
-	mptio "github.com/Fantom-foundation/Carmen/go/database/mpt/io"
-	carmen "github.com/Fantom-foundation/Carmen/go/state"
-	"github.com/Fantom-foundation/go-opera/opera/genesis"
-	"github.com/Fantom-foundation/go-opera/utils/adapters/kvdb2ethdb"
+	cc "github.com/0xsoniclabs/carmen/go/common"
+	"github.com/0xsoniclabs/carmen/go/common/amount"
+	mptio "github.com/0xsoniclabs/carmen/go/database/mpt/io"
+	carmen "github.com/0xsoniclabs/carmen/go/state"
+	"github.com/0xsoniclabs/sonic/opera/genesis"
+	"github.com/0xsoniclabs/sonic/utils/adapters/kvdb2ethdb"
+	"github.com/0xsoniclabs/sonic/utils/caution"
 	"github.com/Fantom-foundation/lachesis-base/kvdb/nokeyiserr"
 	"github.com/Fantom-foundation/lachesis-base/kvdb/pebble"
 	"github.com/Fantom-foundation/lachesis-base/kvdb/table"
@@ -28,7 +45,7 @@ import (
 
 var emptyCodeHash = crypto.Keccak256(nil)
 
-// ImportLiveWorldState imports Fantom World State data from the live state genesis section.
+// ImportLiveWorldState imports Sonic World State data from the live state genesis section.
 // Must be called before the first Open call.
 func (s *Store) ImportLiveWorldState(liveReader io.Reader) error {
 	liveDir := filepath.Join(s.parameters.Directory, "live")
@@ -41,7 +58,7 @@ func (s *Store) ImportLiveWorldState(liveReader io.Reader) error {
 	return nil
 }
 
-// ImportArchiveWorldState imports Fantom World State data from the archive state genesis section.
+// ImportArchiveWorldState imports Sonic World State data from the archive state genesis section.
 // Must be called before the first Open call.
 func (s *Store) ImportArchiveWorldState(archiveReader io.Reader) error {
 	if s.parameters.Archive == carmen.NoArchive {
@@ -60,7 +77,7 @@ func (s *Store) ImportArchiveWorldState(archiveReader io.Reader) error {
 	return fmt.Errorf("archive is used, but cannot be initialized from FWS live genesis section")
 }
 
-// InitializeArchiveWorldState imports Fantom World State data from the live state genesis section.
+// InitializeArchiveWorldState imports Sonic World State data from the live state genesis section.
 // Must be called before the first Open call.
 func (s *Store) InitializeArchiveWorldState(liveReader io.Reader, blockNum uint64) error {
 	if s.parameters.Archive == carmen.NoArchive {
@@ -79,7 +96,7 @@ func (s *Store) InitializeArchiveWorldState(liveReader io.Reader, blockNum uint6
 	return fmt.Errorf("archive is used, but cannot be initialized from FWS live genesis section")
 }
 
-// ExportLiveWorldState exports Fantom World State data for the live state genesis section.
+// ExportLiveWorldState exports Sonic World State data for the live state genesis section.
 // The Store must be closed during the call.
 func (s *Store) ExportLiveWorldState(ctx context.Context, out io.Writer) error {
 	liveDir := filepath.Join(s.parameters.Directory, "live")
@@ -89,7 +106,7 @@ func (s *Store) ExportLiveWorldState(ctx context.Context, out io.Writer) error {
 	return nil
 }
 
-// ExportArchiveWorldState exports Fantom World State data for the archive state genesis section.
+// ExportArchiveWorldState exports Sonic World State data for the archive state genesis section.
 // The Store must be closed during the call.
 func (s *Store) ExportArchiveWorldState(ctx context.Context, out io.Writer) error {
 	archiveDir := filepath.Join(s.parameters.Directory, "archive")
@@ -99,22 +116,23 @@ func (s *Store) ExportArchiveWorldState(ctx context.Context, out io.Writer) erro
 	return nil
 }
 
-func (s *Store) ImportLegacyEvmData(evmItems genesis.EvmItems, blockNum uint64, root common.Hash) error {
-	if err := s.Open(); err != nil {
-		return fmt.Errorf("failed to open EvmStore for legacy EVM data import; %v", err)
+func (s *Store) ImportLegacyEvmData(evmItems genesis.EvmItems, blockNum uint64, root common.Hash) (err error) {
+	if err = s.Open(); err != nil {
+		return fmt.Errorf("failed to open EvmStore for legacy EVM data import; %w", err)
 	}
-	defer s.Close()
+	defer caution.CloseAndReportError(&err, s, "failed to close EvmStore after legacy EVM data import")
 
 	carmenDir, err := os.MkdirTemp(s.parameters.Directory, "opera-tmp-import-legacy-genesis")
 	if err != nil {
-		panic(fmt.Errorf("failed to create temporary dir for legacy EVM data import: %v", err))
+		panic(fmt.Errorf("failed to create temporary dir for legacy EVM data import: %w", err))
 	}
-	defer os.RemoveAll(carmenDir)
+	defer caution.ExecuteAndReportError(&err, func() error { return os.RemoveAll(carmenDir) },
+		"failed to remove temporary directory for legacy EVM data import")
 
 	s.Log.Info("Unpacking legacy EVM data into a temporary directory", "dir", carmenDir)
 	db, err := pebble.New(carmenDir, 1024, 100, nil, nil)
 	if err != nil {
-		panic(fmt.Errorf("failed to open temporary database for legacy EVM data import: %v", err))
+		panic(fmt.Errorf("failed to open temporary database for legacy EVM data import: %w", err))
 	}
 	evmItems.ForEach(func(key, value []byte) bool {
 		err := db.Put(key, value)
@@ -142,26 +160,26 @@ func (s *Store) ImportLegacyEvmData(evmItems genesis.EvmItems, blockNum uint64, 
 	tdb := triedb.NewDatabase(chaindb, &triedb.Config{Preimages: false, IsVerkle: false})
 	t, err := trie.NewStateTrie(trie.StateTrieID(root), tdb)
 	if err != nil {
-		return fmt.Errorf("failed to open trie; %v", err)
+		return fmt.Errorf("failed to open trie; %w", err)
 	}
 	preimages := table.New(db, []byte("secure-key-"))
 
 	accIter, err := t.NodeIterator(nil)
 	if err != nil {
-		return fmt.Errorf("failed to open accounts iterator; %v", err)
+		return fmt.Errorf("failed to open accounts iterator; %w", err)
 	}
 	for accIter.Next(true) {
 		if accIter.Leaf() {
 
 			addressBytes, err := preimages.Get(accIter.LeafKey())
 			if err != nil || addressBytes == nil {
-				return fmt.Errorf("missing preimage for account address hash %v; %v", accIter.LeafKey(), err)
+				return fmt.Errorf("missing preimage for account address hash %v; %w", accIter.LeafKey(), err)
 			}
 			address := cc.Address(common.BytesToAddress(addressBytes))
 
 			var acc types.StateAccount
 			if err := rlp.DecodeBytes(accIter.LeafBlob(), &acc); err != nil {
-				return fmt.Errorf("invalid account encountered during traversal; %v", err)
+				return fmt.Errorf("invalid account encountered during traversal; %w", err)
 			}
 
 			bulk.CreateAccount(address)
@@ -179,23 +197,23 @@ func (s *Store) ImportLegacyEvmData(evmItems genesis.EvmItems, blockNum uint64, 
 			if acc.Root != types.EmptyRootHash {
 				storageTrie, err := trie.NewStateTrie(trie.StateTrieID(acc.Root), tdb)
 				if err != nil {
-					return fmt.Errorf("failed to open storage trie for account %v; %v", address, err)
+					return fmt.Errorf("failed to open storage trie for account %v; %w", address, err)
 				}
 				storageIt, err := storageTrie.NodeIterator(nil)
 				if err != nil {
-					return fmt.Errorf("failed to open storage iterator for account %v; %v", address, err)
+					return fmt.Errorf("failed to open storage iterator for account %v; %w", address, err)
 				}
 				for storageIt.Next(true) {
 					if storageIt.Leaf() {
 						keyBytes, err := preimages.Get(storageIt.LeafKey())
 						if err != nil || keyBytes == nil {
-							return fmt.Errorf("missing preimage for storage key hash %v; %v", storageIt.LeafKey(), err)
+							return fmt.Errorf("missing preimage for storage key hash %v; %w", storageIt.LeafKey(), err)
 						}
 						key := cc.Key(common.BytesToHash(keyBytes))
 
 						_, valueBytes, _, err := rlp.Split(storageIt.LeafBlob())
 						if err != nil {
-							return fmt.Errorf("failed to decode storage; %v", err)
+							return fmt.Errorf("failed to decode storage; %w", err)
 						}
 						value := cc.Value(common.BytesToHash(valueBytes))
 
@@ -207,7 +225,7 @@ func (s *Store) ImportLegacyEvmData(evmItems genesis.EvmItems, blockNum uint64, 
 					}
 				}
 				if storageIt.Error() != nil {
-					return fmt.Errorf("failed to iterate storage trie of account %v; %v", address, storageIt.Error())
+					return fmt.Errorf("failed to iterate storage trie of account %v; %w", address, storageIt.Error())
 				}
 			}
 
@@ -218,7 +236,7 @@ func (s *Store) ImportLegacyEvmData(evmItems genesis.EvmItems, blockNum uint64, 
 		}
 	}
 	if accIter.Error() != nil {
-		return fmt.Errorf("failed to iterate accounts trie; %v", accIter.Error())
+		return fmt.Errorf("failed to iterate accounts trie; %w", accIter.Error())
 	}
 
 	if err := bulk.Close(); err != nil {

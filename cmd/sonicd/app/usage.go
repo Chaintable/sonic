@@ -19,13 +19,15 @@
 package app
 
 import (
-	"github.com/Fantom-foundation/go-opera/cmd/sonicd/cmdhelper"
 	"io"
 	"sort"
+	"sync"
+
+	"github.com/0xsoniclabs/sonic/cmd/sonicd/cmdhelper"
 
 	cli "gopkg.in/urfave/cli.v1"
 
-	"github.com/Fantom-foundation/go-opera/debug"
+	"github.com/0xsoniclabs/sonic/debug"
 )
 
 // AppHelpFlagGroups is the application flags, grouped by functionality.
@@ -83,14 +85,18 @@ func calcAppHelpFlagGroups() []cmdhelper.FlagGroup {
 	}
 }
 
-func initAppHelp() {
+// initAppHelp is a thread-safe run-once function initializing the app help template.
+var initAppHelp = sync.OnceFunc(initAppHelpInternal)
+
+func initAppHelpInternal() {
 	// Override the default app help template
 	cli.AppHelpTemplate = cmdhelper.AppHelpTemplate
 
 	// Override the default app help printer, but only for the global app help
 	originalHelpPrinter := cli.HelpPrinter
 	cli.HelpPrinter = func(w io.Writer, tmpl string, data interface{}) {
-		if tmpl == cmdhelper.AppHelpTemplate {
+		switch tmpl {
+		case cmdhelper.AppHelpTemplate:
 			// Iterate over all the flags and add any uncategorized ones
 			categorized := make(map[string]struct{})
 			for _, group := range AppHelpFlagGroups {
@@ -116,7 +122,7 @@ func initAppHelp() {
 			}
 			// Render out custom usage screen
 			originalHelpPrinter(w, tmpl, cmdhelper.HelpData{App: data, FlagGroups: AppHelpFlagGroups})
-		} else if tmpl == cmdhelper.CommandHelpTemplate {
+		case cmdhelper.CommandHelpTemplate:
 			// Iterate over all command specific flags and categorize them
 			categorized := make(map[string][]cli.Flag)
 			for _, flag := range data.(cli.Command).Flags {
@@ -137,7 +143,7 @@ func initAppHelp() {
 				"cmd":              data,
 				"categorizedFlags": sorted,
 			})
-		} else {
+		default:
 			originalHelpPrinter(w, tmpl, data)
 		}
 	}

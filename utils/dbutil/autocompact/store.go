@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package autocompact
 
 import (
@@ -30,7 +46,7 @@ func Wrap(s kvdb.Store, limit uint64, strategy func() ContainerI, name string) *
 		limit:   limit,
 		newCont: strategy,
 		cont:    strategy(),
-		name: name,
+		name:    name,
 	}
 }
 
@@ -89,7 +105,7 @@ func (s *Store) mayCompact(force bool) {
 	if force || s.cont.Size() > s.limit {
 		for _, r := range s.cont.Ranges() {
 			log.Debug("Autocompact", "name", s.name, "from", hexutils.BytesToHex(r.minKey), "to", hexutils.BytesToHex(r.maxKey))
-			_ = s.Store.Compact(r.minKey, r.maxKey)
+			_ = s.Compact(r.minKey, r.maxKey)
 		}
 		s.cont.Reset()
 	}

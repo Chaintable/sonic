@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package gossip
 
 import (
@@ -10,144 +26,112 @@ import (
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/stretchr/testify/suite"
+	"github.com/stretchr/testify/require"
 
-	"github.com/Fantom-foundation/go-opera/eventcheck/basiccheck"
-	"github.com/Fantom-foundation/go-opera/inter"
+	"github.com/0xsoniclabs/sonic/eventcheck/basiccheck"
+	"github.com/0xsoniclabs/sonic/inter"
 )
 
-type LLRBasicCheckTestSuite struct {
-	suite.Suite
-
-	env        *testEnv
-	me         *inter.MutableEventPayload
-	startEpoch idx.Epoch
-}
-
-func (s *LLRBasicCheckTestSuite) SetupSuite() {
-	s.T().Log("setting up test suite")
+func setup(t *testing.T) (*testEnv, *inter.MutableEventPayload) {
+	t.Helper()
 
 	const (
 		validatorsNum = 10
 		startEpoch    = 1
 	)
 
-	env := newTestEnv(startEpoch, validatorsNum, s.T())
+	env := newTestEnv(startEpoch, validatorsNum, t)
 
 	em := env.emitters[0]
 	e, err := em.EmitEvent()
-	s.Require().NoError(err)
-	s.Require().NotNil(e)
+	require.NoError(t, err)
+	require.NotNil(t, e)
 
-	s.env = env
-	s.me = mutableEventPayloadFromImmutable(e)
-	s.startEpoch = idx.Epoch(startEpoch)
+	me := mutableEventPayloadFromImmutable(e)
+	return env, me
 }
 
-func (s *LLRBasicCheckTestSuite) TearDownSuite() {
-	s.T().Log("tearing down test suite")
-	s.env.Close()
-}
+func TestBasicCheckValidate(t *testing.T) {
 
-func (s *LLRBasicCheckTestSuite) TestBasicCheckValidate() {
-
-	testCases := []struct {
-		name    string
-		pretest func()
-		errExp  error
+	testCases := map[string]struct {
+		prepareTest func(*inter.MutableEventPayload)
+		expectedErr error
 	}{
-
-		{
-			"ErrWrongNetForkID",
-			func() {
-				s.me.SetNetForkID(1)
+		"ErrWrongNetForkID": {
+			prepareTest: func(payload *inter.MutableEventPayload) {
+				payload.SetNetForkID(1)
 			},
-			basiccheck.ErrWrongNetForkID,
+			expectedErr: basiccheck.ErrWrongNetForkID,
 		},
-
-		{
-			"Validate checkLimits ErrHugeValue",
-			func() {
-				s.me.SetEpoch(math.MaxInt32 - 1)
+		"Validate checkLimits ErrHugeValue": {
+			prepareTest: func(payload *inter.MutableEventPayload) {
+				payload.SetEpoch(math.MaxInt32 - 1)
 			},
-			lbasiccheck.ErrHugeValue,
+			expectedErr: lbasiccheck.ErrHugeValue,
 		},
-		{
-			"Validate checkInited checkInited ErrNotInited ",
-			func() {
-				s.me.SetSeq(0)
+		"Validate checkInited checkInited ErrNotInited": {
+			prepareTest: func(payload *inter.MutableEventPayload) {
+				payload.SetSeq(0)
 			},
-			lbasiccheck.ErrNotInited,
+			expectedErr: lbasiccheck.ErrNotInited,
 		},
-		{
-			"Validate checkInited ErrNoParents",
-			func() {
-				s.me.SetEpoch(idx.Epoch(1))
-				s.me.SetFrame(idx.Frame(1))
-				s.me.SetLamport(idx.Lamport(1))
-
-				s.me.SetSeq(idx.Event(2))
+		"Validate checkInited ErrNoParents": {
+			prepareTest: func(payload *inter.MutableEventPayload) {
+				payload.SetEpoch(idx.Epoch(1))
+				payload.SetFrame(idx.Frame(1))
+				payload.SetLamport(idx.Lamport(1))
+				payload.SetSeq(idx.Event(2))
 				parents := hash.Events{}
-				s.me.SetParents(parents)
+				payload.SetParents(parents)
 			},
-			lbasiccheck.ErrNoParents,
+			expectedErr: lbasiccheck.ErrNoParents,
 		},
-		{
-			"Validate ErrHugeValue-1",
-			func() {
-				s.me.SetSeq(idx.Event(1))
-				s.me.SetEpoch(idx.Epoch(1))
-				s.me.SetFrame(idx.Frame(1))
-				s.me.SetLamport(idx.Lamport(1))
-
-				s.me.SetGasPowerUsed(math.MaxInt64 - 1)
+		"Validate ErrHugeValue-1": {
+			prepareTest: func(payload *inter.MutableEventPayload) {
+				payload.SetSeq(idx.Event(1))
+				payload.SetEpoch(idx.Epoch(1))
+				payload.SetFrame(idx.Frame(1))
+				payload.SetLamport(idx.Lamport(1))
+				payload.SetGasPowerUsed(math.MaxInt64 - 1)
 			},
-			lbasiccheck.ErrHugeValue,
+			expectedErr: lbasiccheck.ErrHugeValue,
 		},
-		{
-			"Validate ErrHugeValue-2",
-			func() {
-				s.me.SetSeq(idx.Event(1))
-				s.me.SetEpoch(idx.Epoch(1))
-				s.me.SetFrame(idx.Frame(1))
-				s.me.SetLamport(idx.Lamport(1))
-
-				s.me.SetGasPowerLeft(inter.GasPowerLeft{Gas: [2]uint64{math.MaxInt64 - 1, math.MaxInt64}})
+		"Validate ErrHugeValue-2": {
+			prepareTest: func(payload *inter.MutableEventPayload) {
+				payload.SetSeq(idx.Event(1))
+				payload.SetEpoch(idx.Epoch(1))
+				payload.SetFrame(idx.Frame(1))
+				payload.SetLamport(idx.Lamport(1))
+				payload.SetGasPowerLeft(inter.GasPowerLeft{Gas: [2]uint64{math.MaxInt64 - 1, math.MaxInt64}})
 			},
-			lbasiccheck.ErrHugeValue,
+			expectedErr: lbasiccheck.ErrHugeValue,
 		},
-		{
-			"Validate ErrZeroTime-1",
-			func() {
-				s.me.SetSeq(idx.Event(1))
-				s.me.SetEpoch(idx.Epoch(1))
-				s.me.SetFrame(idx.Frame(1))
-				s.me.SetLamport(idx.Lamport(1))
-
-				s.me.SetCreationTime(0)
+		"Validate ErrZeroTime-1": {
+			prepareTest: func(payload *inter.MutableEventPayload) {
+				payload.SetSeq(idx.Event(1))
+				payload.SetEpoch(idx.Epoch(1))
+				payload.SetFrame(idx.Frame(1))
+				payload.SetLamport(idx.Lamport(1))
+				payload.SetCreationTime(0)
 			},
-			basiccheck.ErrZeroTime,
+			expectedErr: basiccheck.ErrZeroTime,
 		},
-		{
-			"Validate ErrZeroTime-2",
-			func() {
-				s.me.SetSeq(idx.Event(1))
-				s.me.SetEpoch(idx.Epoch(1))
-				s.me.SetFrame(idx.Frame(1))
-				s.me.SetLamport(idx.Lamport(1))
-
-				s.me.SetMedianTime(0)
+		"Validate ErrZeroTime-2": {
+			prepareTest: func(payload *inter.MutableEventPayload) {
+				payload.SetSeq(idx.Event(1))
+				payload.SetEpoch(idx.Epoch(1))
+				payload.SetFrame(idx.Frame(1))
+				payload.SetLamport(idx.Lamport(1))
+				payload.SetMedianTime(0)
 			},
-			basiccheck.ErrZeroTime,
+			expectedErr: basiccheck.ErrZeroTime,
 		},
-		{
-			"Validate checkTxs validateTx ErrNegativeValue-1",
-			func() {
-				s.me.SetSeq(idx.Event(1))
-				s.me.SetEpoch(idx.Epoch(1))
-				s.me.SetFrame(idx.Frame(1))
-				s.me.SetLamport(idx.Lamport(1))
-
+		"Validate checkTxs validateTx ErrNegativeValue-1": {
+			prepareTest: func(payload *inter.MutableEventPayload) {
+				payload.SetSeq(idx.Event(1))
+				payload.SetEpoch(idx.Epoch(1))
+				payload.SetFrame(idx.Frame(1))
+				payload.SetLamport(idx.Lamport(1))
 				h := hash.BytesToEvent(bytes.Repeat([]byte{math.MaxUint8}, 32))
 				tx1 := types.NewTx(&types.LegacyTx{
 					Nonce:    math.MaxUint64,
@@ -162,18 +146,16 @@ func (s *LLRBasicCheckTestSuite) TestBasicCheckValidate() {
 				})
 				txs := types.Transactions{}
 				txs = append(txs, tx1)
-				s.me.SetTxs(txs)
+				payload.SetTxs(txs)
 			},
-			basiccheck.ErrNegativeValue,
+			expectedErr: basiccheck.ErrNegativeValue,
 		},
-		{
-			"Validate checkTxs validateTx ErrNegativeValue-2",
-			func() {
-				s.me.SetSeq(idx.Event(1))
-				s.me.SetEpoch(idx.Epoch(1))
-				s.me.SetFrame(idx.Frame(1))
-				s.me.SetLamport(idx.Lamport(1))
-
+		"Validate checkTxs validateTx ErrNegativeValue-2": {
+			prepareTest: func(payload *inter.MutableEventPayload) {
+				payload.SetSeq(idx.Event(1))
+				payload.SetEpoch(idx.Epoch(1))
+				payload.SetFrame(idx.Frame(1))
+				payload.SetLamport(idx.Lamport(1))
 				h := hash.BytesToEvent(bytes.Repeat([]byte{math.MaxUint8}, 32))
 				tx1 := types.NewTx(&types.LegacyTx{
 					Nonce:    math.MaxUint64,
@@ -188,18 +170,16 @@ func (s *LLRBasicCheckTestSuite) TestBasicCheckValidate() {
 				})
 				txs := types.Transactions{}
 				txs = append(txs, tx1)
-				s.me.SetTxs(txs)
+				payload.SetTxs(txs)
 			},
-			basiccheck.ErrNegativeValue,
+			expectedErr: basiccheck.ErrNegativeValue,
 		},
-		{
-			"Validate checkTxs validateTx ErrIntrinsicGas",
-			func() {
-				s.me.SetSeq(idx.Event(1))
-				s.me.SetEpoch(idx.Epoch(1))
-				s.me.SetFrame(idx.Frame(1))
-				s.me.SetLamport(idx.Lamport(1))
-
+		"Validate checkTxs validateTx ErrIntrinsicGas": {
+			prepareTest: func(payload *inter.MutableEventPayload) {
+				payload.SetSeq(idx.Event(1))
+				payload.SetEpoch(idx.Epoch(1))
+				payload.SetFrame(idx.Frame(1))
+				payload.SetLamport(idx.Lamport(1))
 				h := hash.BytesToEvent(bytes.Repeat([]byte{math.MaxUint8}, 32))
 				tx1 := types.NewTx(&types.LegacyTx{
 					Nonce:    math.MaxUint64,
@@ -214,21 +194,17 @@ func (s *LLRBasicCheckTestSuite) TestBasicCheckValidate() {
 				})
 				txs := types.Transactions{}
 				txs = append(txs, tx1)
-				s.me.SetTxs(txs)
+				payload.SetTxs(txs)
 			},
-			basiccheck.ErrIntrinsicGas,
+			expectedErr: basiccheck.ErrIntrinsicGas,
 		},
-
-		{
-			"Validate checkTxs validateTx ErrTipAboveFeeCap",
-			func() {
-				s.me.SetSeq(idx.Event(1))
-				s.me.SetEpoch(idx.Epoch(1))
-				s.me.SetFrame(idx.Frame(1))
-				s.me.SetLamport(idx.Lamport(1))
-
+		"Validate checkTxs validateTx ErrTipAboveFeeCap": {
+			prepareTest: func(payload *inter.MutableEventPayload) {
+				payload.SetSeq(idx.Event(1))
+				payload.SetEpoch(idx.Epoch(1))
+				payload.SetFrame(idx.Frame(1))
+				payload.SetLamport(idx.Lamport(1))
 				h := hash.BytesToEvent(bytes.Repeat([]byte{math.MaxUint8}, 32))
-
 				tx1 := types.NewTx(&types.DynamicFeeTx{
 					Nonce:     math.MaxUint64,
 					To:        nil,
@@ -242,23 +218,19 @@ func (s *LLRBasicCheckTestSuite) TestBasicCheckValidate() {
 					R:         h.Big(),
 					S:         h.Big(),
 				})
-
 				txs := types.Transactions{}
 				txs = append(txs, tx1)
-				s.me.SetTxs(txs)
+				payload.SetTxs(txs)
 			},
-			basiccheck.ErrTipAboveFeeCap,
+			expectedErr: basiccheck.ErrTipAboveFeeCap,
 		},
-		{
-			"Validate returns nil",
-			func() {
-				s.me.SetSeq(idx.Event(1))
-				s.me.SetEpoch(idx.Epoch(1))
-				s.me.SetFrame(idx.Frame(1))
-				s.me.SetLamport(idx.Lamport(1))
-
+		"Validate returns nil": {
+			prepareTest: func(payload *inter.MutableEventPayload) {
+				payload.SetSeq(idx.Event(1))
+				payload.SetEpoch(idx.Epoch(1))
+				payload.SetFrame(idx.Frame(1))
+				payload.SetLamport(idx.Lamport(1))
 				h := hash.BytesToEvent(bytes.Repeat([]byte{math.MaxUint8}, 32))
-
 				tx1 := types.NewTx(&types.DynamicFeeTx{
 					Nonce:     math.MaxUint64,
 					To:        nil,
@@ -272,33 +244,50 @@ func (s *LLRBasicCheckTestSuite) TestBasicCheckValidate() {
 					R:         h.Big(),
 					S:         h.Big(),
 				})
-
 				txs := types.Transactions{}
 				txs = append(txs, tx1)
-				s.me.SetTxs(txs)
+				payload.SetTxs(txs)
 			},
-			nil,
+			expectedErr: nil,
 		},
 	}
 
-	for _, tc := range testCases {
-		tc := tc
-		s.Run(tc.name, func() {
-			s.SetupSuite()
-			tc.pretest()
+	for name, test := range testCases {
+		t.Run(name, func(t *testing.T) {
+			env, payload := setup(t)
+			t.Cleanup(func() {
+				err := env.Close()
+				require.NoError(t, err)
+			})
 
-			err := s.env.checkers.Basiccheck.Validate(s.me)
+			test.prepareTest(payload)
 
-			if tc.errExp != nil {
-				s.Require().Error(err)
-				s.Require().EqualError(err, tc.errExp.Error())
+			err := env.checkers.Basiccheck.Validate(payload)
+			if test.expectedErr != nil {
+				require.EqualError(t, err, test.expectedErr.Error())
 			} else {
-				s.Require().NoError(err)
+				require.NoError(t, err)
 			}
+
 		})
 	}
 }
 
-func TestBasicCheckIntegrationTestSuite(t *testing.T) {
-	suite.Run(t, new(LLRBasicCheckTestSuite))
+func mutableEventPayloadFromImmutable(e *inter.EventPayload) *inter.MutableEventPayload {
+	me := &inter.MutableEventPayload{}
+	me.SetVersion(e.Version())
+	me.SetNetForkID(e.NetForkID())
+	me.SetCreator(e.Creator())
+	me.SetEpoch(e.Epoch())
+	me.SetCreationTime(e.CreationTime())
+	me.SetMedianTime(e.MedianTime())
+	me.SetPrevEpochHash(e.PrevEpochHash())
+	me.SetExtra(e.Extra())
+	me.SetGasPowerLeft(e.GasPowerLeft())
+	me.SetGasPowerUsed(e.GasPowerUsed())
+	me.SetPayload(*e.Payload())
+	me.SetPayloadHash(e.PayloadHash())
+	me.SetSig(e.Sig())
+	me.SetTxs(e.Transactions())
+	return me
 }

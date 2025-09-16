@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package gossip
 
 import (
@@ -5,14 +21,15 @@ import (
 
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
-	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/common"
 
-	"github.com/Fantom-foundation/go-opera/gossip/emitter"
-	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/Fantom-foundation/go-opera/inter/state"
-	"github.com/Fantom-foundation/go-opera/utils/wgmutex"
-	"github.com/Fantom-foundation/go-opera/valkeystore"
-	"github.com/Fantom-foundation/go-opera/vecmt"
+	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/gossip/emitter"
+	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/inter/state"
+	"github.com/0xsoniclabs/sonic/opera"
+	"github.com/0xsoniclabs/sonic/utils/wgmutex"
+	"github.com/0xsoniclabs/sonic/vecmt"
 )
 
 type emitterWorldProc struct {
@@ -29,8 +46,6 @@ type emitterWorld struct {
 	emitterWorldRead
 	*wgmutex.WgMutex
 	emitter.TxPool
-	valkeystore.SignerI
-	types.Signer
 }
 
 func (ew *emitterWorldProc) Check(emitted *inter.EventPayload, parents inter.Events) error {
@@ -69,6 +84,17 @@ func (ew *emitterWorldProc) StateDB() state.StateDB {
 	return statedb
 }
 
+func (ew *emitterWorldProc) GetUpgradeHeights() []opera.UpgradeHeight {
+	return ew.s.store.GetUpgradeHeights()
+}
+
+func (ew *emitterWorldProc) GetHeader(h common.Hash, number uint64) *evmcore.EvmHeader {
+	reader := &EvmStateReader{
+		store: ew.s.store,
+	}
+	return reader.GetHeader(h, number)
+}
+
 func (ew *emitterWorldProc) IsSynced() bool {
 	return ew.s.handler.syncStatus.AcceptEvents()
 }
@@ -78,7 +104,7 @@ func (ew *emitterWorldProc) PeersNum() int {
 }
 
 func (ew *emitterWorldRead) GetHeads(epoch idx.Epoch) hash.Events {
-	return ew.Store.GetHeadsSlice(epoch)
+	return ew.GetHeadsSlice(epoch)
 }
 
 func (ew *emitterWorldRead) GetLastEvent(epoch idx.Epoch, from idx.ValidatorID) *hash.Event {
@@ -86,5 +112,5 @@ func (ew *emitterWorldRead) GetLastEvent(epoch idx.Epoch, from idx.ValidatorID) 
 }
 
 func (ew *emitterWorldRead) GetBlockEpoch(block idx.Block) idx.Epoch {
-	return ew.Store.FindBlockEpoch(block)
+	return ew.FindBlockEpoch(block)
 }

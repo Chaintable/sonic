@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package config
 
 import (
@@ -12,13 +28,13 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/usbwallet"
 	"github.com/ethereum/go-ethereum/metrics"
 
-	"github.com/Fantom-foundation/go-opera/config/flags"
-	"github.com/Fantom-foundation/go-opera/evmcore"
-	"github.com/Fantom-foundation/go-opera/gossip"
-	"github.com/Fantom-foundation/go-opera/gossip/emitter"
-	"github.com/Fantom-foundation/go-opera/integration"
-	"github.com/Fantom-foundation/go-opera/utils/errlock"
-	"github.com/Fantom-foundation/go-opera/valkeystore"
+	"github.com/0xsoniclabs/sonic/config/flags"
+	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/gossip"
+	"github.com/0xsoniclabs/sonic/gossip/emitter"
+	"github.com/0xsoniclabs/sonic/integration"
+	"github.com/0xsoniclabs/sonic/utils/errlock"
+	"github.com/0xsoniclabs/sonic/valkeystore"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/log"
@@ -42,8 +58,8 @@ func MakeNode(ctx *cli.Context, cfg *Config) (*node.Node, *gossip.Service, func(
 	}()
 
 	// check errlock file
-	errlock.SetDefaultDatadir(cfg.Node.DataDir)
-	if err := errlock.Check(); err != nil {
+	errorLock := errlock.New(cfg.Node.DataDir)
+	if err := errorLock.Check(); err != nil {
 		return nil, nil, nil, err
 	}
 
@@ -109,14 +125,16 @@ func MakeNode(ctx *cli.Context, cfg *Config) (*node.Node, *gossip.Service, func(
 			return nil, nil, nil, fmt.Errorf("failed to unlock validator key: %w", err)
 		}
 	}
-	signer := valkeystore.NewSigner(valKeystore)
+	signer := valkeystore.NewSignerAuthority(valKeystore, cfg.Emitter.Validator.PubKey)
 
 	// Create and register a gossip network service.
 	newTxPool := func(reader evmcore.StateReader) gossip.TxPool {
 		if cfg.TxPool.Journal != "" {
 			cfg.TxPool.Journal = path.Join(cfg.Node.DataDir, cfg.TxPool.Journal)
 		}
-		return evmcore.NewTxPool(cfg.TxPool, reader.Config(), reader)
+		pool := evmcore.NewTxPool(cfg.TxPool, reader.Config(), reader)
+		cleanup = append(cleanup, pool.Stop)
+		return pool
 	}
 	haltCheck := func(oldEpoch, newEpoch idx.Epoch, age time.Time) bool {
 		stop := ctx.GlobalIsSet(flags.ExitWhenAgeFlag.Name) && ctx.GlobalDuration(flags.ExitWhenAgeFlag.Name) >= time.Since(age)
@@ -154,11 +172,14 @@ func MakeNode(ctx *cli.Context, cfg *Config) (*node.Node, *gossip.Service, func(
 			cfg.Emitter,
 			svc.EmitterWorld(signer),
 			gdb.AsBaseFeeSource(),
+			errorLock,
 		))
 	}
 
 	stack.RegisterAPIs(svc.APIs())
-	stack.RegisterProtocols(svc.Protocols())
+	protocols, cleanupProtocols := svc.Protocols()
+	cleanup = append(cleanup, cleanupProtocols)
+	stack.RegisterProtocols(protocols)
 	stack.RegisterLifecycle(svc)
 
 	rules, _ := gdb.GetEpochRules()

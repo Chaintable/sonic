@@ -1,14 +1,30 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package integration
 
 import (
 	"crypto/ecdsa"
-	"errors"
 	"fmt"
-	"github.com/Fantom-foundation/go-opera/gossip"
-	"github.com/Fantom-foundation/go-opera/utils/adapters/vecmt2dagidx"
-	"github.com/Fantom-foundation/go-opera/vecmt"
+
+	"github.com/0xsoniclabs/sonic/gossip"
+	"github.com/0xsoniclabs/sonic/utils/adapters/vecmt2dagidx"
+	"github.com/0xsoniclabs/sonic/utils/caution"
+	"github.com/0xsoniclabs/sonic/vecmt"
 	"github.com/Fantom-foundation/lachesis-base/abft"
-	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/Fantom-foundation/lachesis-base/kvdb"
 	"github.com/ethereum/go-ethereum/accounts"
@@ -24,17 +40,6 @@ var (
 	FlushIDKey     = append(common.CopyBytes(MetadataPrefix), 0x0c)
 	TablesKey      = append(common.CopyBytes(MetadataPrefix), 0x0d)
 )
-
-// GenesisMismatchError is raised when trying to overwrite an existing
-// genesis block with an incompatible one.
-type GenesisMismatchError struct {
-	Stored, New hash.Hash
-}
-
-// Error implements error interface.
-func (e *GenesisMismatchError) Error() string {
-	return fmt.Sprintf("database contains incompatible genesis (have %s, new %s)", e.Stored.String(), e.New.String())
-}
 
 type Configs struct {
 	Opera         gossip.Config
@@ -80,18 +85,15 @@ func rawMakeEngine(gdb *gossip.Store, cdb *abft.Store, cfg Configs) (*abft.Lache
 	return engine, vecClock, blockProc, nil
 }
 
-func CheckStateInitialized(chaindataDir string, cfg DBsConfig) error {
-	if isInterrupted(chaindataDir) {
-		return errors.New("genesis processing isn't finished")
-	}
-	dbs, err := GetDbProducer(chaindataDir, cfg.RuntimeCache)
-	if err != nil {
-		return err
-	}
-	return dbs.Close()
-}
-
-func makeEngine(chaindataDir string, cfg Configs) (*abft.Lachesis, *vecmt.Index, *gossip.Store, *abft.Store, gossip.BlockProc, func() error, error) {
+func makeEngine(chaindataDir string, cfg Configs) (
+	_ *abft.Lachesis,
+	_ *vecmt.Index,
+	_ *gossip.Store,
+	_ *abft.Store,
+	_ gossip.BlockProc,
+	_ func() error,
+	err error,
+) {
 	dbs, err := GetDbProducer(chaindataDir, cfg.DBs.RuntimeCache)
 	if err != nil {
 		return nil, nil, nil, nil, gossip.BlockProc{}, nil, err
@@ -104,25 +106,26 @@ func makeEngine(chaindataDir string, cfg Configs) (*abft.Lachesis, *vecmt.Index,
 	}
 	defer func() {
 		if err != nil {
-			gdb.Close()
-			cdb.Close()
-			dbs.Close()
+			caution.CloseAndReportError(&err, cdb, "failed to close lachesis store")
+			caution.CloseAndReportError(&err, gdb, "failed to close gossip store")
+			caution.CloseAndReportError(&err, dbs, "failed to close db producer")
 		}
 	}()
 
 	err = gdb.EvmStore().Open()
+	dbsClose := dbs.Close
 	if err != nil {
 		err = fmt.Errorf("failed to open EvmStore: %v", err)
-		return nil, nil, nil, nil, gossip.BlockProc{}, dbs.Close, err
+		return nil, nil, nil, nil, gossip.BlockProc{}, dbsClose, err
 	}
 
 	engine, vecClock, blockProc, err := rawMakeEngine(gdb, cdb, cfg)
 	if err != nil {
 		err = fmt.Errorf("failed to make engine: %v", err)
-		return nil, nil, nil, nil, gossip.BlockProc{}, dbs.Close, err
+		return nil, nil, nil, nil, gossip.BlockProc{}, dbsClose, err
 	}
 
-	return engine, vecClock, gdb, cdb, blockProc, dbs.Close, nil
+	return engine, vecClock, gdb, cdb, blockProc, dbsClose, nil
 }
 
 // MakeEngine makes consensus engine from config.

@@ -1,15 +1,32 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package gossip
 
 import (
 	"sync/atomic"
 
+	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/Fantom-foundation/lachesis-base/inter/pos"
 
-	"github.com/Fantom-foundation/go-opera/eventcheck/gaspowercheck"
-	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/Fantom-foundation/go-opera/inter/validatorpk"
-	"github.com/Fantom-foundation/go-opera/opera"
+	"github.com/0xsoniclabs/sonic/eventcheck/gaspowercheck"
+	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/inter/validatorpk"
+	"github.com/0xsoniclabs/sonic/opera"
 )
 
 // GasPowerCheckReader is a helper to run gas power check
@@ -116,4 +133,24 @@ func readEpochPubKeys(s *Store, epoch idx.Epoch) *ValidatorsPubKeys {
 		Epoch:   epoch,
 		PubKeys: pubkeys,
 	}
+}
+
+// proposalCheckReader is an implementation of the proposalcheck.Reader
+// interface providing access to event payload data and epoch validators.
+type proposalCheckReader struct {
+	store *Store
+}
+
+func newProposalCheckReader(store *Store) proposalCheckReader {
+	return proposalCheckReader{
+		store: store,
+	}
+}
+
+func (r *proposalCheckReader) GetEpochValidators() *pos.Validators {
+	return r.store.GetValidators()
+}
+
+func (r *proposalCheckReader) GetEventPayload(eventID hash.Event) inter.Payload {
+	return *r.store.GetEventPayload(eventID).Payload()
 }

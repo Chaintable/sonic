@@ -1,16 +1,38 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package evmstore
 
 import (
 	"fmt"
-	cc "github.com/Fantom-foundation/Carmen/go/common"
-	carmen "github.com/Fantom-foundation/Carmen/go/state"
-	_ "github.com/Fantom-foundation/Carmen/go/state/gostate"
-	"github.com/Fantom-foundation/go-opera/inter/state"
+	"math/big"
+
+	cc "github.com/0xsoniclabs/carmen/go/common"
+	carmen "github.com/0xsoniclabs/carmen/go/state"
+	_ "github.com/0xsoniclabs/carmen/go/state/gostate"
+	"github.com/0xsoniclabs/sonic/inter/state"
+	"github.com/0xsoniclabs/sonic/utils/caution"
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/ethereum/go-ethereum/common"
-	"math/big"
 )
+
+// NoArchiveError is an error returned by implementation of the State interface
+// for archive operations if no archive is maintained by this implementation.
+const NoArchiveError = carmen.NoArchiveError
 
 // GetLiveStateDb obtains StateDB for block processing - the live writable state
 func (s *Store) GetLiveStateDb(stateRoot hash.Hash) (state.StateDB, error) {
@@ -71,7 +93,7 @@ func (s *Store) CheckLiveStateHash(blockNum idx.Block, root hash.Hash) error {
 }
 
 // CheckArchiveStateHash returns if the hash of the given archive StateDB hash matches
-func (s *Store) CheckArchiveStateHash(blockNum idx.Block, root hash.Hash) error {
+func (s *Store) CheckArchiveStateHash(blockNum idx.Block, root hash.Hash) (err error) {
 	if s.carmenState == nil {
 		return fmt.Errorf("unable to get live state - EvmStore is not open")
 	}
@@ -79,7 +101,7 @@ func (s *Store) CheckArchiveStateHash(blockNum idx.Block, root hash.Hash) error 
 	if err != nil {
 		return fmt.Errorf("unable to get archive state: %w", err)
 	}
-	defer archiveState.Close()
+	defer caution.CloseAndReportError(&err, archiveState, "failed to close archive state")
 
 	stateHash, err := archiveState.GetHash()
 	if err != nil {

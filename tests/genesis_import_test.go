@@ -1,7 +1,23 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package tests
 
 import (
-	"context"
+	"math/big"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -12,13 +28,11 @@ func TestGenesis_NetworkCanCreateNewBlocksAfterExportImport(t *testing.T) {
 	const numBlocks = 3
 	require := require.New(t)
 
-	tempDir := t.TempDir()
-	net, err := StartIntegrationTestNet(tempDir)
-	require.NoError(err)
+	net := StartIntegrationTestNet(t)
 
 	// Produce a few blocks on the network.
 	for range numBlocks {
-		_, err := net.EndowAccount(common.Address{42}, 100)
+		_, err := net.EndowAccount(common.Address{42}, big.NewInt(100))
 		require.NoError(err, "failed to endow account")
 	}
 
@@ -39,7 +53,7 @@ func TestGenesis_NetworkCanCreateNewBlocksAfterExportImport(t *testing.T) {
 	defer client.Close()
 
 	// check address 42 has balance
-	balance42, err := client.BalanceAt(context.Background(), common.Address{42}, nil)
+	balance42, err := client.BalanceAt(t.Context(), common.Address{42}, nil)
 	require.NoError(err)
 	require.Equal(int64(100*numBlocks), balance42.Int64(), "unexpected balance")
 
@@ -53,7 +67,7 @@ func TestGenesis_NetworkCanCreateNewBlocksAfterExportImport(t *testing.T) {
 
 	// Produce a few blocks on the network
 	for range numBlocks {
-		_, err := net.EndowAccount(common.Address{42}, 100)
+		_, err := net.EndowAccount(common.Address{42}, big.NewInt(100))
 		require.NoError(err, "failed to endow account")
 	}
 

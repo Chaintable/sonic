@@ -1,12 +1,29 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package evmstore
 
 import (
-	"github.com/Fantom-foundation/go-opera/inter/state"
+	"math/big"
+
+	"github.com/0xsoniclabs/sonic/inter/state"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/holiman/uint256"
-	"math/big"
 )
 
 func WrapStateDbWithLogger(stateDb state.StateDB, logger *tracing.Hooks) state.StateDB {
@@ -19,49 +36,49 @@ func WrapStateDbWithLogger(stateDb state.StateDB, logger *tracing.Hooks) state.S
 
 type LoggingStateDB struct {
 	state.StateDB
-	logger *tracing.Hooks
+	logger         *tracing.Hooks
 	selfDestructed map[common.Address]struct{}
 }
 
-func (l *LoggingStateDB) AddBalance(addr common.Address, amount *uint256.Int, reason tracing.BalanceChangeReason) {
-	prev := l.StateDB.GetBalance(addr)
-	l.StateDB.AddBalance(addr, amount, reason)
+func (l *LoggingStateDB) AddBalance(addr common.Address, amount *uint256.Int, reason tracing.BalanceChangeReason) uint256.Int {
+	prev := l.StateDB.AddBalance(addr, amount, reason)
 	if l.logger.OnBalanceChange != nil && !amount.IsZero() {
-		l.logger.OnBalanceChange(addr, prev.ToBig(), l.StateDB.GetBalance(addr).ToBig(), reason)
+		l.logger.OnBalanceChange(addr, prev.ToBig(), l.GetBalance(addr).ToBig(), reason)
 	}
+	return prev
 }
 
-func (l *LoggingStateDB) SubBalance(addr common.Address, amount *uint256.Int, reason tracing.BalanceChangeReason) {
-	prev := l.StateDB.GetBalance(addr)
-	l.StateDB.SubBalance(addr, amount, reason)
+func (l *LoggingStateDB) SubBalance(addr common.Address, amount *uint256.Int, reason tracing.BalanceChangeReason) uint256.Int {
+	prev := l.StateDB.SubBalance(addr, amount, reason)
 	if l.logger.OnBalanceChange != nil && !amount.IsZero() {
-		l.logger.OnBalanceChange(addr, prev.ToBig(), l.StateDB.GetBalance(addr).ToBig(), reason)
+		l.logger.OnBalanceChange(addr, prev.ToBig(), l.GetBalance(addr).ToBig(), reason)
 	}
+	return prev
 }
 
-func (l *LoggingStateDB) SetCode(addr common.Address, code []byte) {
-	prevCode := l.StateDB.GetCode(addr)
-	prevCodeHash := l.StateDB.GetCodeHash(addr)
-	l.StateDB.SetCode(addr, code)
+func (l *LoggingStateDB) SetCode(addr common.Address, code []byte) []byte {
+	prevCodeHash := l.GetCodeHash(addr)
+	prevCode := l.StateDB.SetCode(addr, code)
 	if l.logger.OnCodeChange != nil {
-		l.logger.OnCodeChange(addr, prevCodeHash, prevCode, l.StateDB.GetCodeHash(addr), code)
+		l.logger.OnCodeChange(addr, prevCodeHash, prevCode, l.GetCodeHash(addr), code)
 	}
+	return prevCode
 }
 
-func (l *LoggingStateDB) SetNonce(addr common.Address, nonce uint64) {
+func (l *LoggingStateDB) SetNonce(addr common.Address, nonce uint64, reason tracing.NonceChangeReason) {
 	if l.logger.OnNonceChange != nil {
-		prev := l.StateDB.GetNonce(addr)
+		prev := l.GetNonce(addr)
 		l.logger.OnNonceChange(addr, prev, nonce)
 	}
-	l.StateDB.SetNonce(addr, nonce)
+	l.StateDB.SetNonce(addr, nonce, reason)
 }
 
-func (l *LoggingStateDB) SetState(addr common.Address, slot common.Hash, value common.Hash) {
+func (l *LoggingStateDB) SetState(addr common.Address, slot common.Hash, value common.Hash) common.Hash {
+	prev := l.StateDB.SetState(addr, slot, value)
 	if l.logger.OnStorageChange != nil {
-		prev := l.StateDB.GetState(addr, slot)
 		l.logger.OnStorageChange(addr, slot, prev, value)
 	}
-	l.StateDB.SetState(addr, slot, value)
+	return prev
 }
 
 func (l *LoggingStateDB) AddLog(log *types.Log) {
@@ -71,27 +88,27 @@ func (l *LoggingStateDB) AddLog(log *types.Log) {
 	l.StateDB.AddLog(log)
 }
 
-func (l *LoggingStateDB) SelfDestruct(addr common.Address) {
+func (l *LoggingStateDB) SelfDestruct(addr common.Address) uint256.Int {
 	if l.logger.OnBalanceChange != nil {
-		prev := l.StateDB.GetBalance(addr)
+		prev := l.GetBalance(addr)
 		if prev.Sign() > 0 {
 			l.logger.OnBalanceChange(addr, prev.ToBig(), new(big.Int), tracing.BalanceDecreaseSelfdestruct)
 		}
 		l.selfDestructed[addr] = struct{}{}
 	}
-	l.StateDB.SelfDestruct(addr)
+	return l.StateDB.SelfDestruct(addr)
 }
 
-func (l *LoggingStateDB) Finalise() {
+func (l *LoggingStateDB) EndTransaction() {
 	// If tokens were sent to account post-selfdestruct it is burnt.
 	if l.logger.OnBalanceChange != nil {
 		for addr := range l.selfDestructed {
 			if l.HasSelfDestructed(addr) {
-				prev := l.StateDB.GetBalance(addr)
+				prev := l.GetBalance(addr)
 				l.logger.OnBalanceChange(addr, prev.ToBig(), new(big.Int), tracing.BalanceDecreaseSelfdestructBurn)
 			}
 		}
 		l.selfDestructed = make(map[common.Address]struct{})
 	}
-	l.StateDB.Finalise()
+	l.StateDB.EndTransaction()
 }

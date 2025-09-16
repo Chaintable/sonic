@@ -54,7 +54,7 @@ type TestCmd struct {
 }
 
 // Run exec's the current binary using name as argv[0] which will trigger the
-// reexec init function for that name (e.g. "opera-test" in cmd/run_test.go)
+// reexec init function for that name (e.g. "sonic-test" in cmd/run_test.go)
 func (tt *TestCmd) Run(name string, args ...string) {
 	tt.stderr = &testlogger{t: tt.T}
 	tt.cmd = &exec.Cmd{
@@ -80,7 +80,9 @@ func (tt *TestCmd) Run(name string, args ...string) {
 //
 //	cli.expect(`Passphrase: {{.InputLine "password"}}`)
 func (tt *TestCmd) InputLine(s string) string {
-	io.WriteString(tt.stdin, s+"\n")
+	if _, err := io.WriteString(tt.stdin, s+"\n"); err != nil {
+		tt.Fatalf("Failed to write to stdin: %v", err)
+	}
 	return ""
 }
 
@@ -121,16 +123,19 @@ func (tt *TestCmd) matchExactOutput(want []byte) error {
 		// Grab any additional buffered output in case of mismatch
 		// because it might help with debugging.
 		buf = append(buf, make([]byte, tt.stdout.Buffered())...)
-		tt.stdout.Read(buf[n:])
+		if _, err := tt.stdout.Read(buf[n:]); err != nil {
+			tt.Fatalf("Failed to read buffered output: %v", err)
+		}
+
 		// Find the mismatch position.
 		for i := 0; i < n; i++ {
 			if want[i] != buf[i] {
-				return fmt.Errorf("Output mismatch at ◊:\n---------------- (stdout text)\n%s◊%s\n---------------- (expected text)\n%s",
+				return fmt.Errorf("output mismatch at ◊:\n---------------- (stdout text)\n%s◊%s\n---------------- (expected text)\n%s",
 					buf[:i], buf[i:n], want)
 			}
 		}
 		if n < len(want) {
-			return fmt.Errorf("Not enough output, got until ◊:\n---------------- (stdout text)\n%s\n---------------- (expected text)\n%s◊%s",
+			return fmt.Errorf("not enough output, got until ◊:\n---------------- (stdout text)\n%s\n---------------- (expected text)\n%s◊%s",
 				buf, want[:n], want[n:])
 		}
 	}
@@ -212,11 +217,15 @@ func (tt *TestCmd) StderrText() string {
 }
 
 func (tt *TestCmd) CloseStdin() {
-	tt.stdin.Close()
+	if err := tt.stdin.Close(); err != nil {
+		tt.Logf("Failed to close stdin: %v", err)
+	}
 }
 
 func (tt *TestCmd) Kill() {
-	tt.cmd.Process.Kill()
+	if err := tt.cmd.Process.Kill(); err != nil {
+		tt.Logf("Failed to kill process: %v", err)
+	}
 	if tt.Cleanup != nil {
 		tt.Cleanup()
 	}

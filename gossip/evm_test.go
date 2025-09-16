@@ -1,8 +1,20 @@
-package gossip
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
 
-// Simple ballot contract
-//go:generate bash -c "docker run --rm -v $(pwd)/contract/ballot:/src -v $(pwd)/contract:/dst ethereum/solc:0.5.12 -o /dst/solc/ --optimize --optimize-runs=2000 --bin --abi --allow-paths /src --overwrite /src/Ballot.sol"
-//go:generate go run github.com/ethereum/go-ethereum/cmd/abigen --bin=contract/solc/Ballot.bin --abi=contract/solc/Ballot.abi --pkg=ballot --type=Contract --out=contract/ballot/contract.go
+package gossip
 
 import (
 	"math/big"
@@ -12,9 +24,9 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/stretchr/testify/require"
 
-	"github.com/Fantom-foundation/go-opera/gossip/contract/ballot"
-	"github.com/Fantom-foundation/go-opera/logger"
-	"github.com/Fantom-foundation/go-opera/utils"
+	"github.com/0xsoniclabs/sonic/gossip/contract/ballot"
+	"github.com/0xsoniclabs/sonic/logger"
+	"github.com/0xsoniclabs/sonic/utils"
 )
 
 func BenchmarkBallotTxsProcessing(b *testing.B) {
@@ -23,7 +35,10 @@ func BenchmarkBallotTxsProcessing(b *testing.B) {
 	require := require.New(b)
 
 	env := newTestEnv(2, 3, b)
-	defer env.Close()
+	b.Cleanup(func() {
+		err := env.Close()
+		require.NoError(err)
+	})
 
 	for bi := 0; bi < b.N; bi++ {
 		count := idx.ValidatorID(10)
@@ -50,7 +65,8 @@ func BenchmarkBallotTxsProcessing(b *testing.B) {
 		txs := make([]*types.Transaction, 0, count-1)
 		flushTxs := func() {
 			if len(txs) != 0 {
-				env.ApplyTxs(nextEpoch, txs...)
+				_, err := env.ApplyTxs(nextEpoch, txs...)
+				require.NoError(err, "failed to apply txs")
 			}
 			txs = txs[:0]
 		}

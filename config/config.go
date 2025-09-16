@@ -1,19 +1,37 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package config
 
 import (
 	"bufio"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 
-	carmen "github.com/Fantom-foundation/Carmen/go/state"
-	"github.com/Fantom-foundation/go-opera/config/flags"
-	"github.com/Fantom-foundation/go-opera/gossip/evmstore"
-	"github.com/Fantom-foundation/go-opera/version"
+	carmen "github.com/0xsoniclabs/carmen/go/state"
+	"github.com/0xsoniclabs/sonic/config/flags"
+	"github.com/0xsoniclabs/sonic/gossip/evmstore"
+	"github.com/0xsoniclabs/sonic/version"
 	"github.com/ethereum/go-ethereum/common/fdlimit"
 
 	"github.com/Fantom-foundation/lachesis-base/abft"
@@ -26,12 +44,13 @@ import (
 	"github.com/syndtr/goleveldb/leveldb/opt"
 	"gopkg.in/urfave/cli.v1"
 
-	"github.com/Fantom-foundation/go-opera/evmcore"
-	"github.com/Fantom-foundation/go-opera/gossip"
-	"github.com/Fantom-foundation/go-opera/gossip/emitter"
-	"github.com/Fantom-foundation/go-opera/integration"
-	"github.com/Fantom-foundation/go-opera/utils/memory"
-	"github.com/Fantom-foundation/go-opera/vecmt"
+	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/gossip"
+	"github.com/0xsoniclabs/sonic/gossip/emitter"
+	"github.com/0xsoniclabs/sonic/integration"
+	"github.com/0xsoniclabs/sonic/utils/caution"
+	"github.com/0xsoniclabs/sonic/utils/memory"
+	"github.com/0xsoniclabs/sonic/vecmt"
 )
 
 const (
@@ -39,13 +58,7 @@ const (
 	ClientIdentifier = "Sonic"
 )
 
-var (
-	// Git SHA1 commit hash of the release (set via linker flags).
-	GitCommit = ""
-	GitDate   = ""
-)
-
-// These settings ensure that TOML keys use the same names as Go struct fields.
+// TomlSettings ensure that TOML keys use the same names as Go struct fields.
 var TomlSettings = toml.Config{
 	NormFieldName: func(rt reflect.Type, key string) string {
 		return key
@@ -81,12 +94,12 @@ func (c *Config) AppConfigs() integration.Configs {
 	}
 }
 
-func loadAllConfigs(file string, cfg *Config) error {
+func LoadAllConfigs(file string, cfg *Config) (err error) {
 	f, err := os.Open(file)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open config file %s: %w", file, err)
 	}
-	defer f.Close()
+	defer caution.CloseAndReportError(&err, f, "failed to close config file")
 
 	err = TomlSettings.NewDecoder(bufio.NewReader(f)).Decode(cfg)
 	// Add file name to errors that have a line number.
@@ -94,27 +107,81 @@ func loadAllConfigs(file string, cfg *Config) error {
 		err = errors.New(file + ", " + err.Error())
 	}
 	if err != nil {
-
+		// This is a user-facing error, so we want to provide a clear message.
+		//nolint:staticcheck // ST1005: allow capitalized error message and punctuation
 		return fmt.Errorf("TOML config file error: %v.\n"+
 			"Use 'dumpconfig' command to get an example config file.\n"+
 			"If node was recently upgraded and a previous network config file is used, then check updates for the config file.", err)
 	}
-	return err
+	return nil
+}
+
+func SaveAllConfigs(file string, cfg *Config) error {
+	encoded, err := TomlSettings.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to encode config to TOML: %w", err)
+	}
+	if err := os.WriteFile(file, encoded, 0644); err != nil {
+		return fmt.Errorf("failed to write config file %s: %w", file, err)
+	}
+	return nil
 }
 
 func setBootnodes(ctx *cli.Context, urls []string, cfg *node.Config) {
 	cfg.P2P.BootstrapNodesV5 = []*enode.Node{}
 	for _, url := range urls {
 		if url != "" {
-			node, err := enode.Parse(enode.ValidSchemes, url)
+			hostname, modified, err := resolveHostNameInEnodeURL(url)
 			if err != nil {
-				log.Error("Bootstrap URL invalid", "enode", url, "err", err)
+				log.Error("Failed to resolve hostname Bootnode", "url", url, "err", err)
 				continue
 			}
+
+			node, err := enode.Parse(enode.ValidSchemes, modified)
+			if err != nil {
+				log.Error("Bootstrap URL invalid", "enode", modified, "err", err)
+				continue
+			}
+			node = node.WithHostname(hostname)
 			cfg.P2P.BootstrapNodesV5 = append(cfg.P2P.BootstrapNodesV5, node)
 		}
 	}
 	cfg.P2P.BootstrapNodes = cfg.P2P.BootstrapNodesV5
+}
+
+func resolveHostNameInEnodeURL(url string) (hostname string, modified string, err error) {
+	return resolveHostNameInEnodeURLInternal(url, func(hostname string) (string, error) {
+		ips, err := net.LookupIP(hostname)
+		if err != nil {
+			return "", err
+		}
+		if len(ips) == 0 {
+			return "", fmt.Errorf("no IPs found for hostname %v", hostname)
+		}
+		return ips[0].String(), nil
+	})
+}
+
+var _enodeHostnameRE = regexp.MustCompile(`enode:\/\/[0-9a-f]+@([^:]+):[0-9]+`)
+
+func resolveHostNameInEnodeURLInternal(
+	url string,
+	resolve func(string) (string, error),
+) (
+	hostname string,
+	modified string,
+	err error,
+) {
+	match := _enodeHostnameRE.FindStringSubmatch(url)
+	if len(match) != 2 {
+		return "", "", fmt.Errorf("failed to match enode URL")
+	}
+	hostname = match[1]
+	ip, err := resolve(hostname)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to resolve hostname %v: %v", hostname, err)
+	}
+	return hostname, strings.Replace(url, hostname, ip, 1), nil
 }
 
 func setTxPool(ctx *cli.Context, cfg *evmcore.TxPoolConfig) error {
@@ -138,7 +205,11 @@ func setTxPool(ctx *cli.Context, cfg *evmcore.TxPoolConfig) error {
 		cfg.Rejournal = ctx.GlobalDuration(flags.TxPoolRejournalFlag.Name)
 	}
 	if ctx.GlobalIsSet(flags.TxPoolPriceLimitFlag.Name) {
-		cfg.PriceLimit = ctx.GlobalUint64(flags.TxPoolPriceLimitFlag.Name)
+		log.Warn("The flag --txpool.pricelimit is deprecated. Use --txpool.mintip instead.")
+		cfg.MinimumTip = ctx.GlobalUint64(flags.TxPoolPriceLimitFlag.Name)
+	}
+	if ctx.GlobalIsSet(flags.TxPoolMinTipFlag.Name) {
+		cfg.MinimumTip = ctx.GlobalUint64(flags.TxPoolMinTipFlag.Name)
 	}
 	if ctx.GlobalIsSet(flags.TxPoolPriceBumpFlag.Name) {
 		cfg.PriceBump = ctx.GlobalUint64(flags.TxPoolPriceBumpFlag.Name)
@@ -251,7 +322,7 @@ func cacheScaler(ctx *cli.Context) cachescale.Func {
 	if !ctx.GlobalIsSet(flags.CacheFlag.Name) {
 		recommendedCache := totalMemory / 2
 		if recommendedCache > baseSize {
-			log.Warn(fmt.Sprintf("Please add '--%s %d' flag to allocate more cache for Opera. Total memory is %d MB.", flags.CacheFlag.Name, recommendedCache, totalMemory))
+			log.Warn(fmt.Sprintf("Please add '--%s %d' flag to allocate more cache for Sonic. Total memory is %d MB.", flags.CacheFlag.Name, recommendedCache, totalMemory))
 		}
 		return cachescale.Identity
 	}
@@ -299,7 +370,7 @@ func MakeAllConfigsFromFile(ctx *cli.Context, configFile string) (*Config, error
 
 	// Load config file (medium priority)
 	if configFile != "" {
-		if err := loadAllConfigs(configFile, &cfg); err != nil {
+		if err := LoadAllConfigs(configFile, &cfg); err != nil {
 			return &cfg, err
 		}
 	}
@@ -323,6 +394,9 @@ func MakeAllConfigsFromFile(ctx *cli.Context, configFile string) (*Config, error
 	if cfg.Emitter.Validator.ID != 0 && len(cfg.Emitter.PrevEmittedEventFile.Path) == 0 {
 		cfg.Emitter.PrevEmittedEventFile.Path = path.Join(cfg.Node.DataDir, "emitter", fmt.Sprintf("last-%d", cfg.Emitter.Validator.ID))
 	}
+	if ctx.IsSet(flags.TEST_ONLY_DisableTransactionPoolValidation.Name) {
+		cfg.TxPool.DisableTxPoolValidation = true
+	}
 	if err := setTxPool(ctx, &cfg.TxPool); err != nil {
 		return nil, err
 	}
@@ -341,6 +415,14 @@ func MakeAllConfigsFromFile(ctx *cli.Context, configFile string) (*Config, error
 		cfg.Lachesis.SuppressFramePanic = true
 	}
 
+	if ctx.IsSet(flags.StateDbCacheCapacityFlag.Name) {
+		cfg.OperaStore.EVM.Cache.StateDbCapacity = ctx.GlobalInt(flags.StateDbCacheCapacityFlag.Name)
+	}
+
+	if ctx.IsSet(flags.StateDbCheckPointInterval.Name) {
+		cfg.OperaStore.EVM.StateDb.CheckpointInterval = ctx.GlobalInt(flags.StateDbCheckPointInterval.Name)
+	}
+
 	return &cfg, nil
 }
 
@@ -351,7 +433,7 @@ func MakeAllConfigs(ctx *cli.Context) (*Config, error) {
 func DefaultNodeConfig() node.Config {
 	cfg := NodeDefaultConfig
 	cfg.Name = ClientIdentifier
-	cfg.Version = version.VersionWithCommit(GitCommit, GitDate)
+	cfg.Version = version.StringWithCommit()
 	cfg.HTTPModules = append(cfg.HTTPModules, "eth", "ftm", "dag", "abft", "web3")
 	cfg.WSModules = append(cfg.WSModules, "eth", "ftm", "dag", "abft", "web3")
 	cfg.IPCPath = "sonic.ipc"

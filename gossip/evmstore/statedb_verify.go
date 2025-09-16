@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package evmstore
 
 import (
@@ -5,10 +21,11 @@ import (
 	"fmt"
 	"path/filepath"
 
-	cc "github.com/Fantom-foundation/Carmen/go/common"
-	"github.com/Fantom-foundation/Carmen/go/database/mpt"
-	"github.com/Fantom-foundation/Carmen/go/database/mpt/io"
-	carmen "github.com/Fantom-foundation/Carmen/go/state"
+	cc "github.com/0xsoniclabs/carmen/go/common"
+	"github.com/0xsoniclabs/carmen/go/database/mpt"
+	"github.com/0xsoniclabs/carmen/go/database/mpt/io"
+	carmen "github.com/0xsoniclabs/carmen/go/state"
+	"github.com/0xsoniclabs/sonic/utils/caution"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
 )
@@ -53,12 +70,12 @@ func (s *Store) VerifyWorldState(expectedBlockNum uint64, expectedHash common.Ha
 	return nil
 }
 
-func verifyLastState(params carmen.Parameters, expectedBlockNum uint64, expectedHash common.Hash) error {
+func verifyLastState(params carmen.Parameters, expectedBlockNum uint64, expectedHash common.Hash) (err error) {
 	liveState, err := carmen.NewState(params)
 	if err != nil {
 		return fmt.Errorf("failed to open carmen live state in %s: %w", params.Directory, err)
 	}
-	defer liveState.Close()
+	defer caution.CloseAndReportError(&err, liveState, "failed to close carmen live state")
 	if err := checkStateHash(liveState, expectedHash); err != nil {
 		return fmt.Errorf("live state check failed; %w", err)
 	}
@@ -78,7 +95,7 @@ func verifyLastState(params carmen.Parameters, expectedBlockNum uint64, expected
 	if err != nil {
 		return fmt.Errorf("failed to get carmen archive state; %w", err)
 	}
-	defer archiveState.Close()
+	defer caution.CloseAndReportError(&err, archiveState, "failed to close carmen archive state")
 	if err := checkStateHash(archiveState, expectedHash); err != nil {
 		return fmt.Errorf("archive state check failed; %w", err)
 	}

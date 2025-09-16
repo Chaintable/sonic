@@ -17,6 +17,7 @@
 package debug
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -36,9 +37,10 @@ import (
 
 var (
 	verbosityFlag = cli.IntFlag{
-		Name:  "verbosity",
-		Usage: "Logging verbosity: 0=silent, 1=error, 2=warn, 3=info, 4=debug, 5=detail",
-		Value: 3,
+		Name:   "verbosity",
+		Usage:  "Logging verbosity: 0=silent, 1=error, 2=warn, 3=info, 4=debug, 5=detail",
+		Value:  3,
+		EnvVar: "SONIC_VERBOSITY",
 	}
 	vmoduleFlag = cli.StringFlag{
 		Name:  "vmodule",
@@ -218,6 +220,11 @@ func StartPProf(address string, withMetrics bool) {
 // Exit stops all running profiles, flushing their output to the
 // respective file.
 func Exit() {
-	Handler.StopCPUProfile()
-	Handler.StopGoTrace()
+	err := errors.Join(
+		Handler.StopCPUProfile(),
+		Handler.StopGoTrace(),
+	)
+	if err != nil {
+		log.Error("Failed to stop profiles", "err", err)
+	}
 }

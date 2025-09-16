@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package heavycheck
 
 import (
@@ -5,15 +21,17 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto"
 
-	"github.com/Fantom-foundation/go-opera/eventcheck/epochcheck"
-	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/Fantom-foundation/go-opera/inter/validatorpk"
+	"github.com/0xsoniclabs/sonic/eventcheck/epochcheck"
+	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/inter/validatorpk"
+	"github.com/0xsoniclabs/sonic/valkeystore"
 )
+
+//go:generate mockgen -source=heavy_check.go -destination=heavy_check_mock.go -package=heavycheck
 
 var (
 	ErrWrongEventSig    = errors.New("event has wrong signature")
@@ -97,32 +115,6 @@ func (v *Checker) EnqueueEvent(e inter.EventPayloadI, onValidated func(error)) e
 	}
 }
 
-// verifySignature checks the signature against e.Creator.
-func verifySignature(signedHash hash.Hash, sig inter.Signature, pubkey validatorpk.PubKey) bool {
-	if pubkey.Type != validatorpk.Types.Secp256k1 {
-		return false
-	}
-	return crypto.VerifySignature(pubkey.Raw, signedHash.Bytes(), sig.Bytes())
-}
-
-func (v *Checker) ValidateEventLocator(e inter.SignedEventLocator, authEpoch idx.Epoch, authErr error, checkPayload func() bool) error {
-	pubkeys := v.reader.GetEpochPubKeysOf(authEpoch)
-	if len(pubkeys) == 0 {
-		return authErr
-	}
-	pubkey, ok := pubkeys[e.Locator.Creator]
-	if !ok {
-		return epochcheck.ErrAuth
-	}
-	if checkPayload != nil && !checkPayload() {
-		return ErrWrongPayloadHash
-	}
-	if !verifySignature(e.Locator.HashToSign(), e.Sig, pubkey) {
-		return ErrWrongEventSig
-	}
-	return nil
-}
-
 // ValidateEvent runs heavy checks for event
 func (v *Checker) ValidateEvent(e inter.EventPayloadI) error {
 	pubkeys, epoch := v.reader.GetEpochPubKeys()
@@ -135,11 +127,11 @@ func (v *Checker) ValidateEvent(e inter.EventPayloadI) error {
 		return epochcheck.ErrAuth
 	}
 	// event sig
-	if !verifySignature(e.HashToSign(), e.Sig(), pubkey) {
+	if !valkeystore.VerifySignature(common.Hash(e.HashToSign()), e.Sig().Bytes(), pubkey) {
 		return ErrWrongEventSig
 	}
 	// pre-cache tx sig
-	for _, tx := range e.Txs() {
+	for _, tx := range e.Transactions() {
 		_, err := types.Sender(v.txSigner, tx)
 		if err != nil {
 			return ErrMalformedTxSig
