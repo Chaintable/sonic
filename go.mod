@@ -5,7 +5,7 @@ go 1.23.0
 toolchain go1.23.8
 
 require (
-	github.com/Chaintable/pipeline v0.0.53-sonic-v1.14.8-debank-1
+	github.com/Chaintable/pipeline v0.0.53-sonic-v1.14.8-debank-1.0.20250909165845-44762844cede
 	github.com/Fantom-foundation/Carmen/go v0.0.0-20241129202153-690bc10fa624
 	github.com/Fantom-foundation/Tosca v0.0.0-20241028082205-7b33705a4675
 	github.com/Fantom-foundation/lachesis-base v0.0.0-20240116072301-a75735c4ef00

@@ -4,25 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/Chaintable/pipeline/tracer"
-	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/ethereum/go-ethereum/core/tracing"
-	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/trie"
 	"math/big"
 	"strings"
 	"time"
 
+	"github.com/Chaintable/pipeline/tracer"
+	ptypes "github.com/Chaintable/pipeline/types"
 	"github.com/Fantom-foundation/go-opera/evmcore"
+	"github.com/Fantom-foundation/go-opera/inter"
 	"github.com/Fantom-foundation/go-opera/opera"
 	"github.com/Fantom-foundation/go-opera/txtrace"
-	"github.com/ethereum/go-ethereum/core"
-
-	ptypes "github.com/Chaintable/pipeline/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/ethereum/go-ethereum/trie"
 )
 
 type PreExecTx struct {
