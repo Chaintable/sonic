@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package verwatcher
 
 import (
@@ -8,13 +24,12 @@ import (
 
 	"github.com/ethereum/go-ethereum/core/types"
 
-	"github.com/Fantom-foundation/go-opera/logger"
-	"github.com/Fantom-foundation/go-opera/opera/contracts/driver"
-	"github.com/Fantom-foundation/go-opera/opera/contracts/driver/driverpos"
-	"github.com/Fantom-foundation/go-opera/version"
+	"github.com/0xsoniclabs/sonic/logger"
+	"github.com/0xsoniclabs/sonic/opera/contracts/driver"
+	"github.com/0xsoniclabs/sonic/opera/contracts/driver/driverpos"
 )
 
-type VerWarcher struct {
+type VersionWatcher struct {
 	store *Store
 
 	done chan struct{}
@@ -22,26 +37,32 @@ type VerWarcher struct {
 	logger.Instance
 }
 
-func New(store *Store) *VerWarcher {
-	return &VerWarcher{
+func New(store *Store) *VersionWatcher {
+	return &VersionWatcher{
 		store:    store,
 		done:     make(chan struct{}),
 		Instance: logger.New(),
 	}
 }
 
-func (w *VerWarcher) Pause() error {
-	if w.store.GetNetworkVersion() > version.AsU64() {
-		return fmt.Errorf("Network upgrade %s was activated. Current node version is %s. "+
-			"Please upgrade your node to continue syncing.", version.U64ToString(w.store.GetNetworkVersion()), version.AsString())
+func (w *VersionWatcher) Pause() error {
+	have := getVersionNumber()
+	needed := versionNumber(w.store.GetNetworkVersion())
+	if needed > have {
+		// This is a user-facing error, so we want to provide a clear message.
+		//nolint:staticcheck // ST1005: allow capitalized error message and punctuation
+		return fmt.Errorf("Network upgrade %v was activated. Current node version is %v. "+
+			"Please upgrade your node to continue syncing.", needed, have)
 	} else if w.store.GetMissedVersion() > 0 {
-		return fmt.Errorf("Node's state is dirty because node was upgraded after the network upgrade %s was activated. "+
-			"Please re-sync the chain data to continue.", version.U64ToString(w.store.GetMissedVersion()))
+		// This is a user-facing error, so we want to provide a clear message.
+		//nolint:staticcheck // ST1005: allow capitalized error message and punctuation
+		return fmt.Errorf("Node's state is dirty because node was upgraded after the network upgrade %v was activated. "+
+			"Please re-sync the chain data to continue.", versionNumber(w.store.GetMissedVersion()))
 	}
 	return nil
 }
 
-func (w *VerWarcher) OnNewLog(l *types.Log) {
+func (w *VersionWatcher) OnNewLog(l *types.Log) {
 	if l.Address != driver.ContractAddress {
 		return
 	}
@@ -52,13 +73,13 @@ func (w *VerWarcher) OnNewLog(l *types.Log) {
 	}
 }
 
-func (w *VerWarcher) log() {
+func (w *VersionWatcher) log() {
 	if err := w.Pause(); err != nil {
 		w.Log.Warn(err.Error())
 	}
 }
 
-func (w *VerWarcher) Start() {
+func (w *VersionWatcher) Start() {
 	w.log()
 	w.wg.Add(1)
 	go func() {
@@ -76,7 +97,7 @@ func (w *VerWarcher) Start() {
 	}()
 }
 
-func (w *VerWarcher) Stop() {
+func (w *VersionWatcher) Stop() {
 	close(w.done)
 	w.wg.Wait()
 }

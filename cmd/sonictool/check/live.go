@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package check
 
 import (
@@ -5,9 +21,10 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/Fantom-foundation/Carmen/go/database/mpt"
-	"github.com/Fantom-foundation/Carmen/go/database/mpt/io"
-	carmen "github.com/Fantom-foundation/Carmen/go/state"
+	"github.com/0xsoniclabs/carmen/go/database/mpt"
+	"github.com/0xsoniclabs/carmen/go/database/mpt/io"
+	carmen "github.com/0xsoniclabs/carmen/go/state"
+	"github.com/0xsoniclabs/sonic/utils/caution"
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/utils/cachescale"
 	"github.com/ethereum/go-ethereum/log"
@@ -28,17 +45,17 @@ func CheckLiveStateDb(ctx context.Context, dataDir string, cacheRatio cachescale
 	if err := mpt.VerifyFileLiveTrie(ctx, liveDir, info.Config, verificationObserver{}); err != nil {
 		return fmt.Errorf("live state verification failed: %w", err)
 	}
-	log.Info("Verification of the live state succeed")
+	log.Info("Verification of the live state succeeded")
 	return nil
 }
 
-func checkLiveBlockRoot(dataDir string, cacheRatio cachescale.Func) error {
+func checkLiveBlockRoot(dataDir string, cacheRatio cachescale.Func) (err error) {
 	gdb, dbs, err := createGdb(dataDir, cacheRatio, carmen.NoArchive, true)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create gdb and db producer: %w", err)
 	}
-	defer gdb.Close()
-	defer dbs.Close()
+	defer caution.CloseAndReportError(&err, gdb, "failed to close gossip db")
+	defer caution.CloseAndReportError(&err, dbs, "failed to close db producer")
 
 	lastBlockIdx := gdb.GetLatestBlockIndex()
 	lastBlock := gdb.GetBlock(lastBlockIdx)

@@ -22,13 +22,14 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/holiman/uint256"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/trie"
 
-	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/Fantom-foundation/go-opera/opera"
+	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/opera"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 )
 
@@ -48,7 +49,8 @@ type (
 
 		WithdrawalsHash *common.Hash
 
-		BaseFee *big.Int
+		BaseFee     *big.Int
+		BlobBaseFee *big.Int // TODO issue #147
 
 		PrevRandao common.Hash // == mixHash/mixDigest
 
@@ -62,6 +64,16 @@ type (
 	}
 )
 
+// GetCoinbase returns the coinbase to be used by blocks on Sonic networks.
+func GetCoinbase() common.Address {
+	return common.Address{}
+}
+
+// GetBlobBaseFee returns the blob base fee to be used by blocks on Sonic networks.
+func GetBlobBaseFee() uint256.Int {
+	return uint256.Int{}
+}
+
 // NewEvmBlock constructor.
 func NewEvmBlock(h *EvmHeader, txs types.Transactions) *EvmBlock {
 	b := &EvmBlock{
@@ -70,9 +82,9 @@ func NewEvmBlock(h *EvmHeader, txs types.Transactions) *EvmBlock {
 	}
 
 	if len(txs) == 0 {
-		b.EvmHeader.TxHash = types.EmptyRootHash
+		b.TxHash = types.EmptyRootHash
 	} else {
-		b.EvmHeader.TxHash = types.DeriveSha(txs, trie.NewStackTrie(nil))
+		b.TxHash = types.DeriveSha(txs, trie.NewStackTrie(nil))
 	}
 
 	return b
@@ -219,7 +231,7 @@ func (h *EvmHeader) ToJson(receipts types.Receipts) *EvmHeaderJson {
 	if receipts != nil { // if receipts resolution fails, don't set ReceiptsHash at all
 		if receipts.Len() != 0 {
 			enc.ReceiptHash = types.DeriveSha(receipts, trie.NewStackTrie(nil))
-			enc.Bloom = types.CreateBloom(receipts)
+			enc.Bloom = types.MergeBloom(receipts)
 		} else {
 			enc.ReceiptHash = types.EmptyRootHash
 		}
@@ -254,7 +266,7 @@ func (b *EvmBlock) EthBlock() *types.Block {
 		return nil
 	}
 	body := types.Body{Transactions: b.Transactions}
-	return types.NewBlock(b.EvmHeader.EthHeader(), &body, nil, trie.NewStackTrie(nil))
+	return types.NewBlock(b.EthHeader(), &body, nil, trie.NewStackTrie(nil))
 }
 
 func (b *EvmBlock) EstimateSize() int {

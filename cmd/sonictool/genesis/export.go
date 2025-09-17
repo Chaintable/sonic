@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package genesis
 
 import (
@@ -7,13 +23,16 @@ import (
 	"os"
 	"path"
 
-	"github.com/Fantom-foundation/go-opera/gossip"
-	"github.com/Fantom-foundation/go-opera/inter/ibr"
-	"github.com/Fantom-foundation/go-opera/inter/ier"
-	"github.com/Fantom-foundation/go-opera/opera/genesis"
-	"github.com/Fantom-foundation/go-opera/opera/genesisstore"
-	"github.com/Fantom-foundation/go-opera/opera/genesisstore/fileshash"
-	"github.com/Fantom-foundation/go-opera/utils/devnullfile"
+	"github.com/0xsoniclabs/sonic/gossip"
+	"github.com/0xsoniclabs/sonic/inter/ibr"
+	"github.com/0xsoniclabs/sonic/inter/ier"
+	"github.com/0xsoniclabs/sonic/opera/genesis"
+	"github.com/0xsoniclabs/sonic/opera/genesisstore"
+	"github.com/0xsoniclabs/sonic/opera/genesisstore/fileshash"
+	"github.com/0xsoniclabs/sonic/scc"
+	"github.com/0xsoniclabs/sonic/scc/cert"
+	"github.com/0xsoniclabs/sonic/utils/devnullfile"
+	"github.com/0xsoniclabs/sonic/utils/objstream"
 	"github.com/Fantom-foundation/lachesis-base/common/bigendian"
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
@@ -79,6 +98,25 @@ func ExportGenesis(ctx context.Context, gdb *gossip.Store, includeArchive bool, 
 			return err
 		}
 	}
+
+	// committee certificates
+	writer = newUnitWriter(out)
+	if err := writer.Start(header, "scc_cc", tmpPath); err != nil {
+		return err
+	}
+	if err := exportCommitteeCertificates(ctx, gdb, writer, lastBlock); err != nil {
+		return err
+	}
+
+	// block certificates
+	writer = newUnitWriter(out)
+	if err := writer.Start(header, "scc_bc", tmpPath); err != nil {
+		return err
+	}
+	if err := exportBlockCertificates(ctx, gdb, writer, lastBlock); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -148,8 +186,68 @@ func exportBlocksSection(ctx context.Context, gdb *gossip.Store, writer *unitWri
 	return nil
 }
 
+func exportCommitteeCertificates(ctx context.Context, gdb *gossip.Store, writer *unitWriter, to idx.Block) error {
+	toPeriod := scc.GetPeriod(to)
+
+	log.Info("Exporting committee certificates", "to", toPeriod)
+
+	count := 0
+	out := objstream.NewWriter[cert.CommitteeCertificate](writer)
+	for entry := range gdb.EnumerateCommitteeCertificates(0) {
+		count++
+		cert, err := entry.Unwrap()
+		if err != nil {
+			return err
+		}
+		if cert.Subject().Period > toPeriod {
+			break
+		}
+		if err := out.Write(cert); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	hash, err := writer.Flush()
+	if err != nil {
+		return err
+	}
+	log.Info("Exported committee certificates", "count", count, "hash", hash)
+	return nil
+}
+
+func exportBlockCertificates(ctx context.Context, gdb *gossip.Store, writer *unitWriter, to idx.Block) error {
+	log.Info("Exporting block certificates", "to", to)
+
+	count := 0
+	out := objstream.NewWriter[cert.BlockCertificate](writer)
+	for entry := range gdb.EnumerateBlockCertificates(0) {
+		count++
+		cert, err := entry.Unwrap()
+		if err != nil {
+			return err
+		}
+		if cert.Subject().Number > to {
+			break
+		}
+		if err := out.Write(cert); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	hash, err := writer.Flush()
+	if err != nil {
+		return err
+	}
+	log.Info("Exported block certificates", "count", count, "hash", hash)
+	return nil
+}
+
 func exportFwsSection(ctx context.Context, gdb *gossip.Store, writer *unitWriter) error {
-	log.Info("Exporting Fantom World State Live data")
+	log.Info("Exporting Sonic World State Live data")
 	if err := gdb.EvmStore().ExportLiveWorldState(ctx, writer); err != nil {
 		return err
 	}
@@ -157,13 +255,13 @@ func exportFwsSection(ctx context.Context, gdb *gossip.Store, writer *unitWriter
 	if err != nil {
 		return err
 	}
-	log.Info("Exported Fantom World State Live data")
+	log.Info("Exported Sonic World State Live data")
 	fmt.Printf("- FWS hash: %v \n", fwsHash.String())
 	return nil
 }
 
 func exportFwaSection(ctx context.Context, gdb *gossip.Store, writer *unitWriter) error {
-	log.Info("Exporting Fantom World State Archive data")
+	log.Info("Exporting Sonic World State Archive data")
 	if err := gdb.EvmStore().ExportArchiveWorldState(ctx, writer); err != nil {
 		return err
 	}
@@ -172,7 +270,7 @@ func exportFwaSection(ctx context.Context, gdb *gossip.Store, writer *unitWriter
 	if err != nil {
 		return err
 	}
-	log.Info("Exported Fantom World State Archive data")
+	log.Info("Exported Sonic World State Archive data")
 	fmt.Printf("- FWA hash: %v \n", fwaHash.String())
 	return nil
 }

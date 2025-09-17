@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package genesis
 
 import (
@@ -6,7 +22,9 @@ import (
 	"os"
 	"sort"
 
-	"github.com/Fantom-foundation/go-opera/opera/genesis"
+	"github.com/0xsoniclabs/sonic/opera/genesis"
+	"github.com/0xsoniclabs/sonic/utils"
+	"github.com/0xsoniclabs/sonic/utils/caution"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
@@ -81,33 +99,34 @@ func CheckGenesisSignature(hash []byte, signature []byte) error {
 	return fmt.Errorf("genesis signature does not match any trusted signer (signer: %x)", address)
 }
 
-func WriteSignatureIntoGenesisFile(header genesis.Header, signature []byte, file string) error {
+func WriteSignatureIntoGenesisFile(header genesis.Header, signature []byte, file string) (err error) {
 	out, err := os.OpenFile(file, os.O_RDWR, os.ModePerm) // avoid using O_APPEND for correct seek positions
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open genesis file: %w", err)
 	}
 	_, err = out.Seek(0, io.SeekEnd)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to seek genesis file: %w", err)
 	}
-	defer out.Close()
+	defer caution.CloseAndReportError(&err, out, "failed to close genesis file")
 
 	tmpDir, err := os.MkdirTemp("", "signing-genesis-tmp")
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create temporary directory: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer caution.ExecuteAndReportError(&err, func() error { return os.RemoveAll(tmpDir) },
+		"failed to remove temporary directory")
 
 	writer := newUnitWriter(out)
-	if err := writer.Start(header, "signature", tmpDir); err != nil {
-		return err
+	if err = writer.Start(header, "signature", tmpDir); err != nil {
+		return fmt.Errorf("failed to write start to genesis file: %w", err)
 	}
 	_, err = writer.Write(signature)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write signature to genesis file: %w", err)
 	}
 	_, err = writer.Flush()
-	return err
+	return utils.AnnotateIfError(err, "failed to flush genesis file:")
 }
 
 // TypedDataAndHash is a helper function that calculates a hash for typed data conforming to EIP-712.

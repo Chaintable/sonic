@@ -1,16 +1,35 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package inter
 
 import (
 	"encoding/binary"
 	"errors"
+	"io"
 	"math/big"
 	"slices"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 )
 
@@ -26,6 +45,16 @@ import (
 // To create a new block, use the BlockBuilder, handling the computation of
 // key properties implicitly.
 type Block struct {
+	blockData
+
+	// The hash of this block, cached on first access.
+	hash atomic.Pointer[common.Hash]
+}
+
+// blockData is a helper type to retain the fields of a block. It is a trivially
+// copyable struct, which allows for a reliable copy of the block data. Note that
+// due to the use of atomic pointers, the Block struct is not trivially copyable.
+type blockData struct {
 	// Fields required for the block header.
 	Number               uint64
 	ParentHash           common.Hash
@@ -49,17 +78,28 @@ type Block struct {
 	// The duration of this block, being the difference between the predecessor
 	// block's timestamp and this block's timestamp, in nanoseconds.
 	Duration uint64
-
-	// The hash of this block, cached on first access.
-	hash common.Hash
 }
 
 // Hash computes the hash of this block, committing all its fields.
 func (b *Block) Hash() common.Hash {
-	if b.hash == (common.Hash{}) {
-		b.hash = b.GetEthereumHeader().Hash()
+	if ptr := b.hash.Load(); ptr != nil {
+		return *ptr
 	}
-	return b.hash
+	hash := b.GetEthereumHeader().Hash()
+	b.hash.Store(&hash)
+	return hash
+}
+
+// EncodeRLP encodes the essential data of the block using RLP.
+func (b *Block) EncodeRLP(out io.Writer) error {
+	// Only the block data needs to be encoded.
+	return rlp.Encode(out, b.blockData)
+}
+
+// DecodeRLP decodes a RLP encoded block.
+func (b *Block) DecodeRLP(in *rlp.Stream) error {
+	b.hash.Store(nil)
+	return in.Decode(&b.blockData)
 }
 
 // GetEthereumHeader returns the Ethereum header corresponding to this block.
@@ -136,7 +176,7 @@ func (b *Block) EstimateSize() int {
 // ----------------------------------------------------------------------------
 
 type BlockBuilder struct {
-	block        Block
+	block        blockData
 	transactions types.Transactions
 	receipts     types.Receipts
 }
@@ -218,14 +258,14 @@ func (b *BlockBuilder) WithEpoch(epoch idx.Epoch) *BlockBuilder {
 
 func (b *BlockBuilder) Build() *Block {
 	res := new(Block)
-	*res = b.block
+	res.blockData = b.block
 
 	res.TransactionsHashRoot = types.DeriveSha(
 		b.transactions,
 		trie.NewStackTrie(nil),
 	)
 	res.ReceiptsHashRoot = types.DeriveSha(b.receipts, trie.NewStackTrie(nil))
-	res.LogBloom = types.CreateBloom(b.receipts)
+	res.LogBloom = types.MergeBloom(b.receipts)
 
 	for _, tx := range b.transactions {
 		res.TransactionHashes = append(res.TransactionHashes, tx.Hash())

@@ -1,11 +1,29 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package chain
 
 import (
-	"github.com/Fantom-foundation/go-opera/cmd/sonictool/db"
-	"github.com/Fantom-foundation/lachesis-base/utils/cachescale"
 	"io"
 	"path/filepath"
 	"time"
+
+	"github.com/0xsoniclabs/sonic/cmd/sonictool/db"
+	"github.com/0xsoniclabs/sonic/utils/caution"
+	"github.com/Fantom-foundation/lachesis-base/utils/cachescale"
 
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
@@ -30,7 +48,7 @@ func ExportEvents(gdbParams db.GossipDbParameters, w io.Writer, from, to idx.Epo
 	if err != nil {
 		return err
 	}
-	defer dbs.Close()
+	defer caution.CloseAndReportError(&err, dbs, "failed to close db producer")
 
 	// Fill the rest of the params
 	gdbParams.Dbs = dbs
@@ -40,7 +58,7 @@ func ExportEvents(gdbParams db.GossipDbParameters, w io.Writer, from, to idx.Epo
 	if err != nil {
 		return err
 	}
-	defer gdb.Close()
+	defer caution.CloseAndReportError(&err, gdb, "failed to close gossip db")
 
 	// Write header and version
 	_, err = w.Write(append(eventsFileHeader, eventsFileVersion...))

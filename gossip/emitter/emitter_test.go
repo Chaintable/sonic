@@ -1,6 +1,23 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package emitter
 
 import (
+	"fmt"
 	"math/big"
 	"testing"
 	"time"
@@ -10,18 +27,17 @@ import (
 	"github.com/Fantom-foundation/lachesis-base/inter/pos"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 
-	"github.com/Fantom-foundation/go-opera/gossip/emitter/mock"
-	"github.com/Fantom-foundation/go-opera/integration/makefakegenesis"
-	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/Fantom-foundation/go-opera/opera"
-	"github.com/Fantom-foundation/go-opera/utils/txtime"
-	"github.com/Fantom-foundation/go-opera/vecmt"
+	"github.com/0xsoniclabs/sonic/integration/makefakegenesis"
+	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/logger"
+	"github.com/0xsoniclabs/sonic/opera"
+	"github.com/0xsoniclabs/sonic/utils/txtime"
+	"github.com/0xsoniclabs/sonic/valkeystore"
+	"github.com/0xsoniclabs/sonic/vecmt"
 )
-
-//go:generate go run github.com/golang/mock/mockgen -package=mock -destination=mock/world.go github.com/Fantom-foundation/go-opera/gossip/emitter External,TxPool,TxSigner,Signer
 
 func TestEmitter(t *testing.T) {
 	cfg := DefaultConfig()
@@ -34,10 +50,10 @@ func TestEmitter(t *testing.T) {
 	cfg.Validator.ID = gValidators[0].ID
 
 	ctrl := gomock.NewController(t)
-	external := mock.NewMockExternal(ctrl)
-	txPool := mock.NewMockTxPool(ctrl)
-	signer := mock.NewMockSigner(ctrl)
-	txSigner := mock.NewMockTxSigner(ctrl)
+	external := NewMockExternal(ctrl)
+	txPool := NewMockTxPool(ctrl)
+	signer := valkeystore.NewMockSignerAuthority(ctrl)
+	txSigner := NewMockTxSigner(ctrl)
 
 	external.EXPECT().Lock().
 		AnyTimes()
@@ -57,15 +73,15 @@ func TestEmitter(t *testing.T) {
 		AnyTimes()
 
 	em := NewEmitter(cfg, World{
-		External: external,
-		TxPool:   txPool,
-		Signer:   signer,
-		TxSigner: txSigner,
-	}, fixedPriceBaseFeeSource{})
+		External:          external,
+		TxPool:            txPool,
+		EventsSigner:      signer,
+		TransactionSigner: txSigner,
+	}, fixedPriceBaseFeeSource{}, nil)
 
 	t.Run("init", func(t *testing.T) {
 		external.EXPECT().GetRules().
-			Return(opera.FakeNetRules()).
+			Return(opera.FakeNetRules(opera.GetSonicUpgrades())).
 			AnyTimes()
 
 		external.EXPECT().GetEpochValidators().
@@ -84,7 +100,7 @@ func TestEmitter(t *testing.T) {
 	})
 
 	t.Run("memorizeTxTimes", func(t *testing.T) {
-		txtime.Enabled = true
+		txtime.Enabled.Store(true)
 		require := require.New(t)
 		tx1 := types.NewTransaction(1, common.Address{}, big.NewInt(1), 1, big.NewInt(1), nil)
 		tx2 := types.NewTransaction(2, common.Address{}, big.NewInt(2), 2, big.NewInt(2), nil)
@@ -121,4 +137,120 @@ type fixedPriceBaseFeeSource struct{}
 
 func (fixedPriceBaseFeeSource) GetCurrentBaseFee() *big.Int {
 	return big.NewInt(1e6)
+}
+
+func TestEmitter_CreateEvent_CreatesCorrectEventVersion(t *testing.T) {
+
+	tests := map[string]opera.Upgrades{
+		"sonic": {
+			Sonic:   true,
+			Allegro: false,
+		},
+		"allegro": {
+			Sonic:   true,
+			Allegro: true,
+		},
+	}
+
+	validator := idx.ValidatorID(1)
+	builder := pos.NewBuilder()
+	builder.Set(validator, pos.Weight(1))
+	validators := builder.Build()
+
+	for name, upgrades := range tests {
+		t.Run(name, func(t *testing.T) {
+
+			cases := map[bool]uint8{
+				false: 2, // Single-Proposer upgrade is not enabled
+				true:  3, // Single-Proposer upgrade is enabled
+			}
+			for singleProposer, version := range cases {
+				t.Run(fmt.Sprintf("singleProposer=%t", singleProposer), func(t *testing.T) {
+					ctrl := gomock.NewController(t)
+					world := NewMockExternal(ctrl)
+					signer := valkeystore.NewMockSignerAuthority(ctrl)
+
+					rules := opera.Rules{
+						Upgrades: upgrades,
+					}
+					rules.Upgrades.SingleProposerBlockFormation = singleProposer
+
+					em := &Emitter{
+						config: Config{
+							Validator: ValidatorConfig{
+								ID: validator,
+							},
+						},
+						world: World{
+							External:     world,
+							EventsSigner: signer,
+						},
+					}
+					em.validators.Store(validators)
+
+					any := gomock.Any()
+					world.EXPECT().GetRules().Return(rules).AnyTimes()
+					world.EXPECT().GetLastEvent(any, any).AnyTimes()
+					world.EXPECT().Build(any, any).AnyTimes()
+					world.EXPECT().Check(any, any).Return(nil).AnyTimes()
+					world.EXPECT().GetLatestBlock().Return(&inter.Block{}).AnyTimes()
+
+					signer.EXPECT().Sign(any).AnyTimes()
+
+					event, err := em.createEvent(nil)
+					require.NoError(t, err)
+					require.Equal(t, version, event.Version())
+				})
+			}
+		})
+	}
+}
+
+func TestEmitter_CreateEvent_InvalidValidatorSetIsDetected(t *testing.T) {
+
+	ctrl := gomock.NewController(t)
+	world := NewMockExternal(ctrl)
+	signer := valkeystore.NewMockSignerAuthority(ctrl)
+	log := logger.NewMockLogger(ctrl)
+
+	validator := idx.ValidatorID(1)
+	validators := pos.NewBuilder().Build() // invalid empty validator set
+
+	rules := opera.Rules{
+		Upgrades: opera.Upgrades{
+			SingleProposerBlockFormation: true,
+		},
+	}
+
+	em := &Emitter{
+		Periodic: logger.Periodic{
+			Instance: logger.Instance{
+				Log: log,
+			},
+		},
+		config: Config{
+			Validator: ValidatorConfig{
+				ID: validator,
+			},
+		},
+		world: World{
+			External:     world,
+			EventsSigner: signer,
+		},
+	}
+	em.validators.Store(validators)
+
+	any := gomock.Any()
+	world.EXPECT().GetRules().Return(rules).AnyTimes()
+	world.EXPECT().GetLastEvent(any, any).AnyTimes()
+	world.EXPECT().Build(any, any).AnyTimes()
+	world.EXPECT().Check(any, any).Return(nil).AnyTimes()
+	world.EXPECT().GetLatestBlock().Return(&inter.Block{}).AnyTimes()
+
+	signer.EXPECT().Sign(any).AnyTimes()
+
+	log.EXPECT().Error("Failed to create payload", "err", any)
+
+	_, err := em.createEvent(nil)
+	require.ErrorContains(t, err, "no validators")
 }

@@ -18,18 +18,23 @@ package tests
 
 import (
 	"fmt"
-	carmen "github.com/Fantom-foundation/Carmen/go/state"
-	"github.com/Fantom-foundation/Carmen/go/state/gostate"
-	"github.com/Fantom-foundation/go-opera/opera"
-	"github.com/ethereum/go-ethereum/tests"
 	"os"
 	"path/filepath"
 	"testing"
+
+	carmen "github.com/0xsoniclabs/carmen/go/state"
+	"github.com/0xsoniclabs/carmen/go/state/gostate"
+	"github.com/0xsoniclabs/sonic/opera"
+	"github.com/ethereum/go-ethereum/tests"
+	"github.com/stretchr/testify/require"
 )
 
 var (
-	baseDir      = filepath.Join(".", "testdata")
-	stateTestDir = filepath.Join(baseDir, "GeneralStateTests")
+	testPaths = []string{
+		filepath.Join(".", "testdata", "EIPTests", "StateTests"),
+		filepath.Join(".", "testdata", "GeneralStateTests"),
+		filepath.Join(".", "execution-spec-tests", "fixtures", "state_tests"),
+	}
 
 	unsupportedForks = map[string]struct{}{
 		"ConstantinopleFix": {},
@@ -41,18 +46,34 @@ var (
 )
 
 func initMatcher(st *tests.TestMatcher) {
+	// EOF is not yet supported by sonic.
 	st.SkipLoad(`^stEOF/`)
 }
 
+// TestState runs the state tests from the Ethereum tests and Ethereum execution spec tests.
+// In order to run the Ethereum tests, clone the `ethereum/tests` repository inside this tests directory as `testdata`.
+// As the tests are pre-filled no further steps are needed.
+// For the execution spec tests, clone the `ethereum/execution-spec-tests` repository inside this tests directory.
+// Install the python dependencies (using uv is recommended):
+// `uv sync --all-extras && uv run solc-select use 0.8.24 --always-install`
+// Collect all desired test cases:
+// `uv run fill --collect-only --from Istanbul --to Prague`
+// Fill all state tests (these are the only ones we currently support):
+// `uv run fill --from Istanbul --until Prague -m state_test`
 func TestState(t *testing.T) {
 	t.Parallel()
 
 	st := new(tests.TestMatcher)
 	initMatcher(st)
-	for _, dir := range []string{
-		filepath.Join(baseDir, "EIPTests", "StateTests"),
-		stateTestDir,
-	} {
+	for _, dir := range testPaths {
+		// If the directory does not exist,
+		// skip it but do not exit test without checking the other directories.
+		dirinfo, err := os.Stat(dir)
+		if os.IsNotExist(err) || !dirinfo.IsDir() {
+			t.Logf("Skipping %s as it does not exist, did you clone/fill the tests?\n", dir)
+			continue
+		}
+
 		st.Walk(t, dir, func(t *testing.T, name string, test *tests.StateTest) {
 			execStateTest(t, st, test)
 		})
@@ -71,16 +92,14 @@ func execStateTest(t *testing.T, st *tests.TestMatcher, test *tests.StateTest) {
 
 			factory := createCarmenFactory(t)
 
-			config := opera.DefaultVMConfig
+			config := opera.GetVmConfig(opera.Rules{})
 			config.ChargeExcessGas = false
 			config.IgnoreGasFeeCap = false
 			config.InsufficientBalanceIsNotAnError = false
 			config.SkipTipPaymentToCoinbase = false
 
 			err := test.RunWith(subtest, config, factory, func(err error, state *tests.StateTestState) {})
-			if err := st.CheckFailure(t, err); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, st.CheckFailure(t, err))
 		})
 	}
 }
@@ -91,9 +110,8 @@ func createCarmenFactory(t *testing.T) carmenFactory {
 	// ethereum tests creates extensively long test names, which causes t.TempDir fails
 	// on a too long names. For this reason, we use os.MkdirTemp instead.
 	dir, err := os.MkdirTemp("", "eth-tests-carmen-*")
-	if err != nil {
-		t.Fatalf("cannot create temp dir: %v", err)
-	}
+	require.NoError(t, err, "cannot create temp dir for carmen state")
+
 	t.Cleanup(func() {
 		if err := os.RemoveAll(dir); err != nil {
 			t.Fatalf("cannot remove temp dir: %v", err)
@@ -108,9 +126,8 @@ func createCarmenFactory(t *testing.T) carmenFactory {
 	}
 
 	st, err := carmen.NewState(parameters)
-	if err != nil {
-		t.Fatalf("cannot create state: %v", err)
-	}
+	require.NoError(t, err, "cannot create state")
+
 	t.Cleanup(func() {
 		if err := st.Close(); err != nil {
 			t.Fatalf("cannot close state: %v", err)

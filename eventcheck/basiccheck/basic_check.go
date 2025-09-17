@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package basiccheck
 
 import (
@@ -7,8 +23,7 @@ import (
 	base "github.com/Fantom-foundation/lachesis-base/eventcheck/basiccheck"
 	"github.com/ethereum/go-ethereum/core/types"
 
-	"github.com/Fantom-foundation/go-opera/evmcore"
-	"github.com/Fantom-foundation/go-opera/inter"
+	"github.com/0xsoniclabs/sonic/inter"
 )
 
 var (
@@ -41,7 +56,7 @@ func validateTx(tx *types.Transaction) error {
 		return ErrNegativeValue
 	}
 	// Ensure the transaction has more gas than the basic tx fee.
-	intrGas, err := evmcore.IntrinsicGas(tx.Data(), tx.AccessList(), tx.To() == nil)
+	intrGas, err := intrinsicGasLegacy(tx.Data(), tx.AccessList(), tx.To() == nil)
 	if err != nil {
 		return err
 	}
@@ -56,7 +71,7 @@ func validateTx(tx *types.Transaction) error {
 }
 
 func (v *Checker) checkTxs(e inter.EventPayloadI) error {
-	for _, tx := range e.Txs() {
+	for _, tx := range e.Transactions() {
 		if err := validateTx(tx); err != nil {
 			return err
 		}

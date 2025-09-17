@@ -1,0 +1,62 @@
+# Copyright 2025 Sonic Operations Ltd
+# This file is part of the Sonic Client
+#
+# Sonic is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Lesser General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Sonic is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
+version: "2"
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - misspell
+    - staticcheck
+    - unused
+
+  settings:
+    staticcheck:
+      checks:
+        - "all"
+        # Ignored rules
+        - "-ST1000" # Incorrect or missing package comment.
+        - "-ST1003" # Poorly chosen identifier.
+        # rules ST1023 and QF1011 have few findings, but in those cases adding
+        # the type to the declaration improves readability.
+        - "-ST1023" # Redundant type in variable declaration.
+        - "-QF1011" # Omit redundant type from variable declaration.
+
+
+formatters:
+  # Enable specific formatter.
+  enable:
+    - gofmt
+
+issues:
+  # do not limit number of findings per linter
+  max-issues-per-linter: 0
+  # do not limit number of same finding
+  max-same-issues: 0
+  # do not limit number of issues per line
+  uniq-by-line: false
+
+output:
+  formats:
+    text:
+      # for CI or automated processing
+      path: ./build/golangci-lint-report.txt
+    html:
+      # for human consumption
+      path: ./build/golangci-lint-report.html
+    tab:
+      path: stdout

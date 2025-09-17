@@ -1,8 +1,24 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package tests
 
 import (
-	carmen "github.com/Fantom-foundation/Carmen/go/state"
-	"github.com/Fantom-foundation/go-opera/gossip/evmstore"
+	carmen "github.com/0xsoniclabs/carmen/go/state"
+	"github.com/0xsoniclabs/sonic/gossip/evmstore"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
@@ -22,14 +38,14 @@ func (f carmenFactory) NewTestStateDB(accounts types.GenesisAlloc) tests.StateTe
 	statedb := evmstore.CreateCarmenStateDb(carmenstatedb)
 	for addr, a := range accounts {
 		statedb.SetCode(addr, a.Code)
-		statedb.SetNonce(addr, a.Nonce)
+		statedb.SetNonce(addr, a.Nonce, tracing.NonceChangeUnspecified)
 		statedb.SetBalance(addr, uint256.MustFromBig(a.Balance))
 		for k, v := range a.Storage {
 			statedb.SetState(addr, k, v)
 		}
 	}
 	// Commit and re-open to start with a clean state.
-	statedb.Finalise()
+	statedb.EndTransaction()
 	statedb.EndBlock(0)
 	statedb.GetStateHash()
 
@@ -68,9 +84,9 @@ func (c *carmenStateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 }
 
 // Commit ends transaction, ends block, and returns the state hash.
-func (c *carmenStateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, error) {
+func (c *carmenStateDB) Commit(block uint64, deleteEmptyObjects bool, noStorageWiping bool) (common.Hash, error) {
 	c.logs = c.CarmenStateDB.Logs() // backup logs, they are deleted on committing a tx/block
-	c.CarmenStateDB.Finalise()
-	c.CarmenStateDB.EndBlock(block)
-	return c.CarmenStateDB.GetStateHash(), nil
+	c.EndTransaction()
+	c.EndBlock(block)
+	return c.GetStateHash(), nil
 }

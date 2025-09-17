@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package gossip
 
 // compile SFC with truffle
@@ -35,17 +51,17 @@ import (
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
 
-	"github.com/Fantom-foundation/go-opera/gossip/contract/driver100"
-	"github.com/Fantom-foundation/go-opera/gossip/contract/driverauth100"
-	"github.com/Fantom-foundation/go-opera/gossip/contract/netinit100"
-	"github.com/Fantom-foundation/go-opera/gossip/contract/sfc100"
-	"github.com/Fantom-foundation/go-opera/logger"
-	"github.com/Fantom-foundation/go-opera/opera/contracts/driver"
-	"github.com/Fantom-foundation/go-opera/opera/contracts/driverauth"
-	"github.com/Fantom-foundation/go-opera/opera/contracts/evmwriter"
-	"github.com/Fantom-foundation/go-opera/opera/contracts/netinit"
-	"github.com/Fantom-foundation/go-opera/opera/contracts/sfc"
-	"github.com/Fantom-foundation/go-opera/utils"
+	"github.com/0xsoniclabs/sonic/gossip/contract/driver100"
+	"github.com/0xsoniclabs/sonic/gossip/contract/driverauth100"
+	"github.com/0xsoniclabs/sonic/gossip/contract/netinit100"
+	"github.com/0xsoniclabs/sonic/gossip/contract/sfc100"
+	"github.com/0xsoniclabs/sonic/logger"
+	"github.com/0xsoniclabs/sonic/opera/contracts/driver"
+	"github.com/0xsoniclabs/sonic/opera/contracts/driverauth"
+	"github.com/0xsoniclabs/sonic/opera/contracts/evmwriter"
+	"github.com/0xsoniclabs/sonic/opera/contracts/netinit"
+	"github.com/0xsoniclabs/sonic/opera/contracts/sfc"
+	"github.com/0xsoniclabs/sonic/utils"
 )
 
 func TestSFC(t *testing.T) {
@@ -53,7 +69,10 @@ func TestSFC(t *testing.T) {
 	logger.SetLevel("debug")
 
 	env := newTestEnv(2, 3, t)
-	defer env.Close()
+	t.Cleanup(func() {
+		err := env.Close()
+		require.NoError(t, err)
+	})
 
 	var (
 		sfc10 *sfc100.Contract
@@ -154,7 +173,7 @@ func TestSFC(t *testing.T) {
 
 			sfc10, err = sfc100.NewContract(sfc.ContractAddress, env)
 			require.NoError(err)
-			sfcEpoch, err := sfc10.ContractCaller.CurrentEpoch(env.ReadOnly())
+			sfcEpoch, err := sfc10.CurrentEpoch(env.ReadOnly())
 			require.NoError(err)
 			require.Equal(0, sfcEpoch.Cmp(big.NewInt(3)), "current SFC epoch %s", sfcEpoch.String())
 		})

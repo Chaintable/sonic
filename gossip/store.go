@@ -1,19 +1,36 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package gossip
 
 import (
 	"fmt"
 	"math/big"
+	"math/rand/v2"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/Fantom-foundation/go-opera/gossip/emitter"
-	"github.com/Fantom-foundation/go-opera/gossip/evmstore"
-	"github.com/Fantom-foundation/go-opera/logger"
-	"github.com/Fantom-foundation/go-opera/utils/eventid"
-	"github.com/Fantom-foundation/go-opera/utils/randat"
-	"github.com/Fantom-foundation/go-opera/utils/rlpstore"
+	"github.com/0xsoniclabs/sonic/gossip/emitter"
+	"github.com/0xsoniclabs/sonic/gossip/evmstore"
+	"github.com/0xsoniclabs/sonic/logger"
+	"github.com/0xsoniclabs/sonic/utils/eventid"
+	"github.com/0xsoniclabs/sonic/utils/rlpstore"
 	"github.com/Fantom-foundation/lachesis-base/common/bigendian"
+	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/Fantom-foundation/lachesis-base/kvdb"
 	"github.com/Fantom-foundation/lachesis-base/kvdb/flushable"
 	"github.com/Fantom-foundation/lachesis-base/kvdb/memorydb"
@@ -39,6 +56,10 @@ type Store struct {
 		EpochBlocks            kvdb.Store `table:"P"`
 		Genesis                kvdb.Store `table:"g"`
 		UpgradeHeights         kvdb.Store `table:"U"`
+
+		// Sonic Certification Chain tables
+		CommitteeCertificates kvdb.Store `table:"C"`
+		BlockCertificates     kvdb.Store `table:"c"`
 
 		// P2P-only
 		HighestLamport kvdb.Store `table:"l"`
@@ -71,6 +92,10 @@ type Store struct {
 	rlp rlpstore.Helper
 
 	logger.Instance
+
+	// values needed for flush randomizationAdd comment
+	randomOffsetEpoch idx.Epoch // epoch when random offset was selected
+	randomOffset      uint64    // random number re-selected in each epoch between 0 and 99
 }
 
 // NewMemStore creates temporary gossip store for testing purposes.
@@ -153,7 +178,11 @@ func (s *Store) Close() error {
 
 func (s *Store) IsCommitNeeded() bool {
 	// randomize flushing criteria for each epoch so that nodes would desynchronize flushes
-	ratio := 900 + randat.RandAt(uint64(s.GetEpoch()))%100
+	if cur := s.GetEpoch(); s.randomOffsetEpoch != cur {
+		s.randomOffset = uint64(rand.Int32N(100))
+		s.randomOffsetEpoch = cur
+	}
+	ratio := 900 + s.randomOffset
 	return s.isCommitNeeded(ratio, ratio)
 }
 

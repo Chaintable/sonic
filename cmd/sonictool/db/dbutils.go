@@ -1,17 +1,34 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package db
 
 import (
 	"errors"
 	"fmt"
-	carmen "github.com/Fantom-foundation/Carmen/go/state"
-	"github.com/Fantom-foundation/go-opera/gossip"
-	"github.com/Fantom-foundation/go-opera/integration"
+	"os"
+	"path/filepath"
+
+	carmen "github.com/0xsoniclabs/carmen/go/state"
+	"github.com/0xsoniclabs/sonic/gossip"
+	"github.com/0xsoniclabs/sonic/integration"
 	"github.com/Fantom-foundation/lachesis-base/kvdb"
 	"github.com/Fantom-foundation/lachesis-base/utils/cachescale"
 	"github.com/ethereum/go-ethereum/common/fdlimit"
 	"github.com/syndtr/goleveldb/leveldb/opt"
-	"os"
-	"path/filepath"
 )
 
 const (
@@ -68,6 +85,7 @@ type GossipDbParameters struct {
 	ValidatorMode             bool
 	CacheRatio                cachescale.Func
 	LiveDbCache, ArchiveCache int64 // in bytes
+	StateDbCacheSize          int64 // number of elements
 }
 
 func MakeGossipDb(params GossipDbParameters) (*gossip.Store, error) {
@@ -85,6 +103,7 @@ func MakeGossipDb(params GossipDbParameters) (*gossip.Store, error) {
 		gdbConfig.EVM.StateDb.ArchiveCache = params.ArchiveCache
 	}
 	gdbConfig.EVM.StateDb.Directory = filepath.Join(params.DataDir, "carmen")
+	gdbConfig.EVM.Cache.StateDbCapacity = int(params.StateDbCacheSize)
 
 	gdb, err := gossip.NewStore(params.Dbs, gdbConfig)
 	if err != nil {

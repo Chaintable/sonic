@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package emitter
 
 import (
@@ -25,7 +41,8 @@ func (em *Emitter) recountConfirmingIntervals(validators *pos.Validators) {
 		}
 		confirmingEmitIntervalRatio := confirmingEmitIntervalF(stakeRatio)
 		em.stakeRatio[vid] = stakeRatio
-		em.expectedEmitIntervals[vid] = time.Duration(piecefunc.Mul(uint64(em.globalConfirmingInterval), confirmingEmitIntervalRatio))
+		em.expectedEmitIntervals[vid] = time.Duration(
+			piecefunc.Mul(em.globalConfirmingInterval.Load(), confirmingEmitIntervalRatio))
 	}
 	em.intervals.Confirming = em.expectedEmitIntervals[em.config.Validator.ID]
 }
@@ -39,7 +56,7 @@ func (em *Emitter) recheckChallenges() {
 	now := time.Now()
 	if !em.idle() {
 		// give challenges to all the non-spare validators if network isn't idle
-		for _, vid := range em.validators.IDs() {
+		for _, vid := range em.validators.Load().IDs() {
 			if em.offlineValidators[vid] {
 				continue
 			}
@@ -60,7 +77,7 @@ func (em *Emitter) recheckChallenges() {
 		}
 	}
 	if recount {
-		em.recountConfirmingIntervals(em.validators)
+		em.recountConfirmingIntervals(em.validators.Load())
 	}
 	em.prevRecheckedChallenges = now
 }

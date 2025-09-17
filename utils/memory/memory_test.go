@@ -1,12 +1,29 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package memory
 
-import "testing"
+import (
+	"testing"
 
-func TestNonZero(t *testing.T) {
-	if TotalMemory() == 0 {
-		t.Fatal("TotalMemory returned 0")
-	}
-	if FreeMemory() == 0 {
-		t.Fatal("FreeMemory returned 0")
-	}
+	"github.com/stretchr/testify/require"
+)
+
+func TestTotalMemoryIsNotZero(t *testing.T) {
+	require := require.New(t)
+	require.Greater(TotalMemory(), uint64(0))
+	require.Less(TotalMemory(), uint64(1<<50)) // 1 PiB (sanity check)
 }

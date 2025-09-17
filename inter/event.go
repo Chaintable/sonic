@@ -1,7 +1,24 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package inter
 
 import (
 	"crypto/sha256"
+
 	"github.com/Fantom-foundation/lachesis-base/common/bigendian"
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/dag"
@@ -10,6 +27,8 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 )
+
+//go:generate mockgen -source=event.go -destination=event_mock.go -package=inter
 
 type EventI interface {
 	dag.Event
@@ -31,6 +50,7 @@ type EventI interface {
 	AnyBlockVotes() bool
 	AnyEpochVote() bool
 	AnyMisbehaviourProofs() bool
+	HasProposal() bool
 	PayloadHash() hash.Hash
 }
 
@@ -49,29 +69,39 @@ type SignedEventLocator struct {
 	Sig     Signature
 }
 
-func AsSignedEventLocator(e EventPayloadI) SignedEventLocator {
-	return SignedEventLocator{
-		Locator: e.Locator(),
-		Sig:     e.Sig(),
-	}
-}
-
 type EventPayloadI interface {
 	EventI
 	Sig() Signature
 
-	Txs() types.Transactions
+	// Transactions list the transactions included in this event. These may be
+	// transactions included directly in the payload (version 2 events) or
+	// transactions included in a block proposal (version 3 events).
+	Transactions() types.Transactions
+
+	// TransactionsToMeter returns the transactions that should be used for
+	// metering purposes. These only include transactions that are directly
+	// included in the event payload (version 2 events). Transactions included
+	// in a block proposal (version 3 events) are not charged against a
+	// validator's gas power. Their emission rate is controlled through turns.
+	TransactionsToMeter() types.Transactions
+
+	//Txs() types.Transactions
 	EpochVote() LlrEpochVote
 	BlockVotes() LlrBlockVotes
 	MisbehaviourProofs() []MisbehaviourProof
+	Payload() *Payload
 }
 
 var emptyPayloadHash1 = CalcPayloadHash(&MutableEventPayload{extEventData: extEventData{version: 1}})
+var emptyPayloadHash3 = CalcPayloadHash(&MutableEventPayload{extEventData: extEventData{version: 3}})
 
 func EmptyPayloadHash(version uint8) hash.Hash {
-	if version == 1 {
+	switch version {
+	case 1:
 		return emptyPayloadHash1
-	} else {
+	case 3:
+		return emptyPayloadHash3
+	default:
 		return hash.Hash(types.EmptyRootHash)
 	}
 }
@@ -98,6 +128,7 @@ type extEventData struct {
 	anyBlockVotes         bool
 	anyEpochVote          bool
 	anyMisbehaviourProofs bool
+	hasProposal           bool
 	payloadHash           hash.Hash
 }
 
@@ -111,6 +142,8 @@ type payloadData struct {
 
 	epochVote  LlrEpochVote
 	blockVotes LlrBlockVotes
+
+	payload Payload
 }
 
 type Event struct {
@@ -188,13 +221,24 @@ func (e *extEventData) AnyEpochVote() bool { return e.anyEpochVote }
 
 func (e *extEventData) AnyBlockVotes() bool { return e.anyBlockVotes }
 
+func (e *extEventData) HasProposal() bool { return e.hasProposal }
+
 func (e *extEventData) GasPowerLeft() GasPowerLeft { return e.gasPowerLeft }
 
 func (e *extEventData) GasPowerUsed() uint64 { return e.gasPowerUsed }
 
 func (e *sigData) Sig() Signature { return e.sig }
 
-func (e *payloadData) Txs() types.Transactions { return e.txs }
+func (e *payloadData) Transactions() types.Transactions {
+	if proposal := e.payload.Proposal; proposal != nil {
+		return proposal.Transactions
+	}
+	return e.txs
+}
+
+func (e *payloadData) TransactionsToMeter() types.Transactions {
+	return e.txs
+}
 
 func (e *payloadData) MisbehaviourProofs() []MisbehaviourProof { return e.misbehaviourProofs }
 
@@ -202,14 +246,12 @@ func (e *payloadData) BlockVotes() LlrBlockVotes { return e.blockVotes }
 
 func (e *payloadData) EpochVote() LlrEpochVote { return e.epochVote }
 
-func CalcTxHash(txs types.Transactions) hash.Hash {
-	return hash.Hash(types.DeriveSha(txs, trie.NewStackTrie(nil)))
+func (e *payloadData) Payload() *Payload {
+	return &e.payload
 }
 
-func CalcReceiptsHash(receipts []*types.ReceiptForStorage) hash.Hash {
-	hasher := sha256.New()
-	_ = rlp.Encode(hasher, receipts)
-	return hash.BytesToHash(hasher.Sum(nil))
+func CalcTxHash(txs types.Transactions) hash.Hash {
+	return hash.Hash(types.DeriveSha(txs, trie.NewStackTrie(nil)))
 }
 
 func CalcMisbehaviourProofsHash(mps []MisbehaviourProof) hash.Hash {
@@ -220,10 +262,12 @@ func CalcMisbehaviourProofsHash(mps []MisbehaviourProof) hash.Hash {
 
 func CalcPayloadHash(e EventPayloadI) hash.Hash {
 	if e.Version() == 1 {
-		return hash.Of(hash.Of(CalcTxHash(e.Txs()).Bytes(), CalcMisbehaviourProofsHash(e.MisbehaviourProofs()).Bytes()).Bytes(), hash.Of(e.EpochVote().Hash().Bytes(), e.BlockVotes().Hash().Bytes()).Bytes())
-	} else {
-		return CalcTxHash(e.Txs())
+		return hash.Of(hash.Of(CalcTxHash(e.Transactions()).Bytes(), CalcMisbehaviourProofsHash(e.MisbehaviourProofs()).Bytes()).Bytes(), hash.Of(e.EpochVote().Hash().Bytes(), e.BlockVotes().Hash().Bytes()).Bytes())
 	}
+	if e.Version() == 3 {
+		return e.Payload().Hash()
+	}
+	return CalcTxHash(e.Transactions())
 }
 
 func (e *MutableEventPayload) SetVersion(v uint8) { e.version = v }
@@ -264,6 +308,12 @@ func (e *MutableEventPayload) SetBlockVotes(v LlrBlockVotes) {
 func (e *MutableEventPayload) SetEpochVote(v LlrEpochVote) {
 	e.epochVote = v
 	e.anyEpochVote = v.Epoch != 0 && v.Vote != hash.Zero
+}
+
+func (e *MutableEventPayload) SetPayload(payload Payload) {
+	e.payload = payload
+	e.hasProposal = payload.Proposal != nil
+	e.payloadHash = payload.Hash()
 }
 
 func calcEventID(h hash.Hash) (id [24]byte) {

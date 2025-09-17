@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package makefakegenesis
 
 import (
@@ -12,25 +28,29 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
 
-	"github.com/Fantom-foundation/go-opera/evmcore"
-	"github.com/Fantom-foundation/go-opera/integration/makegenesis"
-	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/Fantom-foundation/go-opera/inter/drivertype"
-	"github.com/Fantom-foundation/go-opera/inter/iblockproc"
-	"github.com/Fantom-foundation/go-opera/inter/ier"
-	"github.com/Fantom-foundation/go-opera/inter/validatorpk"
-	"github.com/Fantom-foundation/go-opera/opera"
-	"github.com/Fantom-foundation/go-opera/opera/contracts/driver"
-	"github.com/Fantom-foundation/go-opera/opera/contracts/driver/drivercall"
-	"github.com/Fantom-foundation/go-opera/opera/contracts/driverauth"
-	"github.com/Fantom-foundation/go-opera/opera/contracts/evmwriter"
-	"github.com/Fantom-foundation/go-opera/opera/contracts/netinit"
-	netinitcall "github.com/Fantom-foundation/go-opera/opera/contracts/netinit/netinitcalls"
-	"github.com/Fantom-foundation/go-opera/opera/contracts/sfc"
-	"github.com/Fantom-foundation/go-opera/opera/genesis"
-	"github.com/Fantom-foundation/go-opera/opera/genesis/gpos"
-	"github.com/Fantom-foundation/go-opera/opera/genesisstore"
+	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/integration/makegenesis"
+	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/inter/drivertype"
+	"github.com/0xsoniclabs/sonic/inter/iblockproc"
+	"github.com/0xsoniclabs/sonic/inter/ier"
+	"github.com/0xsoniclabs/sonic/inter/validatorpk"
+	"github.com/0xsoniclabs/sonic/opera"
+	"github.com/0xsoniclabs/sonic/opera/contracts/driver"
+	"github.com/0xsoniclabs/sonic/opera/contracts/driver/drivercall"
+	"github.com/0xsoniclabs/sonic/opera/contracts/driverauth"
+	"github.com/0xsoniclabs/sonic/opera/contracts/evmwriter"
+	"github.com/0xsoniclabs/sonic/opera/contracts/netinit"
+	netinitcall "github.com/0xsoniclabs/sonic/opera/contracts/netinit/netinitcalls"
+	"github.com/0xsoniclabs/sonic/opera/contracts/sfc"
+	"github.com/0xsoniclabs/sonic/opera/genesis"
+	"github.com/0xsoniclabs/sonic/opera/genesis/gpos"
+	"github.com/0xsoniclabs/sonic/opera/genesisstore"
+	"github.com/0xsoniclabs/sonic/scc"
+	"github.com/0xsoniclabs/sonic/scc/bls"
+	"github.com/0xsoniclabs/sonic/scc/cert"
 )
 
 var (
@@ -42,15 +62,21 @@ func FakeKey(n idx.ValidatorID) *ecdsa.PrivateKey {
 	return evmcore.FakeKey(uint32(n))
 }
 
-func FakeGenesisStore(num idx.Validator, balance, stake *big.Int) *genesisstore.Store {
-	return FakeGenesisStoreWithRules(num, balance, stake, opera.FakeNetRules())
+func FakeGenesisStore(num idx.Validator, balance, stake *big.Int, upgrades opera.Upgrades) *genesisstore.Store {
+	return FakeGenesisStoreWithRules(num, balance, stake, opera.FakeNetRules(upgrades))
 }
 
 func FakeGenesisStoreWithRules(num idx.Validator, balance, stake *big.Int, rules opera.Rules) *genesisstore.Store {
 	return FakeGenesisStoreWithRulesAndStart(num, balance, stake, rules, 2, 1)
 }
 
-func FakeGenesisStoreWithRulesAndStart(num idx.Validator, balance, stake *big.Int, rules opera.Rules, epoch idx.Epoch, block idx.Block) *genesisstore.Store {
+func FakeGenesisStoreWithRulesAndStart(
+	num idx.Validator,
+	balance, stake *big.Int,
+	rules opera.Rules,
+	epoch idx.Epoch,
+	block idx.Block,
+) *genesisstore.Store {
 	builder := makegenesis.NewGenesisBuilder()
 
 	validators := GetFakeValidators(num)
@@ -88,6 +114,14 @@ func FakeGenesisStoreWithRulesAndStart(num idx.Validator, balance, stake *big.In
 	// set non-zero code for pre-compiled contracts
 	builder.SetCode(evmwriter.ContractAddress, []byte{0})
 	builder.SetNonce(evmwriter.ContractAddress, 1)
+
+	// Configure pre-deployed contracts, according to the hardfork of the fake-net
+	if rules.Upgrades.Allegro {
+		// Deploy the history storage contract
+		// see: https://eips.ethereum.org/EIPS/eip-2935
+		builder.SetCode(params.HistoryStorageAddress, params.HistoryStorageCode)
+		builder.SetNonce(params.HistoryStorageAddress, 1)
+	}
 
 	_, genesisStateRoot, err := builder.FinalizeBlockZero(rules, FakeGenesisTime)
 	if err != nil {
@@ -136,6 +170,25 @@ func FakeGenesisStoreWithRulesAndStart(num idx.Validator, balance, stake *big.In
 	if err != nil {
 		panic(err)
 	}
+
+	// Create the genesis committee for the first period using test keys for the
+	// fake network. All validators have the same voting power.
+	members := make([]scc.Member, 0, len(validators))
+	for i := range validators {
+		key := bls.NewPrivateKeyForTests(byte(i))
+		members = append(members, scc.Member{
+			PublicKey:         key.PublicKey(),
+			ProofOfPossession: key.GetProofOfPossession(),
+			VotingPower:       1,
+		})
+	}
+	builder.SetGenesisCommitteeCertificate(
+		cert.NewCertificate(cert.NewCommitteeStatement(
+			rules.NetworkID,
+			scc.Period(0),
+			scc.NewCommittee(members...),
+		)),
+	)
 
 	return builder.Build(genesis.Header{
 		GenesisID:   builder.CurrentHash(),

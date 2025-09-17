@@ -1,9 +1,25 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package genesis
 
 import (
-	"github.com/Fantom-foundation/go-opera/opera"
-	"github.com/Fantom-foundation/go-opera/opera/genesis"
-	"github.com/Fantom-foundation/go-opera/opera/genesisstore"
+	"github.com/0xsoniclabs/sonic/opera"
+	"github.com/0xsoniclabs/sonic/opera/genesis"
+	"github.com/0xsoniclabs/sonic/opera/genesisstore"
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -137,9 +153,9 @@ var (
 			Name:   "Mainnet-279701 with Carmen live and archive state",
 			Header: mainnetHeader,
 			Hashes: genesis.Hashes{
-				genesisstore.EpochsSection(0):  hash.HexToHash("0x6a685f5b446eb17cc69047ddd230c0ccc0c820d4ba05bfdd30aa6176b40618da"),
-				genesisstore.BlocksSection(0):  hash.HexToHash("0xdf6ed841b928fad8632b7e532f0b989d93e26b8332fe8429504822df6d44a642"),
-				genesisstore.FwsLiveSection(0): hash.HexToHash("0x702c987a8e799d7550db6a3fc9a571cbaeac7a00d7bb984a00374a27bd25d908"),
+				genesisstore.EpochsSection(0):     hash.HexToHash("0x6a685f5b446eb17cc69047ddd230c0ccc0c820d4ba05bfdd30aa6176b40618da"),
+				genesisstore.BlocksSection(0):     hash.HexToHash("0xdf6ed841b928fad8632b7e532f0b989d93e26b8332fe8429504822df6d44a642"),
+				genesisstore.FwsLiveSection(0):    hash.HexToHash("0x702c987a8e799d7550db6a3fc9a571cbaeac7a00d7bb984a00374a27bd25d908"),
 				genesisstore.FwsArchiveSection(0): hash.HexToHash("0xf445000720ef2969aa0fb4db6f5542452b5ea83fbf54dc1dcbe9202af0feafd8"),
 			},
 		},

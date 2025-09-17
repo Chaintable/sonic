@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 //go:build gofuzz
 // +build gofuzz
 
@@ -15,12 +31,12 @@ import (
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 
-	"github.com/Fantom-foundation/go-opera/evmcore"
-	"github.com/Fantom-foundation/go-opera/integration/makefakegenesis"
-	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/Fantom-foundation/go-opera/opera"
-	"github.com/Fantom-foundation/go-opera/utils"
-	"github.com/Fantom-foundation/go-opera/utils/signers/gsignercache"
+	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/integration/makefakegenesis"
+	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/opera"
+	"github.com/0xsoniclabs/sonic/utils"
+	"github.com/0xsoniclabs/sonic/utils/signers/gsignercache"
 )
 
 const (
@@ -68,7 +84,11 @@ func makeFuzzedHandler() (h *handler, err error) {
 		genesisStake   = 2 * 4e6
 	)
 
-	genStore := makefakegenesis.FakeGenesisStore(genesisStakers, utils.ToFtm(genesisBalance), utils.ToFtm(genesisStake))
+	genStore := makefakegenesis.FakeGenesisStore(
+		genesisStakers,
+		utils.ToFtm(genesisBalance),
+		utils.ToFtm(genesisStake),
+	)
 	genesis := genStore.Genesis()
 
 	config := DefaultConfig(cachescale.Identity)

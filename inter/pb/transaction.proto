@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package sonic.inter.proto;
+
+option go_package = ".;pb";
+
+// A transaction is an Ethereum transaction to be included in blocks performing
+// state transitions.
+message Transaction {
+
+    // The raw encoding of the transaction according to EIP-2718.
+    // See https://eips.ethereum.org/EIPS/eip-2718
+    bytes encoded = 1;
+
+    // -- space for future meta-data --
+}

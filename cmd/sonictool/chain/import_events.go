@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package chain
 
 import (
@@ -13,11 +29,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Fantom-foundation/go-opera/config"
-	"github.com/Fantom-foundation/go-opera/gossip"
-	"github.com/Fantom-foundation/go-opera/gossip/emitter"
-	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/Fantom-foundation/go-opera/utils/ioread"
+	"github.com/0xsoniclabs/sonic/config"
+	"github.com/0xsoniclabs/sonic/gossip"
+	"github.com/0xsoniclabs/sonic/gossip/emitter"
+	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/utils/caution"
+	"github.com/0xsoniclabs/sonic/utils/ioread"
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/ethereum/go-ethereum/common"
@@ -85,7 +102,7 @@ func checkEventsFileHeader(reader io.Reader) error {
 	return nil
 }
 
-func importEventsFile(srv *gossip.Service, fn string) error {
+func importEventsFile(srv *gossip.Service, filename string) (err error) {
 	// Watch for Ctrl-C while the import is running.
 	// If a signal is received, the import will stop.
 	interrupt := make(chan os.Signal, 1)
@@ -93,18 +110,18 @@ func importEventsFile(srv *gossip.Service, fn string) error {
 	defer signal.Stop(interrupt)
 
 	// Open the file handle and potentially unwrap the gzip stream
-	fh, err := os.Open(fn)
+	fileHandle, err := os.Open(filename)
 	if err != nil {
 		return err
 	}
-	defer fh.Close()
+	defer caution.CloseAndReportError(&err, fileHandle, "failed to close file")
 
-	var reader io.Reader = fh
-	if strings.HasSuffix(fn, ".gz") {
+	var reader io.Reader = fileHandle
+	if strings.HasSuffix(filename, ".gz") {
 		if reader, err = gzip.NewReader(reader); err != nil {
 			return err
 		}
-		defer reader.(*gzip.Reader).Close()
+		defer caution.CloseAndReportError(&err, reader.(*gzip.Reader), "failed to close gzip reader")
 	}
 
 	// Check file version and header
@@ -169,11 +186,11 @@ func importEventsFile(srv *gossip.Service, fn string) error {
 		epoch = e.Epoch()
 		batch = append(batch, e)
 		batchSize += 1024 + e.Size()
-		txs += e.Txs().Len()
+		txs += e.Transactions().Len()
 		events++
 	}
 	srv.WaitBlockEnd()
-	log.Info("Events import is finished", "file", fn, "last", last.String(), "imported", events, "txs", txs, "elapsed", common.PrettyDuration(time.Since(start)))
+	log.Info("Events import is finished", "file", filename, "last", last.String(), "imported", events, "txs", txs, "elapsed", common.PrettyDuration(time.Since(start)))
 
 	return nil
 }

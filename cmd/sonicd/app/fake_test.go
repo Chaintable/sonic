@@ -1,24 +1,41 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package app
 
 import (
-	"github.com/Fantom-foundation/go-opera/config"
-	"github.com/Fantom-foundation/go-opera/version"
-	"github.com/ethereum/go-ethereum/crypto"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/Fantom-foundation/go-opera/integration/makefakegenesis"
-	"github.com/Fantom-foundation/go-opera/inter/validatorpk"
+	"github.com/0xsoniclabs/sonic/config"
+	"github.com/0xsoniclabs/sonic/version"
+	"github.com/ethereum/go-ethereum/crypto"
+
+	"github.com/0xsoniclabs/sonic/integration/makefakegenesis"
+	"github.com/0xsoniclabs/sonic/inter/validatorpk"
 )
 
 const (
-	ipcAPIs  = "abft:1.0 admin:1.0 dag:1.0 debug:1.0 ftm:1.0 net:1.0 personal:1.0 rpc:1.0 trace:1.0 txpool:1.0 web3:1.0"
+	ipcAPIs = "abft:1.0 admin:1.0 dag:1.0 debug:1.0 ftm:1.0 net:1.0 personal:1.0 rpc:1.0 trace:1.0 txpool:1.0 web3:1.0"
 )
 
 func TestFakeNetFlag_NonValidator(t *testing.T) {
-	// Start an opera console, make sure it's cleaned up and terminate the console
+	// Start an sonic console, make sure it's cleaned up and terminate the console
 	dataDir := tmpdir(t)
 	initFakenetDatadir(dataDir, 3)
 	cli := exec(t,
@@ -30,7 +47,7 @@ func TestFakeNetFlag_NonValidator(t *testing.T) {
 	cli.SetTemplateFunc("goos", func() string { return runtime.GOOS })
 	cli.SetTemplateFunc("goarch", func() string { return runtime.GOARCH })
 	cli.SetTemplateFunc("gover", runtime.Version)
-	cli.SetTemplateFunc("version", func() string { return version.VersionWithCommit("", "") })
+	cli.SetTemplateFunc("version", func() string { return version.String() })
 	cli.SetTemplateFunc("niltime", genesisStart)
 	cli.SetTemplateFunc("apis", func() string { return ipcAPIs })
 	cli.ExpectExit()
@@ -46,7 +63,7 @@ func TestFakeNetFlag_NonValidator(t *testing.T) {
 }
 
 func TestFakeNetFlag_Validator(t *testing.T) {
-	// Start an opera console, make sure it's cleaned up and terminate the console
+	// Start a sonic console, make sure it's cleaned up and terminate the console
 	dataDir := tmpdir(t)
 	initFakenetDatadir(dataDir, 3)
 	cli := exec(t,
@@ -60,7 +77,7 @@ func TestFakeNetFlag_Validator(t *testing.T) {
 	cli.SetTemplateFunc("goos", func() string { return runtime.GOOS })
 	cli.SetTemplateFunc("goarch", func() string { return runtime.GOARCH })
 	cli.SetTemplateFunc("gover", runtime.Version)
-	cli.SetTemplateFunc("version", func() string { return version.VersionWithCommit("", "") })
+	cli.SetTemplateFunc("version", func() string { return version.String() })
 	cli.SetTemplateFunc("niltime", genesisStart)
 	cli.SetTemplateFunc("apis", func() string { return ipcAPIs })
 	cli.ExpectExit()

@@ -1,24 +1,36 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package app
 
 import (
-	"encoding/json"
 	"fmt"
-	"github.com/Fantom-foundation/go-opera/opera"
-	"github.com/ethereum/go-ethereum/eth/tracers"
-	"github.com/ethereum/go-ethereum/params"
-	"math/big"
 	"os"
 	"os/signal"
 	"sort"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
-	"github.com/Fantom-foundation/go-opera/cmd/sonicd/diskusage"
-	"github.com/Fantom-foundation/go-opera/cmd/sonicd/metrics"
-	"github.com/Fantom-foundation/go-opera/cmd/sonicd/tracing"
-	"github.com/Fantom-foundation/go-opera/config"
-	"github.com/Fantom-foundation/go-opera/config/flags"
-	"github.com/Fantom-foundation/go-opera/version"
+	"github.com/0xsoniclabs/sonic/cmd/sonicd/diskusage"
+	"github.com/0xsoniclabs/sonic/cmd/sonicd/metrics"
+	"github.com/0xsoniclabs/sonic/config"
+	"github.com/0xsoniclabs/sonic/config/flags"
+	"github.com/0xsoniclabs/sonic/version"
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/console/prompt"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -29,7 +41,7 @@ import (
 
 	ethmetrics "github.com/ethereum/go-ethereum/metrics"
 
-	"github.com/Fantom-foundation/go-opera/debug"
+	"github.com/0xsoniclabs/sonic/debug"
 
 	// Force-load the tracer engines to trigger registration
 	_ "github.com/ethereum/go-ethereum/eth/tracers/js"
@@ -38,9 +50,6 @@ import (
 )
 
 var (
-	// The app that holds all commands and flags.
-	app *cli.App
-
 	nodeFlags        []cli.Flag
 	testFlags        []cli.Flag
 	gpoFlags         []cli.Flag
@@ -73,6 +82,8 @@ func initFlags() {
 		flags.CacheFlag,
 		flags.LiveDbCacheFlag,
 		flags.ArchiveCacheFlag,
+		flags.StateDbCacheCapacityFlag,
+		flags.StateDbCheckPointInterval,
 	}
 	networkingFlags = []cli.Flag{
 		flags.BootnodesFlag,
@@ -93,6 +104,7 @@ func initFlags() {
 		flags.TxPoolJournalFlag,
 		flags.TxPoolRejournalFlag,
 		flags.TxPoolPriceLimitFlag,
+		flags.TxPoolMinTipFlag,
 		flags.TxPoolPriceBumpFlag,
 		flags.TxPoolAccountSlotsFlag,
 		flags.TxPoolGlobalSlotsFlag,
@@ -111,6 +123,7 @@ func initFlags() {
 		flags.ExitWhenEpochFlag,
 		flags.LightKDFFlag,
 		flags.ConfigFileFlag,
+		flags.DumpConfigFileFlag,
 		flags.ValidatorIDFlag,
 		flags.ValidatorPubkeyFlag,
 		flags.ValidatorPasswordFlag,
@@ -158,13 +171,12 @@ func initFlags() {
 		metrics.MetricsInfluxDBTokenFlag,
 		metrics.MetricsInfluxDBBucketFlag,
 		metrics.MetricsInfluxDBOrganizationFlag,
-		tracing.EnableFlag,
 	}
 
-	traceFlags = []cli.Flag{
-		flags.VmTrace,
-		flags.VMTraceJsonConfig,
-	}
+	//traceFlags = []cli.Flag{
+	//	flags.VmTrace,
+	//	flags.VMTraceJsonConfig,
+	//}
 
 	nodeFlags = []cli.Flag{}
 	nodeFlags = append(nodeFlags, gpoFlags...)
@@ -176,16 +188,23 @@ func initFlags() {
 	nodeFlags = append(nodeFlags, traceFlags...)
 }
 
-// init the CLI app.
-func initApp() {
+// initFilterAndFlags initializes the discovery filter and the application flags
+// exactly once, in a thread-safe manner. Since in integration tests multiple
+// node instances may be created in parallel, this function is used to ensure
+// that the flag initialization is done only once, in a thread-safe manner.
+var initFilterAndFlags = sync.OnceFunc(func() {
 	discfilter.Enable()
-
 	initFlags()
+})
 
-	app = cli.NewApp()
+// init the CLI app.
+func initApp() *cli.App {
+	initFilterAndFlags()
+
+	app := cli.NewApp()
 	app.Name = "sonicd"
 	app.Usage = "the Sonic network client"
-	app.Version = version.VersionWithCommit(config.GitCommit, config.GitDate)
+	app.Version = version.StringWithCommit()
 	app.Action = lachesisMain
 	app.HideVersion = true // we have a command to print the version
 	app.Commands = []cli.Command{
@@ -216,16 +235,29 @@ func initApp() {
 
 	app.After = func(ctx *cli.Context) error {
 		debug.Exit()
-		prompt.Stdin.Close() // Resets terminal mode.
-
+		// Close will resets terminal mode.
+		if err := prompt.Stdin.Close(); err != nil {
+			return fmt.Errorf("failed to reset terminal input")
+		}
 		return nil
 	}
+	return app
 }
 
-// opera is the main entry point into the system if no special subcommand is ran.
+// lachesisMain is the main entry point into the system if no special sub-command is ran.
 // It creates a default node based on the command line arguments and runs it in
 // blocking mode, waiting for it to be shut down.
 func lachesisMain(ctx *cli.Context) error {
+	return lachesisMainInternal(ctx, nil)
+}
+
+// lachesisMainInternal is an internal version of lachesisMain that allows for
+// an extra optional parameter to be used for announcing the HTTP port used by
+// the RPC server of the node.
+func lachesisMainInternal(
+	ctx *cli.Context,
+	control *AppControl,
+) error {
 	if args := ctx.Args(); len(args) > 0 {
 		return fmt.Errorf("invalid command: %q", args[0])
 	}
@@ -233,6 +265,21 @@ func lachesisMain(ctx *cli.Context) error {
 	cfg, err := config.MakeAllConfigs(ctx)
 	if err != nil {
 		return err
+	}
+
+	// Provide some user feedback on past and future RPC changes.
+	for flag, modules := range map[string][]string{
+		flags.HTTPApiFlag.Name: cfg.Node.HTTPModules,
+		flags.WSApiFlag.Name:   cfg.Node.WSModules,
+	} {
+		for _, module := range modules {
+			if strings.ToLower(module) == "ftm" {
+				log.Warn(fmt.Sprintf("The 'ftm' API is deprecated, use 'eth' instead (--%s).", flag))
+			}
+			if strings.ToLower(module) == "sonic" {
+				log.Warn(fmt.Sprintf("The 'sonic' API is experimental and should not be used in production environments (--%s).", flag))
+			}
+		}
 	}
 
 	metrics.SetDataDir(cfg.Node.DataDir) // report disk space usage into metrics
@@ -246,21 +293,21 @@ func lachesisMain(ctx *cli.Context) error {
 		cfg.OperaStore.EVM.StateDb.ArchiveCache = archiveCache
 	}
 
-	if ctx.GlobalString(flags.VmTrace.Name) != "" {
-		traceConfig := json.RawMessage("{}")
-		conf := ctx.GlobalString(flags.VMTraceJsonConfig.Name)
-		if conf != "" {
-			traceConfig = json.RawMessage(conf)
-		}
-		t, err := tracers.LiveDirectory.New(ctx.GlobalString(flags.VmTrace.Name), traceConfig)
-		if err != nil {
-			return fmt.Errorf("failed to create tracer %s: %v", "pipeline", err)
-		}
-		opera.VmTracer = t
-		opera.DefaultVMConfig.Tracer = t
-		t.OnBlockchainInit(&params.ChainConfig{ChainID: big.NewInt(146)})
-		log.Info("success init vm tracer", "flags.VmTrace", flags.VmTrace.Name)
-	}
+	//if ctx.GlobalString(flags.VmTrace.Name) != "" {
+	//	traceConfig := json.RawMessage("{}")
+	//	conf := ctx.GlobalString(flags.VMTraceJsonConfig.Name)
+	//	if conf != "" {
+	//		traceConfig = json.RawMessage(conf)
+	//	}
+	//	t, err := tracers.LiveDirectory.New(ctx.GlobalString(flags.VmTrace.Name), traceConfig)
+	//	if err != nil {
+	//		return fmt.Errorf("failed to create tracer %s: %v", "pipeline", err)
+	//	}
+	//	opera.VmTracer = t
+	//	opera.DefaultVMConfig.Tracer = t
+	//	t.OnBlockchainInit(&params.ChainConfig{ChainID: big.NewInt(146)})
+	//	log.Info("success init vm tracer", "flags.VmTrace", flags.VmTrace.Name)
+	//}
 
 	node, _, nodeClose, err := config.MakeNode(ctx, cfg)
 	if err != nil {
@@ -268,16 +315,46 @@ func lachesisMain(ctx *cli.Context) error {
 	}
 	defer nodeClose()
 
-	if err := startNode(ctx, node); err != nil {
+	if ctx.GlobalIsSet(flags.DumpConfigFileFlag.Name) {
+		// At this point the node is fully configured,
+		// if the dump-config flag is set, dump the config into the file and exit
+		outputConfigFile := ctx.GlobalString(flags.DumpConfigFileFlag.Name)
+		return config.SaveAllConfigs(outputConfigFile, cfg)
+	}
+
+	stop := make(chan bool, 1)
+	if err := startNode(ctx, node, stop); err != nil {
 		return fmt.Errorf("failed to start the node: %w", err)
 	}
+
+	if control != nil {
+		if control.NodeIdAnnouncement != nil {
+			control.NodeIdAnnouncement <- node.Server().NodeInfo().Enode
+		}
+
+		if control.HttpPortAnnouncement != nil {
+			control.HttpPortAnnouncement <- node.HTTPEndpoint()
+		}
+
+		if control.Shutdown != nil {
+			go func() {
+				<-control.Shutdown
+				log.Info("Got shutdown signal, shutting down...")
+				close(stop)
+				if err := node.Close(); err != nil {
+					log.Warn("Error during shutdown", "err", err)
+				}
+			}()
+		}
+	}
+
 	node.Wait()
 	return nil
 }
 
 // startNode boots up the system node and all registered protocols, after which
 // it unlocks any requested accounts, and starts the RPC/IPC interfaces.
-func startNode(ctx *cli.Context, stack *node.Node) error {
+func startNode(ctx *cli.Context, stack *node.Node, stop <-chan bool) error {
 	// Start up the node itself
 	if err := stack.Start(); err != nil {
 		return fmt.Errorf("error starting protocol stack: %w", err)
@@ -289,8 +366,12 @@ func startNode(ctx *cli.Context, stack *node.Node) error {
 
 		startFreeDiskSpaceMonitor(ctx, stopNodeSig, stack.InstanceDir())
 
-		<-stopNodeSig
-		log.Info("Got interrupt, shutting down...")
+		select {
+		case <-stopNodeSig:
+			log.Info("Node got interrupt, shutting down...")
+		case <-stop:
+			log.Info("Node received stop signal, shutting down...")
+		}
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
@@ -324,10 +405,11 @@ func startNode(ctx *cli.Context, stack *node.Node) error {
 	events := make(chan accounts.WalletEvent, 16)
 	stack.AccountManager().Subscribe(events)
 
-	// Create a client to interact with local opera node.
+	// Create a client to interact with local sonic node.
 	rpcClient := stack.Attach()
 	ethClient := ethclient.NewClient(rpcClient)
 	go func() {
+		defer ethClient.Close()
 		// Open any wallets already attached
 		for _, wallet := range stack.AccountManager().Wallets() {
 			if err := wallet.Open(""); err != nil {
@@ -335,27 +417,34 @@ func startNode(ctx *cli.Context, stack *node.Node) error {
 			}
 		}
 		// Listen for wallet event till termination
-		for event := range events {
-			switch event.Kind {
-			case accounts.WalletArrived:
-				if err := event.Wallet.Open(""); err != nil {
-					log.Warn("New wallet appeared, failed to open", "url", event.Wallet.URL(), "err", err)
+		for {
+			select {
+			case event := <-events:
+				switch event.Kind {
+				case accounts.WalletArrived:
+					if err := event.Wallet.Open(""); err != nil {
+						log.Warn("New wallet appeared, failed to open", "url", event.Wallet.URL(), "err", err)
+					}
+				case accounts.WalletOpened:
+					status, _ := event.Wallet.Status()
+					log.Info("New wallet appeared", "url", event.Wallet.URL(), "status", status)
+
+					var derivationPaths []accounts.DerivationPath
+					if event.Wallet.URL().Scheme == "ledger" {
+						derivationPaths = append(derivationPaths, accounts.LegacyLedgerBaseDerivationPath)
+					}
+					derivationPaths = append(derivationPaths, accounts.DefaultBaseDerivationPath)
+
+					event.Wallet.SelfDerive(derivationPaths, ethClient)
+
+				case accounts.WalletDropped:
+					log.Info("Old wallet dropped", "url", event.Wallet.URL())
+					if err := event.Wallet.Close(); err != nil {
+						log.Warn("Failed to close wallet", "url", event.Wallet.URL(), "err", err)
+					}
 				}
-			case accounts.WalletOpened:
-				status, _ := event.Wallet.Status()
-				log.Info("New wallet appeared", "url", event.Wallet.URL(), "status", status)
-
-				var derivationPaths []accounts.DerivationPath
-				if event.Wallet.URL().Scheme == "ledger" {
-					derivationPaths = append(derivationPaths, accounts.LegacyLedgerBaseDerivationPath)
-				}
-				derivationPaths = append(derivationPaths, accounts.DefaultBaseDerivationPath)
-
-				event.Wallet.SelfDerive(derivationPaths, ethClient)
-
-			case accounts.WalletDropped:
-				log.Info("Old wallet dropped", "url", event.Wallet.URL())
-				event.Wallet.Close()
+			case <-stop:
+				return
 			}
 		}
 	}()

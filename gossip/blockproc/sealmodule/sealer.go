@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package sealmodule
 
 import (
@@ -7,8 +23,8 @@ import (
 	"github.com/Fantom-foundation/lachesis-base/inter/pos"
 	"github.com/Fantom-foundation/lachesis-base/lachesis"
 
-	"github.com/Fantom-foundation/go-opera/gossip/blockproc"
-	"github.com/Fantom-foundation/go-opera/inter/iblockproc"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc"
+	"github.com/0xsoniclabs/sonic/inter/iblockproc"
 )
 
 type OperaEpochsSealerModule struct{}
@@ -38,8 +54,8 @@ func (s *OperaEpochsSealer) EpochSealing() bool {
 	return sealEpoch || s.bs.EpochCheaters.Len() != 0
 }
 
-func (p *OperaEpochsSealer) Update(bs iblockproc.BlockState, es iblockproc.EpochState) {
-	p.bs, p.es = bs, es
+func (s *OperaEpochsSealer) Update(bs iblockproc.BlockState, es iblockproc.EpochState) {
+	s.bs, s.es = bs, es
 }
 
 // SealEpoch is called after pre-internal transactions are executed

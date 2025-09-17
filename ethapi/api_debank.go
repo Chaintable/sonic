@@ -3,22 +3,20 @@ package ethapi
 import (
 	"context"
 	"fmt"
-	"math/big"
 	"strings"
 	"time"
 
+	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/gossip/evmstore"
+	"github.com/0xsoniclabs/sonic/inter"
 	ptracer "github.com/Chaintable/pipeline/tracer"
 	ptypes "github.com/Chaintable/pipeline/types"
 	"github.com/Chaintable/pipeline/util"
-	"github.com/Fantom-foundation/go-opera/evmcore"
-	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/Fantom-foundation/go-opera/opera"
-	"github.com/Fantom-foundation/go-opera/utils/signers/internaltx"
+	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/trie"
@@ -120,13 +118,9 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 			}
 		}
 		var stateDiffBytes []byte
-		if blockDiff != nil {
-			stateDiffBytes, err = util.EncodeToRlp(blockDiff)
-			if err != nil {
-				log.Error("Failed to encode state diff", "err", err)
-				stateDiffBytes = []byte{}
-			}
-		} else {
+		stateDiffBytes, err = util.EncodeToRlp(blockDiff)
+		if err != nil {
+			log.Error("Failed to encode state diff", "err", err)
 			stateDiffBytes = []byte{}
 		}
 
@@ -148,8 +142,10 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 		return nil, err
 	}
 
-	vmConfig := opera.DefaultVMConfig
-
+	vmConfig, err := GetVmConfig(ctx, api.b, idx.Block(block.NumberU64()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get vm config: %w", err)
+	}
 	rpcTracer := ptracer.RPCTracer{}
 	vmConfig.Tracer = &tracing.Hooks{
 		OnTxStart: rpcTracer.OnTxStart,
@@ -160,57 +156,38 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 		OnLog:     rpcTracer.OnLog,
 	}
 
-	rpcTracer.OnBlockStart(evmBlock)
+	pStateDB = evmstore.WrapStateDbWithLogger(pStateDB, vmConfig.Tracer)
+
+	rpcTracer.OnBlockStart(evmBlock, api.b.ChainConfig(idx.Block(block.NumberU64())))
 
 	var (
 		txs     = block.Transactions
-		signer  = types.MakeSigner(api.b.ChainConfig(), block.Number, uint64(block.Time.Unix()))
+		signer  = types.MakeSigner(api.b.ChainConfig(idx.Block(block.NumberU64())), block.Number, uint64(block.Time.Unix()))
 		gp      = new(core.GasPool).AddGas(block.GasLimit)
 		usedGas = new(uint64)
 	)
 
-	blockCtx := evmcore.NewEVMBlockContext(block.Header(), api.b.GetEvmStateReader(), nil)
-	evm := vm.NewEVM(blockCtx, vm.TxContext{}, pStateDB, api.b.ChainConfig(), vmConfig)
+	evm, _, err := api.b.GetEVM(ctx, pStateDB, block.Header(), &vmConfig, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get EVM for tracing: %w", err)
+	}
 
 	for i, tx := range txs {
-		msg, err := TxAsMessage(tx, signer, block.BaseFee)
+		msg, err := evmcore.TxAsMessage(tx, signer, block.BaseFee)
 		if err != nil {
 			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 		}
 
 		pStateDB.SetTxContext(tx.Hash(), i)
 
-		receipt, err := evmcore.ApplyTransactionWithEVM(msg, api.b.ChainConfig(), gp, pStateDB, evmBlock.Number(), evmBlock.Hash(), tx, usedGas, evm)
+		receipt, err := evmcore.ApplyTransactionWithEVM(msg, api.b.ChainConfig(idx.Block(block.NumberU64())), gp, pStateDB, evmBlock.Number(), evmBlock.Hash(), tx, usedGas, evm)
 		if err != nil {
 			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 		}
-
-		receipt.SetEffectiveGasPrice(tx, blockCtx.BaseFee)
+		receipt.SetEffectiveGasPrice(tx, block.Header().BaseFee)
 	}
 
 	res := rpcTracer.GetOutPut(parent.Root, block.Root)
 
 	return res, nil
-}
-
-func TxAsMessage(tx *types.Transaction, signer types.Signer, baseFee *big.Int) (*core.Message, error) {
-	if !internaltx.IsInternal(tx) {
-		return core.TransactionToMessage(tx, signer, baseFee)
-	} else {
-		return &core.Message{ // internal tx - no signature checking
-			From:              internaltx.InternalSender(tx),
-			To:                tx.To(),
-			Nonce:             tx.Nonce(),
-			Value:             tx.Value(),
-			GasLimit:          tx.Gas(),
-			GasPrice:          tx.GasPrice(),
-			GasFeeCap:         tx.GasFeeCap(),
-			GasTipCap:         tx.GasTipCap(),
-			Data:              tx.Data(),
-			AccessList:        tx.AccessList(),
-			BlobGasFeeCap:     tx.BlobGasFeeCap(),
-			BlobHashes:        tx.BlobHashes(),
-			SkipAccountChecks: true, // don't check sender nonce and being EOA
-		}, nil
-	}
 }

@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package check
 
 import (
@@ -5,9 +21,9 @@ import (
 	"os"
 	"path/filepath"
 
-	carmen "github.com/Fantom-foundation/Carmen/go/state"
-	"github.com/Fantom-foundation/go-opera/gossip"
-	"github.com/Fantom-foundation/go-opera/integration"
+	carmen "github.com/0xsoniclabs/carmen/go/state"
+	"github.com/0xsoniclabs/sonic/gossip"
+	"github.com/0xsoniclabs/sonic/integration"
 	"github.com/Fantom-foundation/lachesis-base/kvdb"
 	"github.com/Fantom-foundation/lachesis-base/utils/cachescale"
 	"github.com/ethereum/go-ethereum/log"
@@ -19,7 +35,7 @@ func createGdb(dataDir string, cacheRatio cachescale.Func, archive carmen.Archiv
 	carmenDir := filepath.Join(dataDir, "carmen")
 
 	if stat, err := os.Stat(chaindataDir); err != nil || !stat.IsDir() {
-		return nil, nil, fmt.Errorf("unable to validate: datadir does not contain chandata")
+		return nil, nil, fmt.Errorf("unable to validate: datadir does not contain chaindata")
 	}
 	if stat, err := os.Stat(carmenDir); err != nil || !stat.IsDir() {
 		return nil, nil, fmt.Errorf("unable to validate: datadir does not contain carmen")

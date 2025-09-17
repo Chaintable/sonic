@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package makefakegenesis
 
 import (
@@ -9,27 +25,39 @@ import (
 	"os"
 	"time"
 
-	"github.com/Fantom-foundation/go-opera/integration/makegenesis"
-	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/Fantom-foundation/go-opera/inter/drivertype"
-	"github.com/Fantom-foundation/go-opera/inter/iblockproc"
-	"github.com/Fantom-foundation/go-opera/inter/ier"
-	"github.com/Fantom-foundation/go-opera/opera"
-	"github.com/Fantom-foundation/go-opera/opera/genesis"
-	"github.com/Fantom-foundation/go-opera/opera/genesisstore"
+	"github.com/0xsoniclabs/sonic/integration/makegenesis"
+	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/inter/drivertype"
+	"github.com/0xsoniclabs/sonic/inter/iblockproc"
+	"github.com/0xsoniclabs/sonic/inter/ier"
+	"github.com/0xsoniclabs/sonic/opera"
+	"github.com/0xsoniclabs/sonic/opera/contracts/driver"
+	"github.com/0xsoniclabs/sonic/opera/contracts/driver/drivercall"
+	"github.com/0xsoniclabs/sonic/opera/contracts/driverauth"
+	"github.com/0xsoniclabs/sonic/opera/contracts/evmwriter"
+	"github.com/0xsoniclabs/sonic/opera/contracts/netinit"
+	"github.com/0xsoniclabs/sonic/opera/contracts/sfc"
+	"github.com/0xsoniclabs/sonic/opera/genesis"
+	"github.com/0xsoniclabs/sonic/opera/genesisstore"
+	"github.com/0xsoniclabs/sonic/scc"
+	"github.com/0xsoniclabs/sonic/scc/bls"
+	"github.com/0xsoniclabs/sonic/scc/cert"
+	"github.com/0xsoniclabs/sonic/utils"
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/Fantom-foundation/lachesis-base/inter/pos"
 	"github.com/Fantom-foundation/lachesis-base/lachesis"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 type GenesisJson struct {
-	Rules         opera.Rules
-	BlockZeroTime time.Time
-	Accounts      []Account     `json:",omitempty"`
-	Txs           []Transaction `json:",omitempty"`
+	Rules            opera.Rules
+	BlockZeroTime    time.Time
+	Accounts         []Account      `json:",omitempty"`
+	Txs              []Transaction  `json:",omitempty"`
+	GenesisCommittee *scc.Committee `json:",omitempty"`
 }
 
 type Account struct {
@@ -53,12 +81,118 @@ func LoadGenesisJson(filename string) (*GenesisJson, error) {
 		return nil, fmt.Errorf("failed to read genesis json file; %v", err)
 	}
 	var decoded GenesisJson
-	decoded.Rules = opera.FakeNetRules() // use fakenet rules as defaults
+	upgrades := opera.GetSonicUpgrades()
+	decoded.Rules = opera.FakeNetRules(upgrades) // use fakenet rules as defaults
 	err = json.Unmarshal(data, &decoded)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal genesis json file; %v", err)
 	}
 	return &decoded, nil
+}
+
+// GenerateFakeJsonGenesis creates a JSON genesis file with fake-net rules for
+// the given feature set. It includes the infrastructure contracts and a given
+// number of validators with some initial tokens.
+func GenerateFakeJsonGenesis(
+	numValidators int,
+	upgrades opera.Upgrades,
+) *GenesisJson {
+	jsonGenesis := &GenesisJson{
+		Rules:         opera.FakeNetRules(upgrades),
+		BlockZeroTime: time.Now(),
+	}
+
+	// Create infrastructure contracts.
+	jsonGenesis.Accounts = []Account{
+		{
+			Name:    "NetworkInitializer",
+			Address: netinit.ContractAddress,
+			Code:    netinit.GetContractBin(),
+			Nonce:   1,
+		},
+		{
+			Name:    "NodeDriver",
+			Address: driver.ContractAddress,
+			Code:    driver.GetContractBin(),
+			Nonce:   1,
+		},
+		{
+			Name:    "NodeDriverAuth",
+			Address: driverauth.ContractAddress,
+			Code:    driverauth.GetContractBin(),
+			Nonce:   1,
+		},
+		{
+			Name:    "SFC",
+			Address: sfc.ContractAddress,
+			Code:    sfc.GetContractBin(),
+			Nonce:   1,
+		},
+		{
+			Name:    "ContractAddress",
+			Address: evmwriter.ContractAddress,
+			Code:    []byte{0},
+			Nonce:   1,
+		},
+	}
+
+	// Configure pre-deployed contracts, according to the hardfork of the fake-net
+	if upgrades.Allegro {
+		// Deploy the history storage contract
+		// see: https://eips.ethereum.org/EIPS/eip-2935
+		jsonGenesis.Accounts = append(jsonGenesis.Accounts, Account{
+			Name:    "HistoryStorage",
+			Address: params.HistoryStorageAddress,
+			Code:    params.HistoryStorageCode,
+			Nonce:   1,
+		})
+	}
+
+	// Create the validator accounts and provide some tokens.
+	tokensPerValidator := utils.ToFtm(1000000000)
+	validators := GetFakeValidators(idx.Validator(numValidators))
+	for _, validator := range validators {
+		jsonGenesis.Accounts = append(jsonGenesis.Accounts, Account{
+			Address: validator.Address,
+			Balance: tokensPerValidator,
+		})
+	}
+	totalSupply := new(big.Int).Mul(tokensPerValidator, big.NewInt(int64(numValidators)))
+
+	var delegations []drivercall.Delegation
+	for _, val := range validators {
+		delegations = append(delegations, drivercall.Delegation{
+			Address:            val.Address,
+			ValidatorID:        val.ID,
+			Stake:              utils.ToFtm(5000000),
+			LockedStake:        new(big.Int),
+			LockupFromEpoch:    0,
+			LockupEndTime:      0,
+			LockupDuration:     0,
+			EarlyUnlockPenalty: new(big.Int),
+			Rewards:            new(big.Int),
+		})
+	}
+
+	// Create the genesis transactions.
+	genesisTxs := GetGenesisTxs(0, validators, totalSupply, delegations, validators[0].Address)
+	for _, tx := range genesisTxs {
+		jsonGenesis.Txs = append(jsonGenesis.Txs, Transaction{
+			To:   *tx.To(),
+			Data: tx.Data(),
+		})
+	}
+
+	// Create the genesis SCC committee.
+	key := bls.NewPrivateKeyForTests(0)
+	committee := scc.NewCommittee(scc.Member{
+		PublicKey:         key.PublicKey(),
+		ProofOfPossession: key.GetProofOfPossession(),
+		VotingPower:       1,
+	})
+
+	jsonGenesis.GenesisCommittee = &committee
+	return jsonGenesis
 }
 
 func ApplyGenesisJson(json *GenesisJson) (*genesisstore.Store, error) {
@@ -67,9 +201,6 @@ func ApplyGenesisJson(json *GenesisJson) (*genesisstore.Store, error) {
 	}
 
 	builder := makegenesis.NewGenesisBuilder()
-
-	fmt.Printf("Building genesis file - rules: %+v\n", json.Rules)
-
 	for _, acc := range json.Accounts {
 		if acc.Balance != nil {
 			builder.AddBalance(acc.Address, acc.Balance)
@@ -134,6 +265,22 @@ func ApplyGenesisJson(json *GenesisJson) (*genesisstore.Store, error) {
 	err = builder.ExecuteGenesisTxs(blockProc, genesisTxs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute json genesis txs; %v", err)
+	}
+
+	if json.GenesisCommittee != nil {
+		if len(json.GenesisCommittee.Members()) == 0 {
+			return nil, fmt.Errorf("genesis committee must have at least one member")
+		}
+		if err := json.GenesisCommittee.Validate(); err != nil {
+			return nil, fmt.Errorf("genesis committee is invalid")
+		}
+		builder.SetGenesisCommitteeCertificate(cert.NewCertificate(
+			cert.NewCommitteeStatement(
+				json.Rules.NetworkID,
+				scc.Period(0),
+				*json.GenesisCommittee,
+			),
+		))
 	}
 
 	return builder.Build(genesis.Header{

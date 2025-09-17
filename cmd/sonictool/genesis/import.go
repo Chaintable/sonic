@@ -1,16 +1,34 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package genesis
 
 import (
 	"fmt"
-	"github.com/Fantom-foundation/go-opera/cmd/sonictool/db"
-	"github.com/Fantom-foundation/go-opera/opera/genesis"
-	"github.com/Fantom-foundation/go-opera/opera/genesisstore"
+	"path/filepath"
+
+	"github.com/0xsoniclabs/sonic/cmd/sonictool/db"
+	"github.com/0xsoniclabs/sonic/opera/genesis"
+	"github.com/0xsoniclabs/sonic/opera/genesisstore"
+	"github.com/0xsoniclabs/sonic/utils/caution"
 	"github.com/Fantom-foundation/lachesis-base/abft"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/Fantom-foundation/lachesis-base/kvdb"
 	"github.com/Fantom-foundation/lachesis-base/utils/cachescale"
 	"github.com/ethereum/go-ethereum/log"
-	"path/filepath"
 )
 
 // ImportParams are parameters for ImportGenesisStore func.
@@ -20,9 +38,10 @@ type ImportParams struct {
 	ValidatorMode             bool
 	CacheRatio                cachescale.Func
 	LiveDbCache, ArchiveCache int64 // in bytes
+	StateDbCacheSize          int64 // number of elements
 }
 
-func ImportGenesisStore(params ImportParams) error {
+func ImportGenesisStore(params ImportParams) (err error) {
 	if err := db.AssertDatabaseNotInitialized(params.DataDir); err != nil {
 		return fmt.Errorf("database in datadir is already initialized: %w", err)
 	}
@@ -33,34 +52,35 @@ func ImportGenesisStore(params ImportParams) error {
 	chaindataDir := filepath.Join(params.DataDir, "chaindata")
 	dbs, err := db.MakeDbProducer(chaindataDir, params.CacheRatio)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create db producer: %w", err)
 	}
-	defer dbs.Close()
+	defer caution.CloseAndReportError(&err, dbs, "failed to close db producer")
 	setGenesisProcessing(chaindataDir)
 
 	gdb, err := db.MakeGossipDb(db.GossipDbParameters{
-		Dbs:           dbs,
-		DataDir:       params.DataDir,
-		ValidatorMode: params.ValidatorMode,
-		CacheRatio:    params.CacheRatio,
-		LiveDbCache:   params.LiveDbCache,
-		ArchiveCache:  params.ArchiveCache,
+		Dbs:              dbs,
+		DataDir:          params.DataDir,
+		ValidatorMode:    params.ValidatorMode,
+		CacheRatio:       params.CacheRatio,
+		LiveDbCache:      params.LiveDbCache,
+		ArchiveCache:     params.ArchiveCache,
+		StateDbCacheSize: params.StateDbCacheSize,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create gossip db: %w", err)
 	}
-	defer gdb.Close()
+	defer caution.CloseAndReportError(&err, gdb, "failed to close gossip db")
 
 	log.Info("genesis block info", "Genesis", params.GenesisStore.Genesis())
 
 	err = gdb.ApplyGenesis(params.GenesisStore.Genesis())
 	if err != nil {
-		return fmt.Errorf("failed to write Gossip genesis state: %v", err)
+		return fmt.Errorf("failed to write Gossip genesis state: %w", err)
 	}
 
 	cMainDb, err := dbs.OpenDB("lachesis")
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open lachesis db: %w", err)
 	}
 	cGetEpochDB := func(epoch idx.Epoch) kvdb.Store {
 		db, err := dbs.OpenDB(fmt.Sprintf("lachesis-%d", epoch))
@@ -73,7 +93,7 @@ func ImportGenesisStore(params ImportParams) error {
 		panic(fmt.Errorf("lachesis store error: %w", err))
 	}
 	cdb := abft.NewStore(cMainDb, cGetEpochDB, abftCrit, abft.DefaultStoreConfig(params.CacheRatio))
-	defer cdb.Close()
+	defer caution.CloseAndReportError(&err, cdb, "failed to close consensus db")
 
 	err = cdb.ApplyGenesis(&abft.Genesis{
 		Epoch:      gdb.GetEpoch(),
@@ -85,7 +105,7 @@ func ImportGenesisStore(params ImportParams) error {
 
 	err = gdb.Commit()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to commit gossip db: %w", err)
 	}
 	setGenesisComplete(chaindataDir)
 	log.Info("Successfully imported genesis file")
@@ -107,7 +127,7 @@ func IsGenesisTrusted(genesisStore *genesisstore.Store, genesisHashes genesis.Ha
 	if err != nil {
 		return fmt.Errorf("failed to calculate hash of genesis: %w", err)
 	}
-	signature, err := g.SignatureSection.GetSignature()
+	signature, err := g.GetSignature()
 	if err != nil {
 		return fmt.Errorf("genesis file doesn't refer to any trusted preset, signature not found: %w", err)
 	}

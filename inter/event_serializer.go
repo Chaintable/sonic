@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package inter
 
 import (
@@ -11,7 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rlp"
 
-	"github.com/Fantom-foundation/go-opera/utils/cser"
+	"github.com/0xsoniclabs/sonic/utils/cser"
 )
 
 var (
@@ -20,7 +36,7 @@ var (
 	ErrUnknownVersion    = errors.New("unknown serialization version")
 )
 
-const MaxSerializationVersion = 2
+const MaxSerializationVersion = 3
 
 const ProtocolMaxMsgSize = 10 * 1024 * 1024
 
@@ -73,7 +89,10 @@ func (e *Event) MarshalCSER(w *cser.Writer) error {
 		w.Bool(e.AnyEpochVote())
 		w.Bool(e.AnyBlockVotes())
 	}
-	if e.AnyTxs() || e.AnyMisbehaviourProofs() || e.AnyBlockVotes() || e.AnyEpochVote() {
+	if e.Version() == 3 {
+		w.Bool(e.HasProposal())
+	}
+	if e.AnyTxs() || e.AnyMisbehaviourProofs() || e.AnyBlockVotes() || e.AnyEpochVote() || e.Version() == 3 {
 		w.FixedBytes(e.PayloadHash().Bytes())
 	}
 	// extra
@@ -147,10 +166,11 @@ func eventUnmarshalCSER(r *cser.Reader, e *MutableEventPayload) (err error) {
 	anyMisbehaviourProofs := version == 1 && r.Bool()
 	anyEpochVote := version == 1 && r.Bool()
 	anyBlockVotes := version == 1 && r.Bool()
+	hasProposal := version == 3 && r.Bool()
 	payloadHash := EmptyPayloadHash(version)
-	if anyTxs || anyMisbehaviourProofs || anyEpochVote || anyBlockVotes {
+	if anyTxs || anyMisbehaviourProofs || anyEpochVote || anyBlockVotes || version == 3 {
 		r.FixedBytes(payloadHash[:])
-		if payloadHash == EmptyPayloadHash(version) {
+		if version != 3 && payloadHash == EmptyPayloadHash(version) {
 			return cser.ErrNonCanonicalEncoding
 		}
 	}
@@ -178,6 +198,7 @@ func eventUnmarshalCSER(r *cser.Reader, e *MutableEventPayload) (err error) {
 	e.anyBlockVotes = anyBlockVotes
 	e.anyEpochVote = anyEpochVote
 	e.anyMisbehaviourProofs = anyMisbehaviourProofs
+	e.hasProposal = hasProposal
 	e.SetPayloadHash(payloadHash)
 	e.SetExtra(extra)
 	return nil
@@ -251,6 +272,14 @@ func (e *EventPayload) MarshalCSER(w *cser.Writer) error {
 	if e.AnyBlockVotes() != (len(e.blockVotes.Votes) != 0) {
 		return ErrSerMalformedEvent
 	}
+	if e.Version() == 3 {
+		if e.AnyBlockVotes() || e.AnyEpochVote() || e.AnyMisbehaviourProofs() || e.AnyTxs() {
+			return ErrSerMalformedEvent
+		}
+		if e.HasProposal() != (e.payload.Proposal != nil) {
+			return ErrSerMalformedEvent
+		}
+	}
 	err := e.Event.MarshalCSER(w)
 	if err != nil {
 		return err
@@ -289,6 +318,13 @@ func (e *EventPayload) MarshalCSER(w *cser.Writer) error {
 		if err != nil {
 			return err
 		}
+	}
+	if e.Version() == 3 {
+		b, err := e.Payload().Serialize()
+		if err != nil {
+			return err
+		}
+		w.SliceBytes(b)
 	}
 	return nil
 }
@@ -361,6 +397,13 @@ func (e *MutableEventPayload) UnmarshalCSER(r *cser.Reader) error {
 		}
 	}
 	e.blockVotes = bvs
+	// generic payload
+	if e.Version() == 3 {
+		b := r.SliceBytes(ProtocolMaxMsgSize)
+		if err := e.payload.Deserialize(b); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -440,8 +483,8 @@ func RPCMarshalEvent(e EventI) map[string]interface{} {
 			"shortTerm": hexutil.Uint64(e.GasPowerLeft().Gas[ShortTermGas]),
 			"longTerm":  hexutil.Uint64(e.GasPowerLeft().Gas[LongTermGas]),
 		},
-		"gasPowerUsed":          hexutil.Uint64(e.GasPowerUsed()),
-		"anyTxs":                e.AnyTxs(),
+		"gasPowerUsed": hexutil.Uint64(e.GasPowerUsed()),
+		"anyTxs":       e.AnyTxs(),
 	}
 }
 
@@ -456,7 +499,7 @@ func RPCMarshalEventPayload(event EventPayloadI, inclTx bool) (map[string]interf
 		formatTx := func(tx *types.Transaction) (interface{}, error) {
 			return tx.Hash(), nil
 		}
-		txs := event.Txs()
+		txs := event.Transactions()
 		transactions := make([]interface{}, len(txs))
 		var err error
 		for i, tx := range txs {

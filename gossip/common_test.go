@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package gossip
 
 import (
@@ -13,6 +29,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/stretchr/testify/require"
 
 	"github.com/Fantom-foundation/lachesis-base/abft"
 	"github.com/Fantom-foundation/lachesis-base/hash"
@@ -31,19 +48,19 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
 
-	"github.com/Fantom-foundation/go-opera/evmcore"
-	"github.com/Fantom-foundation/go-opera/gossip/blockproc"
-	"github.com/Fantom-foundation/go-opera/gossip/emitter"
-	"github.com/Fantom-foundation/go-opera/integration/makefakegenesis"
-	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/Fantom-foundation/go-opera/inter/iblockproc"
-	"github.com/Fantom-foundation/go-opera/inter/state"
-	"github.com/Fantom-foundation/go-opera/inter/validatorpk"
-	"github.com/Fantom-foundation/go-opera/opera"
-	"github.com/Fantom-foundation/go-opera/utils"
-	"github.com/Fantom-foundation/go-opera/utils/adapters/vecmt2dagidx"
-	"github.com/Fantom-foundation/go-opera/valkeystore"
-	"github.com/Fantom-foundation/go-opera/vecmt"
+	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc"
+	"github.com/0xsoniclabs/sonic/gossip/emitter"
+	"github.com/0xsoniclabs/sonic/integration/makefakegenesis"
+	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/inter/iblockproc"
+	"github.com/0xsoniclabs/sonic/inter/state"
+	"github.com/0xsoniclabs/sonic/inter/validatorpk"
+	"github.com/0xsoniclabs/sonic/opera"
+	"github.com/0xsoniclabs/sonic/utils"
+	"github.com/0xsoniclabs/sonic/utils/adapters/vecmt2dagidx"
+	"github.com/0xsoniclabs/sonic/valkeystore"
+	"github.com/0xsoniclabs/sonic/vecmt"
 )
 
 const (
@@ -67,7 +84,6 @@ type testEnv struct {
 	nonces   map[common.Address]uint64
 	callback callbacks
 	*Service
-	signer  valkeystore.SignerI
 	pubkeys []validatorpk.PubKey
 }
 
@@ -138,22 +154,16 @@ func (m testConfirmedEventsModule) Start(bs iblockproc.BlockState, es iblockproc
 }
 
 func newTestEnv(firstEpoch idx.Epoch, validatorsNum idx.Validator, tb testing.TB) *testEnv {
-	rules := opera.FakeNetRules()
-	rules.Epochs.MaxEpochDuration = inter.Timestamp(maxEpochDuration)
-	rules.Blocks.MaxEmptyBlockSkipPeriod = 0
-	rules.Emitter.Interval = 0
+	return newTestEnvWithUpgrades(firstEpoch, validatorsNum, opera.GetSonicUpgrades(), tb)
+}
 
-	genStore := makefakegenesis.FakeGenesisStoreWithRulesAndStart(validatorsNum, utils.ToFtm(genesisBalance), utils.ToFtm(genesisStake), rules, firstEpoch, 2)
-	genesis := genStore.Genesis()
-
-	store, err := NewMemStore(tb)
-	if err != nil {
-		panic(fmt.Errorf("NewMemStore failed; %w", err))
-	}
-	err = store.ApplyGenesis(genesis)
-	if err != nil {
-		panic(fmt.Errorf("ApplyGenesis failed; %w", err))
-	}
+func newTestEnvWithUpgrades(
+	firstEpoch idx.Epoch,
+	validatorsNum idx.Validator,
+	upgrades opera.Upgrades,
+	tb testing.TB,
+) *testEnv {
+	store := newInMemoryStoreWithGenesisData(tb, upgrades, validatorsNum, firstEpoch)
 
 	// install blockProc callbacks
 	env := &testEnv{
@@ -167,6 +177,7 @@ func newTestEnv(firstEpoch idx.Epoch, validatorsNum idx.Validator, tb testing.TB
 
 	// create the service
 	txPool := &dummyTxPool{}
+	var err error
 	env.Service, err = newService(DefaultConfig(cachescale.Identity), store, blockProc, engine, vecClock, func(_ evmcore.StateReader) TxPool {
 		return txPool
 	}, enode.ID{})
@@ -179,8 +190,7 @@ func newTestEnv(firstEpoch idx.Epoch, validatorsNum idx.Validator, tb testing.TB
 		panic(err)
 	}
 
-	valKeystore := valkeystore.NewDefaultMemKeystore()
-	env.signer = valkeystore.NewSigner(valKeystore)
+	keyStore := valkeystore.NewDefaultMemKeystore()
 
 	// register emitters
 	for i := idx.Validator(0); i < validatorsNum; i++ {
@@ -194,26 +204,66 @@ func newTestEnv(firstEpoch idx.Epoch, validatorsNum idx.Validator, tb testing.TB
 		cfg.EmitIntervals = emitter.EmitIntervals{}
 		cfg.MaxParents = idx.Event(validatorsNum/2 + 1)
 		cfg.MaxTxsPerAddress = 10000000
-		_ = valKeystore.Add(pubkey, crypto.FromECDSA(makefakegenesis.FakeKey(vid)), validatorpk.FakePassword)
-		_ = valKeystore.Unlock(pubkey, validatorpk.FakePassword)
-		world := env.EmitterWorld(env.signer)
+		_ = keyStore.Add(pubkey, crypto.FromECDSA(makefakegenesis.FakeKey(vid)), validatorpk.FakePassword)
+		_ = keyStore.Unlock(pubkey, validatorpk.FakePassword)
+
+		signer := valkeystore.NewSignerAuthority(keyStore, pubkey)
+		world := env.EmitterWorld(signer)
 		world.External = testEmitterWorldExternal{world.External, env}
-		em := emitter.NewEmitter(cfg, world, store.AsBaseFeeSource())
+		em := emitter.NewEmitter(cfg, world, store.AsBaseFeeSource(), nil)
 		env.RegisterEmitter(em)
 		env.pubkeys = append(env.pubkeys, pubkey)
 		em.Start()
 	}
 
+	env.feed.Start(store.evm)
 	env.blockProcTasks.Start(1)
 	env.verWatcher.Start()
 
 	return env
 }
 
-func (env *testEnv) Close() {
+func newInMemoryStoreWithGenesisData(
+	tb testing.TB,
+	upgrades opera.Upgrades,
+	numValidators idx.Validator,
+	firstEpoch idx.Epoch,
+) *Store {
+	tb.Helper()
+	require := require.New(tb)
+	rules := opera.FakeNetRules(upgrades)
+	rules.Epochs.MaxEpochDuration = inter.Timestamp(maxEpochDuration)
+	rules.Emitter.Interval = 0
+
+	genStore := makefakegenesis.FakeGenesisStoreWithRulesAndStart(
+		numValidators,
+		utils.ToFtm(genesisBalance),
+		utils.ToFtm(genesisStake),
+		rules,
+		firstEpoch,
+		2,
+	)
+	genesis := genStore.Genesis()
+
+	store, err := NewMemStore(tb)
+	tb.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			tb.Fatalf("failed to close test store: %v", err)
+		}
+	})
+	require.NoError(err)
+	require.NoError(store.ApplyGenesis(genesis))
+	return store
+}
+
+func (env *testEnv) Close() error {
+	env.feed.Stop()
 	env.verWatcher.Stop()
-	env.store.Close()
+	if err := env.store.Close(); err != nil {
+		return fmt.Errorf("failed to close test store; %w", err)
+	}
 	env.tflusher.Stop()
+	return nil
 }
 
 func (env *testEnv) GetEvmStateReader() *EvmStateReader {
@@ -443,11 +493,11 @@ func (env *testEnv) callContract(
 
 	// Create a new environment which holds all relevant information
 	// about the transaction and calling mechanisms.
-	txContext := evmcore.NewEVMTxContext(msg)
 	context := evmcore.NewEVMBlockContext(block.Header(), env.GetEvmStateReader(), nil)
-	vmenv := vm.NewEVM(context, txContext, state, env.store.GetEvmChainConfig(), opera.DefaultVMConfig)
+	vmConfig := opera.GetVmConfig(env.store.GetRules())
+	vmenv := vm.NewEVM(context, state, env.store.GetEvmChainConfig(idx.Block(block.Number.Uint64())), vmConfig)
 	gaspool := new(core.GasPool).AddGas(math.MaxUint64)
-	res, err := core.NewStateTransition(vmenv, msg, gaspool).TransitionDb()
+	res, err := core.ApplyMessage(vmenv, msg, gaspool)
 	if err != nil {
 		return nil, 0, false, err
 	}
@@ -523,16 +573,17 @@ func (env *testEnv) SubscribeFilterLogs(ctx context.Context, query ethereum.Filt
 // CallMsgToMessage converts the given CallMsg to an evmcore.Message to allow passing it as a transaction simulator.
 func CallMsgToMessage(msg ethereum.CallMsg) *core.Message {
 	return &core.Message{
-		From:              msg.From,
-		To:                msg.To,
-		GasPrice:          msg.GasPrice,
-		GasTipCap:         msg.GasTipCap,
-		GasFeeCap:         msg.GasFeeCap,
-		GasLimit:          msg.Gas,
-		Value:             msg.Value,
-		Nonce:             0,
-		SkipAccountChecks: true,
-		Data:              msg.Data,
-		AccessList:        msg.AccessList,
+		From:             msg.From,
+		To:               msg.To,
+		GasPrice:         msg.GasPrice,
+		GasTipCap:        msg.GasTipCap,
+		GasFeeCap:        msg.GasFeeCap,
+		GasLimit:         msg.Gas,
+		Value:            msg.Value,
+		Nonce:            0,
+		SkipNonceChecks:  true,
+		SkipFromEOACheck: true,
+		Data:             msg.Data,
+		AccessList:       msg.AccessList,
 	}
 }

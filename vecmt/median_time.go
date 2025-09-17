@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package vecmt
 
 import (
@@ -8,7 +24,7 @@ import (
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/Fantom-foundation/lachesis-base/inter/pos"
 
-	"github.com/Fantom-foundation/go-opera/inter"
+	"github.com/0xsoniclabs/sonic/inter"
 )
 
 // medianTimeIndex is a handy index for the MedianTime() func
@@ -19,7 +35,7 @@ type medianTimeIndex struct {
 
 // MedianTime calculates weighted median of claimed time within highest observed events.
 func (vi *Index) MedianTime(id hash.Event, defaultTime inter.Timestamp) inter.Timestamp {
-	vi.Engine.InitBranchesInfo()
+	vi.InitBranchesInfo()
 	// Get event by hash
 	_before := vi.Engine.GetMergedHighestBefore(id)
 	if _before == nil {

@@ -1,11 +1,26 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package gasprice
 
 import (
 	"math/big"
 	"time"
 
-	"github.com/Fantom-foundation/go-opera/evmcore"
-	"github.com/Fantom-foundation/go-opera/opera"
+	"github.com/0xsoniclabs/sonic/opera"
 )
 
 // GetInitialBaseFee returns the initial base fee to be used in the genesis block.
@@ -24,7 +39,7 @@ func GetInitialBaseFee(rules opera.EconomyRules) *big.Int {
 }
 
 // GetBaseFeeForNextBlock computes the base fee for the next block based on the parent block.
-func GetBaseFeeForNextBlock(parent *evmcore.EvmHeader, rules opera.EconomyRules) *big.Int {
+func GetBaseFeeForNextBlock(parent ParentBlockInfo, rules opera.EconomyRules) *big.Int {
 	newPrice := getBaseFeeForNextBlock(parent, rules)
 	if rules.MinBaseFee != nil && newPrice.Cmp(rules.MinBaseFee) < 0 {
 		newPrice.Set(rules.MinBaseFee)
@@ -32,7 +47,19 @@ func GetBaseFeeForNextBlock(parent *evmcore.EvmHeader, rules opera.EconomyRules)
 	return newPrice
 }
 
-func getBaseFeeForNextBlock(parent *evmcore.EvmHeader, rules opera.EconomyRules) *big.Int {
+// ParentBlockInfo contains the information about the parent block that is used
+// to compute the base fee for the next block.
+type ParentBlockInfo struct {
+	// BaseFee is the base fee of the parent block.
+	BaseFee *big.Int
+	// Duration is the time duration between the parent and grand-parent blocks.
+	// It is used to compute the new base fee based on the gas rate observed in the parent block.
+	Duration time.Duration
+	// GasUsed is the total gas used in the parent block.
+	GasUsed uint64
+}
+
+func getBaseFeeForNextBlock(parent ParentBlockInfo, rules opera.EconomyRules) *big.Int {
 	// In general, this function computes the new base fee based on the following formula:
 	//
 	//     newPrice := oldPrice * e^(((rate-targetRate)/targetRate)*duration/128)

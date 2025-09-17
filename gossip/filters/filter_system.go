@@ -25,7 +25,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Fantom-foundation/go-opera/evmcore"
+	"github.com/0xsoniclabs/sonic/evmcore"
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -323,9 +323,9 @@ func (es *EventSystem) broadcast(filters filterIndex, ev interface{}) {
 			f.hashes <- hashes
 		}
 	case evmcore.ChainHeadNotify:
-		blkNumber := rpc.BlockNumber(e.Block.EvmHeader.Number.Int64())
+		blkNumber := rpc.BlockNumber(e.Block.Number.Int64())
 		receipts, _ := es.backend.GetReceiptsByNumber(context.Background(), blkNumber)
-		h := e.Block.EvmHeader.ToJson(receipts)
+		h := e.Block.ToJson(receipts)
 		for _, f := range filters[BlocksSubscription] {
 			f.headers <- h
 		}

@@ -19,6 +19,7 @@ package evmcore
 import (
 	"errors"
 
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
@@ -32,7 +33,7 @@ var (
 // error should be returned which is defined here.
 //
 // - If the pre-checking happens in the miner, then the transaction won't be packed.
-// - If the pre-checking happens in the block processing procedure, then a "BAD BLOCk"
+// - If the pre-checking happens in the block processing procedure, then a "BAD BLOCK"
 // error should be emitted.
 var (
 	// ErrNonceTooLow is returned if the nonce of a transaction is lower than the
@@ -55,12 +56,13 @@ var (
 	// is higher than the balance of the user's account.
 	ErrInsufficientFunds = errors.New("insufficient funds for gas * price + value")
 
-	// ErrGasUintOverflow is returned when calculating gas usage.
-	ErrGasUintOverflow = errors.New("gas uint64 overflow")
-
 	// ErrIntrinsicGas is returned if the transaction is specified to use less gas
 	// than required to start the invocation.
-	ErrIntrinsicGas = errors.New("intrinsic gas too low")
+	ErrIntrinsicGas = core.ErrIntrinsicGas
+
+	// ErrFloorDataGas is returned if the transaction is specified to use less gas
+	// than required for the data floor cost.
+	ErrFloorDataGas = errors.New("insufficient gas for floor data gas cost")
 
 	// ErrTxTypeNotSupported is returned if a transaction is not supported in the
 	// current network configuration.
@@ -84,4 +86,23 @@ var (
 
 	// ErrSenderNoEOA is returned if the sender of a transaction is a contract.
 	ErrSenderNoEOA = errors.New("sender not an eoa")
+
+	// ErrEmptyAuthorizations is returned if a SetCode transaction has no authorizations.
+	ErrEmptyAuthorizations = errors.New("empty authorizations")
+
+	// ErrMaxInitCodeSizeExceeded is returned if creation transaction provides the init code bigger
+	// than init code size limit.
+	ErrMaxInitCodeSizeExceeded = errors.New("max initcode size exceeded")
+
+	// ErrInflightTxLimitReached is returned when the maximum number of in-flight
+	// transactions is reached for specific accounts.
+	ErrInflightTxLimitReached = errors.New("in-flight transaction limit reached for delegated accounts")
+
+	// ErrAuthorityReserved is returned if a transaction has an authorization
+	// signed by an address which already has in-flight transactions known to the
+	// pool.
+	ErrAuthorityReserved = errors.New("authority already reserved")
+
+	// ErrNonEmptyBlobTx is returned if a blob transaction has non-empty blob data.
+	ErrNonEmptyBlobTx = errors.New("non-empty blob transaction are not supported")
 )

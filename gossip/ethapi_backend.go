@@ -1,15 +1,31 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package gossip
 
 import (
 	"context"
 	"fmt"
+	"iter"
 	"math/big"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/core"
 
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
@@ -22,16 +38,18 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/pkg/errors"
 
-	"github.com/Fantom-foundation/go-opera/ethapi"
-	"github.com/Fantom-foundation/go-opera/evmcore"
-	"github.com/Fantom-foundation/go-opera/gossip/evmstore"
-	"github.com/Fantom-foundation/go-opera/gossip/gasprice/gaspricelimits"
-	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/Fantom-foundation/go-opera/inter/iblockproc"
-	"github.com/Fantom-foundation/go-opera/inter/state"
-	"github.com/Fantom-foundation/go-opera/opera"
-	"github.com/Fantom-foundation/go-opera/topicsdb"
-	"github.com/Fantom-foundation/go-opera/tracing"
+	"github.com/0xsoniclabs/sonic/ethapi"
+	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/gossip/evmstore"
+	"github.com/0xsoniclabs/sonic/gossip/gasprice/gaspricelimits"
+	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/inter/iblockproc"
+	"github.com/0xsoniclabs/sonic/inter/state"
+	"github.com/0xsoniclabs/sonic/opera"
+	"github.com/0xsoniclabs/sonic/scc"
+	"github.com/0xsoniclabs/sonic/scc/cert"
+	"github.com/0xsoniclabs/sonic/topicsdb"
+	"github.com/0xsoniclabs/sonic/utils/result"
 )
 
 // EthAPIBackend implements ethapi.Backend.
@@ -52,24 +70,50 @@ func (b *EthAPIBackend) SetExtRPCEnabled(v bool) {
 	b.extRPCEnabled = v
 }
 
+// GetNetworkRules returns the network rules that have been active at the given
+// block height. If the block height is in the future, nil is returned.
+func (b *EthAPIBackend) GetNetworkRules(ctx context.Context, blockHeight idx.Block) (*opera.Rules, error) {
+	header, err := b.HeaderByNumber(ctx, rpc.BlockNumber(blockHeight))
+	if header == nil || err != nil {
+		return nil, err
+	}
+
+	_, es, err := b.GetEpochBlockState(ctx, rpc.BlockNumber(header.Epoch))
+	if err != nil {
+		return nil, err
+	}
+
+	rules := es.Rules
+	return &rules, nil
+}
+
 // ChainConfig returns the active chain configuration.
-func (b *EthAPIBackend) ChainConfig() *params.ChainConfig {
-	return b.svc.store.GetEvmChainConfig()
+func (b *EthAPIBackend) ChainConfig(blockHeight idx.Block) *params.ChainConfig {
+	return b.svc.store.GetEvmChainConfig(blockHeight)
 }
 
 func (b *EthAPIBackend) CurrentBlock() *evmcore.EvmBlock {
 	return b.state.CurrentBlock()
 }
 
+// HistoryPruningCutoff returns the block height at which pruning was done.
+func (b *EthAPIBackend) HistoryPruningCutoff() uint64 {
+	return 0
+}
+
 func (b *EthAPIBackend) ResolveRpcBlockNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (idx.Block, error) {
-	latest := b.svc.store.GetLatestBlockIndex()
-	if number, ok := blockNrOrHash.Number(); ok && (number == rpc.LatestBlockNumber || number == rpc.PendingBlockNumber) {
-		return latest, nil
-	} else if number, ok := blockNrOrHash.Number(); ok {
-		if idx.Block(number) > latest {
-			return 0, errors.New("block not found")
+	if number, ok := blockNrOrHash.Number(); ok {
+		latest := idx.Block(b.state.CurrentBlock().NumberU64())
+		if isLatestBlockNumber(number) {
+			return latest, nil
+		} else if number == rpc.EarliestBlockNumber {
+			return idx.Block(b.HistoryPruningCutoff()), nil
+		} else {
+			if idx.Block(number) > latest {
+				return 0, fmt.Errorf("block %v not found; latest block is %v", number, latest)
+			}
+			return idx.Block(number), nil
 		}
-		return idx.Block(number), nil
 	} else if h, ok := blockNrOrHash.Hash(); ok {
 		index := b.svc.store.GetBlockIndex(hash.Event(h))
 		if index == nil {
@@ -83,11 +127,8 @@ func (b *EthAPIBackend) ResolveRpcBlockNumberOrHash(ctx context.Context, blockNr
 // HeaderByNumber returns evm block header by its number, or nil if not exists.
 func (b *EthAPIBackend) HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*evmcore.EvmHeader, error) {
 	blk, err := b.BlockByNumber(ctx, number)
-	if err != nil {
+	if blk == nil || err != nil {
 		return nil, err
-	}
-	if blk == nil {
-		return nil, nil
 	}
 	return blk.Header(), err
 }
@@ -96,39 +137,50 @@ func (b *EthAPIBackend) HeaderByNumber(ctx context.Context, number rpc.BlockNumb
 func (b *EthAPIBackend) HeaderByHash(ctx context.Context, h common.Hash) (*evmcore.EvmHeader, error) {
 	index := b.svc.store.GetBlockIndex(hash.Event(h))
 	if index == nil {
-		return nil, nil
+		return nil, fmt.Errorf("block with hash %s not found", h.String())
 	}
 	return b.HeaderByNumber(ctx, rpc.BlockNumber(*index))
 }
 
 // BlockByNumber returns evm block by its number, or nil if not exists.
 func (b *EthAPIBackend) BlockByNumber(ctx context.Context, number rpc.BlockNumber) (*evmcore.EvmBlock, error) {
-	if number == rpc.PendingBlockNumber {
-		number = rpc.LatestBlockNumber
-	}
 	// Otherwise, resolve and return the block
 	var blk *evmcore.EvmBlock
-	if number == rpc.LatestBlockNumber {
+	if isLatestBlockNumber(number) {
 		blk = b.state.CurrentBlock()
+	} else if number == rpc.EarliestBlockNumber {
+		blk = b.state.GetBlock(common.Hash{}, b.HistoryPruningCutoff())
 	} else {
 		n := uint64(number.Int64())
 		blk = b.state.GetBlock(common.Hash{}, n)
 	}
-
 	return blk, nil
+}
+
+// isLatestBlockNumber returns true if the block number is latest, pending, finalized or safe
+func isLatestBlockNumber(number rpc.BlockNumber) bool {
+	return number == rpc.LatestBlockNumber ||
+		number == rpc.PendingBlockNumber ||
+		number == rpc.FinalizedBlockNumber ||
+		number == rpc.SafeBlockNumber
 }
 
 // StateAndHeaderByNumberOrHash returns evm state and block header by block number or block hash, err if not exists.
 func (b *EthAPIBackend) StateAndHeaderByNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (state.StateDB, *evmcore.EvmHeader, error) {
+
 	var header *evmcore.EvmHeader
-	if number, ok := blockNrOrHash.Number(); ok && (number == rpc.LatestBlockNumber || number == rpc.PendingBlockNumber) {
-		var err error
-		header, err = b.state.LastHeaderWithArchiveState()
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to get latest block number; %v", err)
+	if number, ok := blockNrOrHash.Number(); ok {
+		if isLatestBlockNumber(number) {
+			var err error
+			header, err = b.state.LastHeaderWithArchiveState()
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to get latest block number; %v", err)
+			}
+		} else if number == rpc.EarliestBlockNumber {
+			header = b.state.GetHeader(common.Hash{}, b.HistoryPruningCutoff())
+		} else {
+			header = b.state.GetHeader(common.Hash{}, uint64(number))
 		}
-	} else if number, ok := blockNrOrHash.Number(); ok {
-		header = b.state.GetHeader(common.Hash{}, uint64(number))
 	} else if h, ok := blockNrOrHash.Hash(); ok {
 		index := b.svc.store.GetBlockIndex(hash.Event(h))
 		if index == nil {
@@ -138,6 +190,7 @@ func (b *EthAPIBackend) StateAndHeaderByNumberOrHash(ctx context.Context, blockN
 	} else {
 		return nil, nil, errors.New("unknown header selector")
 	}
+
 	if header == nil {
 		return nil, nil, errors.New("header not found")
 	}
@@ -240,9 +293,11 @@ func (b *EthAPIBackend) epochWithDefault(ctx context.Context, epoch rpc.BlockNum
 	current := b.svc.store.GetEpoch()
 
 	switch {
+	case epoch == rpc.EarliestBlockNumber:
+		requested = idx.Epoch(b.HistoryPruningCutoff())
 	case epoch == rpc.PendingBlockNumber:
 		requested = current
-	case epoch == rpc.LatestBlockNumber:
+	case isLatestBlockNumber(epoch):
 		requested = current - 1
 	case epoch >= 0 && idx.Epoch(epoch) <= current:
 		requested = idx.Epoch(epoch)
@@ -292,19 +347,25 @@ func (b *EthAPIBackend) GetReceiptsByNumber(ctx context.Context, number rpc.Bloc
 		return nil, errors.New("transactions index is disabled (enable TxIndex and re-process the DAGs)")
 	}
 
-	if number == rpc.PendingBlockNumber {
-		number = rpc.LatestBlockNumber
+	blockNumber, err := b.ResolveRpcBlockNumberOrHash(ctx, rpc.BlockNumberOrHashWithNumber(number))
+	if err != nil {
+		// when block not found, return nil as rpc clients expect this
+		return nil, nil
 	}
-	if number == rpc.LatestBlockNumber {
-		header := b.state.CurrentHeader()
-		number = rpc.BlockNumber(header.Number.Uint64())
-	}
+	number = rpc.BlockNumber(blockNumber)
 
 	block := b.state.GetBlock(common.Hash{}, uint64(number))
 	time := uint64(block.Time.Unix())
 	baseFee := block.BaseFee
 	blobGasPrice := new(big.Int) // TODO issue #147
-	receipts := b.svc.store.evm.GetReceipts(idx.Block(number), b.ChainConfig(), block.Hash, time, baseFee, blobGasPrice, block.Transactions)
+	receipts := b.svc.store.evm.GetReceipts(idx.Block(number),
+		b.ChainConfig(idx.Block(number)),
+		block.Hash,
+		time,
+		baseFee,
+		blobGasPrice,
+		block.Transactions,
+	)
 	return receipts, nil
 }
 
@@ -330,25 +391,33 @@ func (b *EthAPIBackend) GetLogs(ctx context.Context, block common.Hash) ([][]*ty
 	return logs, nil
 }
 
-func (b *EthAPIBackend) GetEVM(ctx context.Context, msg *core.Message, state vm.StateDB, header *evmcore.EvmHeader, vmConfig *vm.Config) (*vm.EVM, func() error, error) {
+func (b *EthAPIBackend) GetEVM(ctx context.Context, state vm.StateDB, header *evmcore.EvmHeader, vmConfig *vm.Config, blockContext *vm.BlockContext) (*vm.EVM, func() error, error) {
 	vmError := func() error { return nil }
 
 	if vmConfig == nil {
-		vmConfig = &opera.DefaultVMConfig
+		block := idx.Block(header.Number.Uint64())
+		rules, err := b.GetNetworkRules(ctx, block)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to get network rules for block %d: %w", block, err)
+		}
+		if rules == nil {
+			return nil, nil, fmt.Errorf("network rules for block %d are not found", block)
+		}
+		config := opera.GetVmConfig(*rules)
+		vmConfig = &config
 	}
-	txContext := evmcore.NewEVMTxContext(msg)
-	context := evmcore.NewEVMBlockContext(header, b.state, nil)
-	config := b.ChainConfig()
-	return vm.NewEVM(context, txContext, state, config, *vmConfig), vmError, nil
+	var context vm.BlockContext
+	if blockContext == nil {
+		context = evmcore.NewEVMBlockContext(header, b.state, nil)
+	} else {
+		context = *blockContext
+	}
+	config := b.ChainConfig(idx.Block(context.BlockNumber.Uint64()))
+	return vm.NewEVM(context, state, config, *vmConfig), vmError, nil
 }
 
 func (b *EthAPIBackend) SendTx(ctx context.Context, signedTx *types.Transaction) error {
-	err := b.svc.txpool.AddLocal(signedTx)
-	if err == nil {
-		// NOTE: only sent txs tracing, see TxPool.addTxs() for all
-		tracing.StartTx(signedTx.Hash(), "EthAPIBackend.SendTx()")
-	}
-	return err
+	return b.svc.txpool.AddLocal(signedTx)
 }
 
 func (b *EthAPIBackend) SubscribeLogsNotify(ch chan<- []*types.Log) notify.Subscription {
@@ -398,15 +467,15 @@ func (b *EthAPIBackend) GetTransaction(ctx context.Context, txHash common.Hash) 
 		tx = b.svc.store.evm.GetTx(txHash)
 	} else {
 		event := b.svc.store.GetEventPayload(position.Event)
-		if position.EventOffset > uint32(event.Txs().Len()) {
+		if position.EventOffset > uint32(event.Transactions().Len()) {
 			return nil, 0, 0, fmt.Errorf("transactions index is corrupted (offset is larger than number of txs in event), event=%s, txid=%s, block=%d, offset=%d, txs_num=%d",
 				position.Event.String(),
 				txHash.String(),
 				position.Block,
 				position.EventOffset,
-				event.Txs().Len())
+				event.Transactions().Len())
 		}
-		tx = event.Txs()[position.EventOffset]
+		tx = event.Transactions()[position.EventOffset]
 	}
 
 	return tx, uint64(position.Block), uint64(position.BlockOffset), nil
@@ -529,12 +598,14 @@ func (b *EthAPIBackend) GetDowntime(ctx context.Context, vid idx.ValidatorID) (i
 }
 
 func (b *EthAPIBackend) GetEpochBlockState(ctx context.Context, epoch rpc.BlockNumber) (*iblockproc.BlockState, *iblockproc.EpochState, error) {
-	if epoch == rpc.PendingBlockNumber {
+	switch epoch {
+	case rpc.PendingBlockNumber:
 		bs, es := b.svc.store.GetBlockState(), b.svc.store.GetEpochState()
 		return &bs, &es, nil
-	}
-	if epoch == rpc.LatestBlockNumber {
+	case rpc.LatestBlockNumber, rpc.FinalizedBlockNumber, rpc.SafeBlockNumber:
 		epoch = rpc.BlockNumber(b.svc.store.GetEpoch())
+	case rpc.EarliestBlockNumber:
+		epoch = rpc.BlockNumber(b.HistoryPruningCutoff())
 	}
 	bs, es := b.svc.store.GetHistoryBlockEpochState(idx.Epoch(epoch))
 	return bs, es, nil
@@ -544,7 +615,27 @@ func (b *EthAPIBackend) CalcBlockExtApi() bool {
 	return b.svc.config.RPCBlockExt
 }
 
+func (b *EthAPIBackend) ChainID() *big.Int {
+	return new(big.Int).SetUint64(b.svc.store.GetRules().NetworkID)
+}
+
 func (b *EthAPIBackend) SealedEpochTiming(ctx context.Context) (start inter.Timestamp, end inter.Timestamp) {
 	es := b.svc.store.GetEpochState()
 	return es.PrevEpochStart, es.EpochStart
+}
+
+func (b *EthAPIBackend) GetLatestCommitteeCertificate() (cert.CommitteeCertificate, error) {
+	return b.svc.store.GetLatestCommitteeCertificate()
+}
+
+func (b *EthAPIBackend) EnumerateCommitteeCertificates(first scc.Period) iter.Seq[result.T[cert.CommitteeCertificate]] {
+	return b.svc.store.EnumerateCommitteeCertificates(first)
+}
+
+func (b *EthAPIBackend) GetLatestBlockCertificate() (cert.BlockCertificate, error) {
+	return b.svc.store.GetLatestBlockCertificate()
+}
+
+func (b *EthAPIBackend) EnumerateBlockCertificates(first idx.Block) iter.Seq[result.T[cert.BlockCertificate]] {
+	return b.svc.store.EnumerateBlockCertificates(first)
 }

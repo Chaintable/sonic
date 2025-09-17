@@ -1,16 +1,33 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package gossip
 
 import (
+	"math/big"
+
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"math/big"
 
-	"github.com/Fantom-foundation/go-opera/eventcheck/gaspowercheck"
-	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/Fantom-foundation/go-opera/opera"
-	"github.com/Fantom-foundation/go-opera/utils/concurrent"
+	"github.com/0xsoniclabs/sonic/eventcheck/gaspowercheck"
+	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/opera"
+	"github.com/0xsoniclabs/sonic/utils/concurrent"
 )
 
 type GPOBackend struct {
@@ -43,7 +60,7 @@ func (b *GPOBackend) PendingTxs() map[common.Address]types.Transactions {
 }
 
 func (b *GPOBackend) MinGasTip() *big.Int {
-	return b.txpool.GasPrice()
+	return b.txpool.MinTip()
 }
 
 // TotalGasPowerLeft returns a total amount of obtained gas power by the validators, according to the latest events from each validator

@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package drivermodule
 
 import (
@@ -10,20 +26,22 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 
-	"github.com/Fantom-foundation/go-opera/gossip/blockproc"
-	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/Fantom-foundation/go-opera/inter/drivertype"
-	"github.com/Fantom-foundation/go-opera/inter/iblockproc"
-	"github.com/Fantom-foundation/go-opera/inter/state"
-	"github.com/Fantom-foundation/go-opera/inter/validatorpk"
-	"github.com/Fantom-foundation/go-opera/opera"
-	"github.com/Fantom-foundation/go-opera/opera/contracts/driver"
-	"github.com/Fantom-foundation/go-opera/opera/contracts/driver/drivercall"
-	"github.com/Fantom-foundation/go-opera/opera/contracts/driver/driverpos"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc"
+	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/inter/drivertype"
+	"github.com/0xsoniclabs/sonic/inter/iblockproc"
+	"github.com/0xsoniclabs/sonic/inter/state"
+	"github.com/0xsoniclabs/sonic/inter/validatorpk"
+	"github.com/0xsoniclabs/sonic/opera"
+	"github.com/0xsoniclabs/sonic/opera/contracts/driver"
+	"github.com/0xsoniclabs/sonic/opera/contracts/driver/drivercall"
+	"github.com/0xsoniclabs/sonic/opera/contracts/driver/driverpos"
 )
 
 const (
-	maxAdvanceEpochs = 1 << 16
+	// internalTransactionsGasLimit is the gas limit for internal transactions like epoch sealing. This constant MUST NOT be changed, as doing so will cause a network fork.
+	internalTransactionsGasLimit = 500_000_000
+	maxAdvanceEpochs             = 1 << 16
 )
 
 type DriverTxListenerModule struct{}
@@ -66,7 +84,7 @@ func InternalTxBuilder(statedb state.StateDB) func(calldata []byte, addr common.
 		if nonce == math.MaxUint64 {
 			nonce = statedb.GetNonce(common.Address{})
 		}
-		tx := types.NewTransaction(nonce, addr, common.Big0, 500_000_000, common.Big0, calldata)
+		tx := types.NewTransaction(nonce, addr, common.Big0, internalTransactionsGasLimit, common.Big0, calldata)
 		nonce++
 		return tx
 	}
@@ -128,14 +146,27 @@ func (p *DriverTxTransactor) PopInternalTxs(_ iblockproc.BlockCtx, _ iblockproc.
 	return internalTxs
 }
 
-func (p *DriverTxListener) OnNewReceipt(tx *types.Transaction, r *types.Receipt, originator idx.ValidatorID) {
+func (p *DriverTxListener) OnNewReceipt(tx *types.Transaction, r *types.Receipt, originator idx.ValidatorID, baseFee *big.Int, blobBaseFee *big.Int) {
 	if originator == 0 {
 		return
 	}
 	originatorIdx := p.es.Validators.GetIdx(originator)
 
 	// track originated fee
-	txFee := new(big.Int).Mul(new(big.Int).SetUint64(r.GasUsed), tx.GasPrice())
+	var gasPrice *big.Int
+	if p.es.Rules.Upgrades.Allegro {
+		gasPrice = effectiveGasPrice(tx, baseFee)
+	} else {
+		gasPrice = tx.GasPrice()
+	}
+	txFee := new(big.Int).Mul(new(big.Int).SetUint64(r.GasUsed), gasPrice)
+
+	if r.BlobGasUsed != 0 && blobBaseFee != nil {
+		blobFee := new(big.Int).SetUint64(r.BlobGasUsed)
+		blobFee.Mul(blobFee, blobBaseFee)
+		txFee.Add(txFee, blobFee)
+	}
+
 	originated := p.bs.ValidatorStates[originatorIdx].Originated
 	originated.Add(originated, txFee)
 
@@ -144,6 +175,15 @@ func (p *DriverTxListener) OnNewReceipt(tx *types.Transaction, r *types.Receipt,
 	if notUsedGas != 0 {
 		p.bs.ValidatorStates[originatorIdx].DirtyGasRefund += notUsedGas
 	}
+}
+
+func effectiveGasPrice(tx *types.Transaction, baseFee *big.Int) *big.Int {
+	if baseFee == nil {
+		return tx.GasPrice()
+	}
+	// EffectiveGasTip returns an error for negative values, this is no problem here
+	gasTip, _ := tx.EffectiveGasTip(baseFee)
+	return new(big.Int).Add(baseFee, gasTip)
 }
 
 func decodeDataBytes(l *types.Log) ([]byte, error) {

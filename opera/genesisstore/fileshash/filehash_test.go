@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package fileshash
 
 import (
@@ -12,7 +28,7 @@ import (
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/stretchr/testify/require"
 
-	"github.com/Fantom-foundation/go-opera/utils/ioread"
+	"github.com/0xsoniclabs/sonic/utils/ioread"
 )
 
 type dropableFile struct {
@@ -90,25 +106,27 @@ func testFileHash_ReadWrite(t *testing.T, content []byte, expRoot hash.Hash, pie
 	root, err := writer.Flush()
 	require.NoError(err)
 	require.Equal(expRoot.Hex(), root.Hex())
-	file.Close()
+	err = file.Close()
+	require.NoError(err)
 
 	maxMemUsage := memUsageOf(pieceSize, getPiecesNum(uint64(len(content)), pieceSize))
 
 	// normal case: correct root hash and content after reading file partially
 	if len(content) > 0 {
-		file, err = os.OpenFile(filePath, os.O_RDONLY, 0600)
+		file, err := os.OpenFile(filePath, os.O_RDONLY, 0600)
 		require.NoError(err)
 		reader := WrapReader(file, maxMemUsage, root)
 		readB := make([]byte, rand.Int64N(int64(len(content))))
 		err = ioread.ReadAll(reader, readB)
 		require.NoError(err)
 		require.Equal(content[:len(readB)], readB)
-		reader.Close()
+		err = reader.Close()
+		require.NoError(err)
 	}
 
 	// normal case: correct root hash and content after reading the whole file
 	{
-		file, err = os.OpenFile(filePath, os.O_RDONLY, 0600)
+		file, err := os.OpenFile(filePath, os.O_RDONLY, 0600)
 		require.NoError(err)
 		reader := WrapReader(file, maxMemUsage, root)
 		readB := make([]byte, len(content))
@@ -117,28 +135,31 @@ func testFileHash_ReadWrite(t *testing.T, content []byte, expRoot hash.Hash, pie
 		require.Equal(content, readB)
 		// try to read one more byte
 		require.Error(ioread.ReadAll(reader, make([]byte, 1)), io.EOF)
-		reader.Close()
+		err = reader.Close()
+		require.NoError(err)
 	}
 
 	// correct root hash and reading too much content
 	{
-		file, err = os.OpenFile(filePath, os.O_RDONLY, 0600)
+		file, err := os.OpenFile(filePath, os.O_RDONLY, 0600)
 		require.NoError(err)
 		reader := WrapReader(file, maxMemUsage, root)
 		readB := make([]byte, len(content)+1)
 		require.Error(ioread.ReadAll(reader, readB), io.EOF)
-		reader.Close()
+		err = reader.Close()
+		require.NoError(err)
 	}
 
 	// passing the wrong root hash to reader
 	{
-		file, err = os.OpenFile(filePath, os.O_RDONLY, 0600)
+		file, err := os.OpenFile(filePath, os.O_RDONLY, 0600)
 		require.NoError(err)
 		maliciousReader := WrapReader(file, maxMemUsage, hash.HexToHash("0x00"))
 		data := make([]byte, 1)
 		err = ioread.ReadAll(maliciousReader, data)
 		require.Contains(err.Error(), ErrInit.Error())
-		maliciousReader.Close()
+		err = maliciousReader.Close()
+		require.NoError(err)
 	}
 
 	// modify piece data to make the mismatch piece hash

@@ -62,7 +62,11 @@ func newTxSenderCacher(threads int) *txSenderCacher {
 func (cacher *txSenderCacher) cache() {
 	for task := range cacher.tasks {
 		for i := 0; i < len(task.txs); i += task.inc {
-			types.Sender(task.signer, task.txs[i])
+			// Sender is cached inside transactions the first time it is queried.
+			// Sender may fail if the signature verification fails, in this case
+			// the value will not be cached. Any subsequent call to Sender will
+			// retrieve the same error, therefore it is safe to ignore errors here.
+			_, _ = types.Sender(task.signer, task.txs[i])
 		}
 	}
 }

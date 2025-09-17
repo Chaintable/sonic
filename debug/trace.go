@@ -21,9 +21,11 @@ package debug
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"runtime/trace"
 
+	"github.com/0xsoniclabs/sonic/utils"
 	"github.com/ethereum/go-ethereum/log"
 )
 
@@ -39,8 +41,9 @@ func (h *HandlerT) StartGoTrace(file string) error {
 		return err
 	}
 	if err := trace.Start(f); err != nil {
-		f.Close()
-		return err
+		return errors.Join(
+			fmt.Errorf("failed to start Go trace: %w", err),
+			utils.AnnotateIfError(f.Close(), "failed to close trace file"))
 	}
 	h.traceW = f
 	h.traceFile = file
@@ -48,16 +51,18 @@ func (h *HandlerT) StartGoTrace(file string) error {
 	return nil
 }
 
-// StopTrace stops an ongoing trace.
+// StopGoTrace stops an ongoing trace.
 func (h *HandlerT) StopGoTrace() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	trace.Stop()
 	if h.traceW == nil {
-		return errors.New("trace not in progress")
+		return nil
 	}
 	log.Info("Done writing Go trace", "dump", h.traceFile)
-	h.traceW.Close()
+	if err := h.traceW.Close(); err != nil {
+		return err
+	}
 	h.traceW = nil
 	h.traceFile = ""
 	return nil

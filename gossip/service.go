@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package gossip
 
 import (
@@ -5,6 +21,7 @@ import (
 	"fmt"
 	"math/big"
 	"math/rand/v2"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,32 +42,37 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/rpc"
 
-	"github.com/Fantom-foundation/go-opera/ethapi"
-	"github.com/Fantom-foundation/go-opera/eventcheck"
-	"github.com/Fantom-foundation/go-opera/eventcheck/basiccheck"
-	"github.com/Fantom-foundation/go-opera/eventcheck/epochcheck"
-	"github.com/Fantom-foundation/go-opera/eventcheck/gaspowercheck"
-	"github.com/Fantom-foundation/go-opera/eventcheck/heavycheck"
-	"github.com/Fantom-foundation/go-opera/eventcheck/parentscheck"
-	"github.com/Fantom-foundation/go-opera/evmcore"
-	"github.com/Fantom-foundation/go-opera/gossip/blockproc"
-	"github.com/Fantom-foundation/go-opera/gossip/blockproc/drivermodule"
-	"github.com/Fantom-foundation/go-opera/gossip/blockproc/eventmodule"
-	"github.com/Fantom-foundation/go-opera/gossip/blockproc/evmmodule"
-	"github.com/Fantom-foundation/go-opera/gossip/blockproc/sealmodule"
-	"github.com/Fantom-foundation/go-opera/gossip/blockproc/verwatcher"
-	"github.com/Fantom-foundation/go-opera/gossip/emitter"
-	"github.com/Fantom-foundation/go-opera/gossip/filters"
-	"github.com/Fantom-foundation/go-opera/gossip/gasprice"
-	"github.com/Fantom-foundation/go-opera/gossip/proclogger"
-	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/Fantom-foundation/go-opera/logger"
-	"github.com/Fantom-foundation/go-opera/utils/signers/gsignercache"
-	"github.com/Fantom-foundation/go-opera/utils/txtime"
-	"github.com/Fantom-foundation/go-opera/utils/wgmutex"
-	"github.com/Fantom-foundation/go-opera/valkeystore"
-	"github.com/Fantom-foundation/go-opera/vecmt"
+	"github.com/0xsoniclabs/sonic/ethapi"
+	"github.com/0xsoniclabs/sonic/eventcheck"
+	"github.com/0xsoniclabs/sonic/eventcheck/basiccheck"
+	"github.com/0xsoniclabs/sonic/eventcheck/epochcheck"
+	"github.com/0xsoniclabs/sonic/eventcheck/gaspowercheck"
+	"github.com/0xsoniclabs/sonic/eventcheck/heavycheck"
+	"github.com/0xsoniclabs/sonic/eventcheck/parentscheck"
+	"github.com/0xsoniclabs/sonic/eventcheck/proposalcheck"
+	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/drivermodule"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/eventmodule"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/evmmodule"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/sealmodule"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/verwatcher"
+	"github.com/0xsoniclabs/sonic/gossip/emitter"
+	"github.com/0xsoniclabs/sonic/gossip/evmstore"
+	"github.com/0xsoniclabs/sonic/gossip/filters"
+	"github.com/0xsoniclabs/sonic/gossip/gasprice"
+	"github.com/0xsoniclabs/sonic/gossip/proclogger"
+	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/logger"
+	scc_node "github.com/0xsoniclabs/sonic/scc/node"
+	"github.com/0xsoniclabs/sonic/utils/signers/gsignercache"
+	"github.com/0xsoniclabs/sonic/utils/txtime"
+	"github.com/0xsoniclabs/sonic/utils/wgmutex"
+	"github.com/0xsoniclabs/sonic/valkeystore"
+	"github.com/0xsoniclabs/sonic/vecmt"
 )
+
+//go:generate mockgen -source=service.go -package=gossip -destination=service_mock.go
 
 type ServiceFeed struct {
 	scope notify.SubscriptionScope
@@ -59,6 +81,19 @@ type ServiceFeed struct {
 	newEmittedEvent notify.Feed
 	newBlock        notify.Feed
 	newLogs         notify.Feed
+
+	incomingUpdates chan<- feedUpdate // < channel to send updates to the background feed loop
+	stopFeeder      chan<- struct{}   // < if closed, the background feed loop will stop
+	feederDone      <-chan struct{}   // < if closed, the background feed loop has stopped
+}
+
+type feedUpdate struct {
+	block *evmcore.EvmBlock
+	logs  []*types.Log
+}
+
+type ArchiveBlockHeightSource interface {
+	GetArchiveBlockHeight() (uint64, bool, error)
 }
 
 func (f *ServiceFeed) SubscribeNewEpoch(ch chan<- idx.Epoch) notify.Subscription {
@@ -75,6 +110,85 @@ func (f *ServiceFeed) SubscribeNewBlock(ch chan<- evmcore.ChainHeadNotify) notif
 
 func (f *ServiceFeed) SubscribeNewLogs(ch chan<- []*types.Log) notify.Subscription {
 	return f.scope.Track(f.newLogs.Subscribe(ch))
+}
+
+func (f *ServiceFeed) Start(store ArchiveBlockHeightSource) {
+	incoming := make(chan feedUpdate, 1024)
+	f.incomingUpdates = incoming
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	f.stopFeeder = stop
+	f.feederDone = done
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		pending := []feedUpdate{}
+		for {
+			select {
+			case <-stop:
+				return
+			case update := <-incoming:
+				pending = append(pending, update)
+				// sorting could be replaced by a heap or skipped if updates
+				// are guaranteed to be delivered in order.
+				slices.SortFunc(pending, func(a, b feedUpdate) int {
+					return a.block.Number.Cmp(b.block.Number)
+				})
+
+			case <-ticker.C:
+			}
+
+			if len(pending) == 0 {
+				continue
+			}
+
+			height, empty, err := store.GetArchiveBlockHeight()
+			if err != nil {
+				// If there is no archive, set height to the last block
+				// and send all notifications
+				if errors.Is(err, evmstore.NoArchiveError) {
+					height = pending[len(pending)-1].block.Number.Uint64()
+				} else {
+					log.Error("failed to get archive block height", "err", err)
+					continue
+				}
+			} else {
+				if empty {
+					continue
+				}
+			}
+
+			for _, update := range pending {
+				if update.block.Number.Uint64() > height {
+					break
+				}
+				f.newBlock.Send(evmcore.ChainHeadNotify{Block: update.block})
+				f.newLogs.Send(update.logs)
+				pending = pending[1:]
+			}
+		}
+	}()
+}
+
+func (f *ServiceFeed) notifyAboutNewBlock(
+	block *evmcore.EvmBlock,
+	logs []*types.Log,
+) {
+	f.incomingUpdates <- feedUpdate{
+		block: block,
+		logs:  logs,
+	}
+}
+
+func (f *ServiceFeed) Stop() {
+	if f.stopFeeder == nil {
+		return
+	}
+	close(f.stopFeeder)
+	f.stopFeeder = nil
+	<-f.feederDone
+	f.scope.Close()
 }
 
 type BlockProc struct {
@@ -116,11 +230,15 @@ type Service struct {
 	txpool              TxPool
 	heavyCheckReader    HeavyCheckReader
 	gasPowerCheckReader GasPowerCheckReader
+	proposalCheckReader proposalCheckReader
 	checkers            *eventcheck.Checkers
 	uniqueEventIDs      uniqueID
 
 	// version watcher
-	verWatcher *verwatcher.VerWarcher
+	verWatcher *verwatcher.VersionWatcher
+
+	// SCC node
+	sccNode *scc_node.Node
 
 	blockProcWg        sync.WaitGroup
 	blockProcTasks     *workers.Workers
@@ -216,7 +334,8 @@ func newService(config Config, store *Store, blockProc BlockProc, engine lachesi
 	svc.heavyCheckReader.Store = store
 	svc.heavyCheckReader.Pubkeys.Store(readEpochPubKeys(svc.store, svc.store.GetEpoch()))                                          // read pub keys of current epoch from DB
 	svc.gasPowerCheckReader.Ctx.Store(NewGasPowerContext(svc.store, svc.store.GetValidators(), svc.store.GetEpoch(), net.Economy)) // read gaspower check data from DB
-	svc.checkers = makeCheckers(config.HeavyCheck, txSigner, &svc.heavyCheckReader, &svc.gasPowerCheckReader, svc.store)
+	svc.proposalCheckReader = newProposalCheckReader(store)
+	svc.checkers = makeCheckers(config.HeavyCheck, txSigner, &svc.heavyCheckReader, &svc.gasPowerCheckReader, &svc.proposalCheckReader, svc.store)
 
 	// create GPO
 	svc.gpo = gasprice.NewOracle(svc.config.GPO, nil)
@@ -269,6 +388,14 @@ func newService(config Config, store *Store, blockProc BlockProc, engine lachesi
 	svc.verWatcher = verwatcher.New(netVerStore)
 	svc.tflusher = svc.makePeriodicFlusher()
 
+	// create Sonic Certification Chain node
+	// TODO: track the current committee inside the scc Node instance
+	// (see https://github.com/0xsoniclabs/sonic-admin/issues/22)
+	genesisCommitteeCertificate, err := store.GetCommitteeCertificate(0)
+	if err == nil {
+		svc.sccNode = scc_node.NewNode(store, genesisCommitteeCertificate.Subject().Committee)
+	}
+
 	return svc, nil
 }
 
@@ -281,17 +408,21 @@ func (s localEndPointSource) GetLocalEndPoint() *enode.Node {
 }
 
 // makeCheckers builds event checkers
-func makeCheckers(heavyCheckCfg heavycheck.Config, txSigner types.Signer, heavyCheckReader *HeavyCheckReader, gasPowerCheckReader *GasPowerCheckReader, store *Store) *eventcheck.Checkers {
+func makeCheckers(heavyCheckCfg heavycheck.Config, txSigner types.Signer, heavyCheckReader *HeavyCheckReader, gasPowerCheckReader *GasPowerCheckReader, proposalCheckReader *proposalCheckReader, store *Store) *eventcheck.Checkers {
 	// create signatures checker
 	heavyCheck := heavycheck.New(heavyCheckCfg, heavyCheckReader, txSigner)
 
 	// create gaspower checker
 	gaspowerCheck := gaspowercheck.New(gasPowerCheckReader)
 
+	// create proposal checker
+	proposalCheck := proposalcheck.New(proposalCheckReader)
+
 	return &eventcheck.Checkers{
 		Basiccheck:    basiccheck.New(),
 		Epochcheck:    epochcheck.New(store),
 		Parentscheck:  parentscheck.New(),
+		Proposalcheck: proposalCheck,
 		Heavycheck:    heavyCheck,
 		Gaspowercheck: gaspowerCheck,
 	}
@@ -328,27 +459,29 @@ func (s *Service) makePeriodicFlusher() PeriodicFlusher {
 	}
 }
 
-func (s *Service) EmitterWorld(signer valkeystore.SignerI) emitter.World {
+func (s *Service) EmitterWorld(signer valkeystore.SignerAuthority) emitter.World {
 	return emitter.World{
 		External: &emitterWorld{
 			emitterWorldProc: emitterWorldProc{s},
 			emitterWorldRead: emitterWorldRead{s.store},
 			WgMutex:          wgmutex.New(s.engineMu, &s.blockProcWg),
 		},
-		TxPool:   s.txpool,
-		Signer:   signer,
-		TxSigner: s.EthAPI.signer,
+		TxPool:            s.txpool,
+		EventsSigner:      signer,
+		TransactionSigner: s.EthAPI.signer,
 	}
 }
 
 // RegisterEmitter must be called before service is started
 func (s *Service) RegisterEmitter(em *emitter.Emitter) {
-	txtime.Enabled = true // enable tracking of tx times
+	txtime.Enabled.Store(true) // enable tracking of tx times
 	s.emitters = append(s.emitters, em)
 }
 
+type CleanupFunc func()
+
 // MakeProtocols constructs the P2P protocol definitions for `opera`.
-func MakeProtocols(svc *Service, backend *handler, disc enode.Iterator) []p2p.Protocol {
+func MakeProtocols(svc *Service, backend *handler, disc enode.Iterator) ([]p2p.Protocol, CleanupFunc) {
 	nodeIter := enode.NewFairMix(time.Second)
 	nodeIter.AddSource(disc)
 	nodeIter.AddSource(backend.GetSuggestedPeerIterator())
@@ -385,15 +518,19 @@ func MakeProtocols(svc *Service, backend *handler, disc enode.Iterator) []p2p.Pr
 				}
 				return nil
 			},
-			Attributes:     []enr.Entry{currentENREntry(svc, 0 /* time */)},
+			Attributes: []enr.Entry{
+				currentENREntry(svc,
+					0, // block height
+					0, // time
+				)},
 			DialCandidates: nodeIter,
 		}
 	}
-	return protocols
+	return protocols, CleanupFunc(nodeIter.Close)
 }
 
 // Protocols returns protocols the service can communicate on.
-func (s *Service) Protocols() []p2p.Protocol {
+func (s *Service) Protocols() ([]p2p.Protocol, CleanupFunc) {
 	return MakeProtocols(s, s.handler, s.operaDialCandidates)
 }
 
@@ -427,6 +564,11 @@ func (s *Service) APIs() []rpc.API {
 			Version:   "1.0",
 			Service:   ethapi.NewPublicTxTraceAPI(s.EthAPI, s.config.MaxResponseSize),
 			Public:    true,
+		}, {
+			Namespace: "sonic",
+			Version:   "1.0",
+			Service:   ethapi.NewPublicSccApi(s.EthAPI),
+			Public:    true,
 		},
 	}...)
 
@@ -454,6 +596,9 @@ func (s *Service) Start() error {
 	if s.store.evm.CheckLiveStateHash(blockState.LastBlock.Idx, blockState.FinalizedStateRoot) != nil {
 		return errors.New("fullsync isn't possible because state root is missing")
 	}
+
+	// start notification feeder
+	s.feed.Start(s.store.evm)
 
 	// start blocks processor
 	s.blockProcTasks.Start(1)
@@ -484,7 +629,10 @@ func (s *Service) WaitBlockEnd() {
 
 // Stop method invoked when the node terminates the service.
 func (s *Service) Stop() error {
-	defer log.Info("Fantom service stopped")
+	defer log.Info("Sonic service stopped")
+
+	s.txpool.Stop()
+
 	s.verWatcher.Stop()
 	for _, em := range s.emitters {
 		em.Stop()
@@ -494,7 +642,7 @@ func (s *Service) Stop() error {
 	s.operaDialCandidates.Close()
 
 	s.handler.Stop()
-	s.feed.scope.Close()
+	s.feed.Stop()
 	s.gpo.Stop()
 	// it's safe to stop tflusher only before locking engineMu
 	s.tflusher.Stop()

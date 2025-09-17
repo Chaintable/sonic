@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sort"
 
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
@@ -30,10 +31,12 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 
-	"github.com/Fantom-foundation/go-opera/evmcore"
-	"github.com/Fantom-foundation/go-opera/gossip/evmstore"
-	"github.com/Fantom-foundation/go-opera/topicsdb"
+	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/gossip/evmstore"
+	"github.com/0xsoniclabs/sonic/topicsdb"
 )
+
+//go:generate mockgen -source=filter.go -package=filters -destination=filter_mock.go
 
 type Backend interface {
 	HeaderByNumber(ctx context.Context, blockNr rpc.BlockNumber) (*evmcore.EvmHeader, error)
@@ -157,6 +160,7 @@ func (f *Filter) indexedLogs(ctx context.Context, begin, end idx.Block) ([]*type
 	if err != nil {
 		return nil, err
 	}
+	sortLogsByBlockNumberAndLogIndex(logs)
 
 	for _, l := range logs {
 		pos := f.backend.GetTxPosition(l.TxHash)
@@ -165,9 +169,28 @@ func (f *Filter) indexedLogs(ctx context.Context, begin, end idx.Block) ([]*type
 		} else {
 			log.Warn("tx index empty", "hash", l.TxHash)
 		}
+
+		// Fetch timestamp for the log from the header.
+		header, err := f.backend.HeaderByNumber(ctx, rpc.BlockNumber(l.BlockNumber))
+		if err != nil {
+			return nil, fmt.Errorf("failed to get header for block %d containing relevant log entry: %w", l.BlockNumber, err)
+		}
+		if header == nil {
+			return nil, fmt.Errorf("header for block %d containing relevant log entry not found", l.BlockNumber)
+		}
+		l.BlockTimestamp = uint64(header.Time.Unix())
 	}
 
 	return logs, nil
+}
+
+func sortLogsByBlockNumberAndLogIndex(logs []*types.Log) {
+	sort.Slice(logs, func(i, j int) bool {
+		if logs[i].BlockNumber != logs[j].BlockNumber {
+			return logs[i].BlockNumber < logs[j].BlockNumber
+		}
+		return logs[i].Index < logs[j].Index
+	})
 }
 
 // indexedLogs returns the logs matching the filter criteria based on raw block

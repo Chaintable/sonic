@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package app
 
 import (
@@ -12,11 +28,12 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/Fantom-foundation/Carmen/go/database/mpt"
-	mptio "github.com/Fantom-foundation/Carmen/go/database/mpt/io"
-	"github.com/Fantom-foundation/go-opera/cmd/sonictool/db"
-	"github.com/Fantom-foundation/go-opera/config"
-	"github.com/Fantom-foundation/go-opera/config/flags"
+	"github.com/0xsoniclabs/carmen/go/database/mpt"
+	mptio "github.com/0xsoniclabs/carmen/go/database/mpt/io"
+	"github.com/0xsoniclabs/sonic/cmd/sonictool/db"
+	"github.com/0xsoniclabs/sonic/config"
+	"github.com/0xsoniclabs/sonic/config/flags"
+	"github.com/0xsoniclabs/sonic/utils/caution"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/ethereum/go-ethereum/log"
 	"gopkg.in/urfave/cli.v1"
@@ -93,7 +110,7 @@ func heal(ctx *cli.Context) error {
 	return nil
 }
 
-func healLiveFromArchive(ctx context.Context, carmenLiveDir, carmenArchiveDir string, recoveredBlock idx.Block) error {
+func healLiveFromArchive(ctx context.Context, carmenLiveDir, carmenArchiveDir string, recoveredBlock idx.Block) (err error) {
 	if err := os.RemoveAll(carmenLiveDir); err != nil {
 		return fmt.Errorf("failed to remove broken live state: %w", err)
 	}
@@ -102,7 +119,7 @@ func healLiveFromArchive(ctx context.Context, carmenLiveDir, carmenArchiveDir st
 	}
 
 	reader, writer := io.Pipe()
-	defer reader.Close()
+	defer caution.CloseAndReportError(&err, reader, "failed to close reader")
 	bufReader := bufio.NewReaderSize(reader, 100*1024*1024) // 100 MiB
 	bufWriter := bufio.NewWriterSize(writer, 100*1024*1024) // 100 MiB
 
@@ -111,14 +128,14 @@ func healLiveFromArchive(ctx context.Context, carmenLiveDir, carmenArchiveDir st
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		defer writer.Close()
+		defer caution.CloseAndReportError(&exportErr, writer, "failed to close writer")
 		exportErr = mptio.ExportBlockFromArchive(ctx, mptio.NewLog(), carmenArchiveDir, bufWriter, uint64(recoveredBlock))
 		if exportErr == nil {
 			exportErr = bufWriter.Flush()
 		}
 	}()
 
-	err := mptio.ImportLiveDb(mptio.NewLog(), carmenLiveDir, bufReader)
+	err = mptio.ImportLiveDb(mptio.NewLog(), carmenLiveDir, bufReader)
 
 	wg.Wait()
 	return errors.Join(err, exportErr)

@@ -18,14 +18,20 @@ package filters
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"path"
 	"testing"
 
-	"github.com/Fantom-foundation/go-opera/utils/adapters/ethdb2kvdb"
+	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/gossip/evmstore"
+	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/utils/adapters/ethdb2kvdb"
 	"github.com/Fantom-foundation/lachesis-base/kvdb/table"
+	"github.com/stretchr/testify/require"
+	gomock "go.uber.org/mock/gomock"
 
-	"github.com/Fantom-foundation/go-opera/topicsdb"
+	"github.com/0xsoniclabs/sonic/topicsdb"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
@@ -33,6 +39,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/ethdb/leveldb"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/triedb"
 )
@@ -56,7 +63,13 @@ func BenchmarkFilters(b *testing.B) {
 	dir := b.TempDir()
 
 	backend := newTestBackend()
-	ldb, err := rawdb.NewLevelDBDatabase(path.Join(dir, "backend-db"), 100, 1000, "", false)
+
+	db, err := leveldb.New(path.Join(dir, "backend-db"), 100, 1000, "", false)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ldb := rawdb.NewDatabase(db)
+
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -279,4 +292,108 @@ func getGenesisBlockForTesting(db ethdb.Database, address common.Address, balanc
 		},
 	}
 	return genesis.MustCommit(db, triedb.NewDatabase(db, triedb.HashDefaults))
+}
+
+func TestSortLogsByBlockNumberAndLogIndex(t *testing.T) {
+	logs := []*types.Log{
+		{BlockNumber: 100, Index: 2},
+		{BlockNumber: 200, Index: 1},
+		{BlockNumber: 400, Index: 22},
+		{BlockNumber: 100, Index: 1},
+		{BlockNumber: 300, Index: 0},
+		{BlockNumber: 400, Index: 20},
+		{BlockNumber: 100, Index: 3},
+		{BlockNumber: 200, Index: 0},
+	}
+
+	sortLogsByBlockNumberAndLogIndex(logs)
+
+	expected := []struct {
+		blockNumber uint64
+		index       uint
+	}{
+		{100, 1},
+		{100, 2},
+		{100, 3},
+		{200, 0},
+		{200, 1},
+		{300, 0},
+		{400, 20},
+		{400, 22},
+	}
+
+	for i, log := range logs {
+		if log.BlockNumber != expected[i].blockNumber || log.Index != expected[i].index {
+			t.Errorf("Unexpected log at position %d: got (BlockNumber: %d, Index: %d), want (BlockNumber: %d, Index: %d)",
+				i, log.BlockNumber, log.Index, expected[i].blockNumber, expected[i].index)
+		}
+	}
+}
+
+func TestFilter_IndexedLogsReturnsLogsWithTimestampOrError(t *testing.T) {
+	timestamp := inter.Timestamp(55)
+	tests := map[string]struct {
+		primeMock     func(*MockBackend)
+		expectedError error
+	}{
+		"no error": {
+			primeMock: func(backend *MockBackend) {
+				backend.EXPECT().HeaderByNumber(gomock.Any(), gomock.Any()).Return(&evmcore.EvmHeader{Time: timestamp}, nil)
+			},
+			expectedError: nil,
+		},
+		"error on header retrieval": {
+			primeMock: func(backend *MockBackend) {
+				backend.EXPECT().HeaderByNumber(gomock.Any(), gomock.Any()).Return(nil, fmt.Errorf("error"))
+			},
+			expectedError: fmt.Errorf("failed to get header for block 1 containing relevant log entry"),
+		},
+		"nil header": {
+			primeMock: func(backend *MockBackend) {
+				backend.EXPECT().HeaderByNumber(gomock.Any(), gomock.Any()).Return(nil, nil)
+			},
+			expectedError: fmt.Errorf("header for block 1 containing relevant log entry not found"),
+		},
+	}
+
+	logs := []*types.Log{
+		{
+			BlockNumber: 1,
+			Address:     common.HexToAddress("0x42"),
+			Topics:      []common.Hash{common.HexToHash("0x01")},
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			backend := NewMockBackend(ctrl)
+			index := topicsdb.NewMockIndex(ctrl)
+
+			backend.EXPECT().EvmLogIndex().Return(index)
+			index.EXPECT().FindInBlocks(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(logs, nil)
+			backend.EXPECT().GetTxPosition(gomock.Any()).Return(&evmstore.TxPosition{})
+
+			test.primeMock(backend)
+
+			filter := &Filter{
+				backend:   backend,
+				config:    testConfig(),
+				addresses: []common.Address{{0x42}},
+				topics:    [][]common.Hash{},
+				block:     common.Hash{0x00},
+				begin:     0,
+				end:       2,
+			}
+
+			logs, err := filter.indexedLogs(t.Context(), 0, 2)
+			if test.expectedError != nil {
+				require.Error(t, err)
+				require.ErrorContains(t, err, test.expectedError.Error())
+			} else {
+				require.Equal(t, uint64(timestamp.Unix()), logs[0].BlockTimestamp)
+				require.NoError(t, err)
+			}
+		})
+	}
 }

@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package ethapi
 
 import (
@@ -10,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core"
@@ -17,11 +34,10 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 
-	"github.com/Fantom-foundation/go-opera/evmcore"
-	"github.com/Fantom-foundation/go-opera/inter/state"
-	"github.com/Fantom-foundation/go-opera/opera"
-	"github.com/Fantom-foundation/go-opera/txtrace"
-	"github.com/Fantom-foundation/go-opera/utils/signers/gsignercache"
+	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/inter/state"
+	"github.com/0xsoniclabs/sonic/txtrace"
+	"github.com/0xsoniclabs/sonic/utils/signers/gsignercache"
 )
 
 const (
@@ -106,33 +122,23 @@ func (s *PublicTxTraceAPI) Call(ctx context.Context, args TransactionArgs, trace
 // Block - trace_block function returns transaction traces in given block
 func (s *PublicTxTraceAPI) Block(ctx context.Context, numberOrHash rpc.BlockNumberOrHash) (*[]txtrace.ActionTrace, error) {
 
-	blockNumber, _ := numberOrHash.Number()
-
-	if blockNumber == rpc.PendingBlockNumber {
-		return nil, fmt.Errorf("cannot trace pending block")
-	}
-
-	currentBlockNumber := s.b.CurrentBlock().NumberU64()
-	if blockNumber == rpc.LatestBlockNumber {
-		blockNumber = rpc.BlockNumber(currentBlockNumber)
-	}
-
-	if uint64(blockNumber.Int64()) > currentBlockNumber {
-		return nil, fmt.Errorf("requested block number %v is greater than current head block number %v", blockNumber.Int64(), currentBlockNumber)
+	blockNumber, err := s.b.ResolveRpcBlockNumberOrHash(ctx, numberOrHash)
+	if err != nil {
+		return nil, err
 	}
 
 	defer func(start time.Time) {
-		log.Debug("Executing trace_block call finished", "block", blockNumber.Int64(), "runtime", time.Since(start))
+		log.Debug("Executing trace_block call finished", "block", blockNumber, "runtime", time.Since(start))
 	}(time.Now())
 
-	block, err := s.b.BlockByNumber(ctx, blockNumber)
+	block, err := s.b.BlockByNumber(ctx, rpc.BlockNumber(blockNumber))
 	if err != nil {
-		return nil, fmt.Errorf("cannot get block %v from db got %v", blockNumber.Int64(), err.Error())
+		return nil, fmt.Errorf("cannot get block %v from db got %v", blockNumber, err.Error())
 	}
 
 	traces, err := s.replayBlock(ctx, block, nil, nil)
 	if err != nil {
-		return nil, fmt.Errorf("cannot trace block %v got %v", blockNumber.Int64(), err.Error())
+		return nil, fmt.Errorf("cannot trace block %v got %v", blockNumber, err.Error())
 	}
 
 	return traces, nil
@@ -165,7 +171,7 @@ func (s *PublicTxTraceAPI) traceTxHash(ctx context.Context, hash common.Hash, tr
 	return s.replayBlock(ctx, block, &hash, traceIndex)
 }
 
-// Replays block and returns traces acording to parameters
+// Replays block and returns traces according to parameters
 //
 // txHash
 //   - if is nil, all transaction traces in the block are collected
@@ -188,7 +194,8 @@ func (s *PublicTxTraceAPI) replayBlock(ctx context.Context, block *evmcore.EvmBl
 		Actions: make([]txtrace.ActionTrace, 0),
 	}
 
-	signer := gsignercache.Wrap(types.MakeSigner(s.b.ChainConfig(), block.Number, uint64(block.Time.Unix())))
+	chainConfig := s.b.ChainConfig(idx.Block(block.NumberU64()))
+	signer := gsignercache.Wrap(types.MakeSigner(chainConfig, block.Number, uint64(block.Time.Unix())))
 
 	state, _, err := s.b.StateAndHeaderByNumberOrHash(ctx, rpc.BlockNumberOrHash{BlockNumber: &parentBlockNr})
 	if err != nil {
@@ -238,13 +245,20 @@ func (s *PublicTxTraceAPI) replayBlock(ctx context.Context, block *evmcore.EvmBl
 			}
 
 			state.SetTxContext(tx.Hash(), i)
-			vmConfig := opera.DefaultVMConfig
+			vmConfig, err := GetVmConfig(ctx, s.b, idx.Block(block.NumberU64()))
+			if err != nil {
+				return nil, fmt.Errorf("cannot get vm config for block %d, error: %w", block.NumberU64(), err)
+			}
 			vmConfig.NoBaseFee = true
 			vmConfig.Tracer = nil
 
-			vmenv, _, err := s.b.GetEVM(ctx, msg, state, block.Header(), &vmConfig)
+			vmenv, _, err := s.b.GetEVM(ctx, state, block.Header(), &vmConfig, nil)
 			if err != nil {
 				return nil, fmt.Errorf("cannot initialize vm for transaction %s, error: %s", tx.Hash().String(), err.Error())
+			}
+
+			if vmenv.ChainConfig().IsPrague(block.Number, uint64(block.Time.Unix())) {
+				evmcore.ProcessParentBlockHash(block.ParentHash, vmenv, state)
 			}
 
 			res, err := core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(msg.GasLimit))
@@ -259,7 +273,7 @@ func (s *PublicTxTraceAPI) replayBlock(ctx context.Context, block *evmcore.EvmBl
 				log.Debug("Error replaying transaction", "txHash", tx.Hash().String(), "err", res.Err.Error())
 			}
 
-			state.Finalise()
+			state.EndTransaction()
 
 			// Check correct replay status according to receipt data
 			if (failed && receipts[i].Status == 1) || (!failed && receipts[i].Status == 0) {
@@ -287,7 +301,10 @@ func (s *PublicTxTraceAPI) traceTx(
 	status uint64) (*[]txtrace.ActionTrace, error) {
 
 	// Providing default config with tracer
-	cfg := opera.DefaultVMConfig
+	cfg, err := GetVmConfig(ctx, b, idx.Block(header.Number.Uint64()))
+	if err != nil {
+		return nil, fmt.Errorf("cannot get vm config for block %d, error: %w", header.Number.Uint64(), err)
+	}
 	txTracer := txtrace.NewTraceStructLogger(block, uint(index))
 	cfg.Tracer = txTracer.Hooks()
 	cfg.NoBaseFee = true
@@ -305,7 +322,7 @@ func (s *PublicTxTraceAPI) traceTx(
 	// this makes sure resources are cleaned up.
 	defer cancel()
 
-	vmenv, _, err := b.GetEVM(ctx, msg, state, header, &cfg)
+	vmenv, _, err := b.GetEVM(ctx, state, header, &cfg, nil)
 	if err != nil {
 		return nil, fmt.Errorf("cannot initialize vm for transaction %s, error: %s", tx.Hash().String(), err.Error())
 	}
@@ -320,12 +337,13 @@ func (s *PublicTxTraceAPI) traceTx(
 	// Setup the gas pool and stateDB
 	gp := new(core.GasPool).AddGas(msg.GasLimit)
 	state.SetTxContext(tx.Hash(), int(index))
-	resultReceipt, err := evmcore.ApplyTransactionWithEVM(msg, b.ChainConfig(), gp, state, header.Number, block.Hash, tx, &index, vmenv)
+	chainConfig := b.ChainConfig(idx.Block(header.Number.Uint64()))
+	resultReceipt, err := evmcore.ApplyTransactionWithEVM(msg, chainConfig, gp, state, header.Number, block.Hash, tx, &index, vmenv)
 
 	traceActions := txTracer.GetResult()
-	state.Finalise()
+	state.EndTransaction()
 
-	// err is error occured before EVM execution
+	// err is error occurred before EVM execution
 	if err != nil {
 		errTrace := txtrace.GetErrorTraceFromMsg(msg, block.Hash, *block.Number, tx.Hash(), index, err)
 		at := make([]txtrace.ActionTrace, 0)
@@ -361,7 +379,7 @@ func getEmptyBlockTrace(blockHash common.Hash, blockNumber big.Int) *[]txtrace.A
 	return &emptyTrace.Actions
 }
 
-// FilterArgs represents the arguments for specifiing trace targets
+// FilterArgs represents the arguments for specifying trace targets
 type FilterArgs struct {
 	FromAddress *[]common.Address      `json:"fromAddress"`
 	ToAddress   *[]common.Address      `json:"toAddress"`
@@ -400,7 +418,10 @@ func filterBlocks(ctx context.Context, s *PublicTxTraceAPI, args FilterArgs) (js
 	}
 
 	// parse arguments
-	fromBlock, toBlock, fromAddresses, toAddresses := parseFilterArguments(s.b, args)
+	fromBlock, toBlock, fromAddresses, toAddresses, err := parseFilterArguments(s.b, args)
+	if err != nil {
+		return nil, err
+	}
 
 	// loop trhu all blocks
 	for i := fromBlock; i <= toBlock; i++ {
@@ -442,7 +463,10 @@ func filterBlocksInParallel(ctx context.Context, s *PublicTxTraceAPI, args Filte
 		return nil, err
 	}
 	// parse arguments
-	fromBlock, toBlock, fromAddresses, toAddresses := parseFilterArguments(s.b, args)
+	fromBlock, toBlock, fromAddresses, toAddresses, err := parseFilterArguments(s.b, args)
+	if err != nil {
+		return nil, err
+	}
 	// add context cancel function
 	ctx, cancelFunc := context.WithCancelCause(ctx)
 
@@ -522,22 +546,24 @@ func addBlocksForProcessing(ctx context.Context, fromBlock rpc.BlockNumber, toBl
 }
 
 // Parses rpc call arguments
-func parseFilterArguments(b Backend, args FilterArgs) (fromBlock rpc.BlockNumber, toBlock rpc.BlockNumber, fromAddresses map[common.Address]struct{}, toAddresses map[common.Address]struct{}) {
+func parseFilterArguments(b Backend, args FilterArgs) (fromBlock rpc.BlockNumber, toBlock rpc.BlockNumber, fromAddresses map[common.Address]struct{}, toAddresses map[common.Address]struct{}, err error) {
 
 	blockHead := rpc.BlockNumber(b.CurrentBlock().NumberU64())
 
 	if args.FromBlock != nil {
-		fromBlock = *args.FromBlock.BlockNumber
-		if fromBlock == rpc.LatestBlockNumber || fromBlock == rpc.PendingBlockNumber {
-			fromBlock = blockHead
+		blockNumber, err := b.ResolveRpcBlockNumberOrHash(context.Background(), rpc.BlockNumberOrHashWithNumber(*args.FromBlock.BlockNumber))
+		if err != nil {
+			return 0, 0, nil, nil, err
 		}
+		fromBlock = rpc.BlockNumber(blockNumber)
 	}
 
 	if args.ToBlock != nil {
-		toBlock = *args.ToBlock.BlockNumber
-		if toBlock == rpc.LatestBlockNumber || toBlock == rpc.PendingBlockNumber {
-			toBlock = blockHead
+		blockNumber, err := b.ResolveRpcBlockNumberOrHash(context.Background(), rpc.BlockNumberOrHashWithNumber(*args.ToBlock.BlockNumber))
+		if err != nil {
+			return 0, 0, nil, nil, err
 		}
+		toBlock = rpc.BlockNumber(blockNumber)
 	} else {
 		toBlock = blockHead
 	}
@@ -554,7 +580,7 @@ func parseFilterArguments(b Backend, args FilterArgs) (fromBlock rpc.BlockNumber
 			toAddresses[addr] = struct{}{}
 		}
 	}
-	return fromBlock, toBlock, fromAddresses, toAddresses
+	return fromBlock, toBlock, fromAddresses, toAddresses, nil
 }
 
 type traceWorkerResult struct {

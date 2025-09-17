@@ -1,15 +1,35 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package inter
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"math/big"
 	"math/rand/v2"
 	"testing"
 
+	"github.com/0xsoniclabs/sonic/gossip/randao"
+	"github.com/0xsoniclabs/sonic/utils/cser"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
 
 	"github.com/Fantom-foundation/lachesis-base/hash"
@@ -30,110 +50,375 @@ func emptyEvent(ver uint8) EventPayload {
 }
 
 func TestEventPayloadSerialization(t *testing.T) {
-	max := MutableEventPayload{}
-	max.SetVersion(2)
-	max.SetEpoch(math.MaxUint32)
-	max.SetSeq(idx.Event(math.MaxUint32))
-	max.SetLamport(idx.Lamport(math.MaxUint32))
+	event := MutableEventPayload{}
+	event.SetVersion(2)
+	event.SetEpoch(math.MaxUint32)
+	event.SetSeq(idx.Event(math.MaxUint32))
+	event.SetLamport(idx.Lamport(math.MaxUint32))
 	h := hash.BytesToEvent(bytes.Repeat([]byte{math.MaxUint8}, 32))
-	max.SetParents(hash.Events{hash.Event(h), hash.Event(h), hash.Event(h)})
-	max.SetPayloadHash(hash.Hash(h))
-	max.SetSig(BytesToSignature(bytes.Repeat([]byte{math.MaxUint8}, SigSize)))
-	max.SetExtra(bytes.Repeat([]byte{math.MaxUint8}, 100))
-	max.SetCreationTime(math.MaxUint64)
-	max.SetMedianTime(math.MaxUint64)
-	tx1 := types.NewTx(&types.LegacyTx{
-		Nonce:    math.MaxUint64,
-		GasPrice: h.Big(),
-		Gas:      math.MaxUint64,
-		To:       nil,
-		Value:    h.Big(),
-		Data:     []byte{},
-		V:        big.NewInt(0xff),
-		R:        h.Big(),
-		S:        h.Big(),
-	})
-	tx2 := types.NewTx(&types.LegacyTx{
-		Nonce:    math.MaxUint64,
-		GasPrice: h.Big(),
-		Gas:      math.MaxUint64,
-		To:       &common.Address{},
-		Value:    h.Big(),
-		Data:     max.extra,
-		V:        big.NewInt(0xff),
-		R:        h.Big(),
-		S:        h.Big(),
-	})
-	txs := types.Transactions{}
-	for i := 0; i < 200; i++ {
-		txs = append(txs, tx1)
-		txs = append(txs, tx2)
-	}
-	max.SetTxs(txs)
+	event.SetParents(hash.Events{hash.Event(h), hash.Event(h), hash.Event(h)})
+	event.SetPayloadHash(hash.Hash(h))
+	event.SetSig(BytesToSignature(bytes.Repeat([]byte{math.MaxUint8}, SigSize)))
+	event.SetExtra(bytes.Repeat([]byte{math.MaxUint8}, 100))
+	event.SetCreationTime(math.MaxUint64)
+	event.SetMedianTime(math.MaxUint64)
 
-	ee := map[string]EventPayload{
+	allTransactionTypes := makeAllTransactionTypes()
+	txs := types.Transactions{}
+	for i := 0; i < 50; i++ {
+		txs = append(txs, allTransactionTypes...)
+	}
+	event.SetTxs(txs)
+	require.Len(t, event.txs, len(allTransactionTypes)*50)
+
+	tests := map[string]EventPayload{
 		"empty0":  emptyEvent(0),
 		"empty1":  emptyEvent(1),
 		"empty2":  emptyEvent(2),
-		"max":     *max.Build(),
+		"empty3":  emptyEvent(3),
+		"event":   *event.Build(),
 		"random1": *FakeEvent(1, 12, 1, 1, true),
 		"random2": *FakeEvent(2, 12, 0, 0, false),
+		"random3": *FakeEvent(3, 12, 0, 0, false),
 	}
 
 	t.Run("ok", func(t *testing.T) {
-		require := require.New(t)
+		for name, toEncode := range tests {
+			t.Run(name, func(t *testing.T) {
+				buf, err := rlp.EncodeToBytes(&toEncode)
+				require.NoError(t, err)
 
-		for name, header0 := range ee {
-			buf, err := rlp.EncodeToBytes(&header0)
-			require.NoError(err)
+				var decoded EventPayload
+				err = rlp.DecodeBytes(buf, &decoded)
+				require.NoError(t, err)
 
-			var header1 EventPayload
-			err = rlp.DecodeBytes(buf, &header1)
-			require.NoError(err, name)
-
-			require.EqualValues(header0.extEventData, header1.extEventData, name)
-			require.EqualValues(header0.sigData, header1.sigData, name)
-			for i := range header0.payloadData.txs {
-				require.EqualValues(header0.payloadData.txs[i].Hash(), header1.payloadData.txs[i].Hash(), name)
-			}
-			require.EqualValues(header0.baseEvent, header1.baseEvent, name)
-			require.EqualValues(header0.ID(), header1.ID(), name)
-			require.EqualValues(header0.HashToSign(), header1.HashToSign(), name)
-			require.EqualValues(header0.Size(), header1.Size(), name)
+				require.EqualValues(t, toEncode.extEventData, decoded.extEventData)
+				require.EqualValues(t, toEncode.sigData, decoded.sigData)
+				require.Equal(t, len(toEncode.txs), len(decoded.txs))
+				require.Equal(t, toEncode.payload.Hash(), decoded.payload.Hash())
+				for i := range toEncode.txs {
+					require.EqualValues(t, toEncode.txs[i].Hash(), decoded.txs[i].Hash())
+				}
+				require.EqualValues(t, toEncode.baseEvent, decoded.baseEvent)
+				require.EqualValues(t, toEncode.ID(), decoded.ID())
+				require.EqualValues(t, toEncode.HashToSign(), decoded.HashToSign())
+				require.EqualValues(t, toEncode.Size(), decoded.Size())
+				require.EqualValues(t, toEncode.PayloadHash(), decoded.PayloadHash())
+			})
 		}
 	})
 
 	t.Run("err", func(t *testing.T) {
-		require := require.New(t)
+		for name, toEncode := range tests {
+			t.Run(name, func(t *testing.T) {
+				bin, err := toEncode.MarshalBinary()
+				require.NoError(t, err)
 
-		for name, header0 := range ee {
-			bin, err := header0.MarshalBinary()
-			require.NoError(err, name)
+				n := rand.IntN(len(bin) - len(toEncode.Extra()) - 1)
+				bin = bin[0:n]
 
-			n := rand.IntN(len(bin) - len(header0.Extra()) - 1)
-			bin = bin[0:n]
+				buf, err := rlp.EncodeToBytes(bin)
+				require.NoError(t, err)
 
-			buf, err := rlp.EncodeToBytes(bin)
-			require.NoError(err, name)
-
-			var header1 Event
-			err = rlp.DecodeBytes(buf, &header1)
-			require.Error(err, name)
+				var decoded Event
+				err = rlp.DecodeBytes(buf, &decoded)
+				require.Error(t, err)
+			})
 		}
 	})
 }
 
+func TestEventUnmarshalCSER_Version2FailsIfHashOfEmptyPayloadIsIncluded(t *testing.T) {
+	require := require.New(t)
+
+	builder := MutableEventPayload{}
+	builder.SetVersion(2)
+	builder.SetTxs([]*types.Transaction{
+		types.NewTx(&types.LegacyTx{Nonce: 12}),
+	})
+	event := builder.Build()
+
+	// Deliberately set the hash to the value it should have if the payload was
+	// empty. This should be detected by the decoder and identified as an error.
+	event.payloadHash = EmptyPayloadHash(2)
+
+	data, err := rlp.EncodeToBytes(&event)
+	require.NoError(err)
+	require.True(bytes.Contains(data, event.payloadHash[:]))
+
+	var recovered EventPayload
+	err = rlp.DecodeBytes(data, &recovered)
+	require.ErrorIs(err, cser.ErrNonCanonicalEncoding)
+}
+
+func TestEventUnmarshalCSER_Version3AcceptsIfHashOfAnEmptyPayloadIsIncluded(t *testing.T) {
+	require := require.New(t)
+
+	builder := MutableEventPayload{}
+	builder.SetVersion(3)
+	builder.SetPayload(Payload{})
+	event := builder.Build()
+
+	require.Equal(event.payloadHash, (&Payload{}).Hash())
+	require.Equal(event.payloadHash, EmptyPayloadHash(3))
+
+	data, err := rlp.EncodeToBytes(&event)
+	require.NoError(err)
+
+	// The payload hash is always included in version3 events.
+	require.True(bytes.Contains(data, event.payloadHash[:]))
+
+	// During decoding, its presence is not considered an error.
+	var recovered EventPayload
+	err = rlp.DecodeBytes(data, &recovered)
+	require.NoError(err)
+}
+
+func TestEventUnmarshalCSER_Version3DetectsUnsupportedPayload(t *testing.T) {
+	require := require.New(t)
+
+	tests := map[string]*EventPayload{
+		"with transactions": func() *EventPayload {
+			builder := MutableEventPayload{}
+			builder.SetVersion(3)
+			builder.SetTxs([]*types.Transaction{
+				types.NewTx(&types.LegacyTx{Nonce: 12}),
+			})
+			return builder.Build()
+		}(),
+		"with epoch vote": func() *EventPayload {
+			builder := MutableEventPayload{}
+			builder.SetVersion(3)
+			builder.SetEpochVote(LlrEpochVote{
+				Epoch: 1,
+			})
+			return builder.Build()
+		}(),
+		"with block votes": func() *EventPayload {
+			builder := MutableEventPayload{}
+			builder.SetVersion(3)
+			builder.SetBlockVotes(LlrBlockVotes{
+				Start: 1,
+				Votes: []hash.Hash{{}, {}},
+			})
+			return builder.Build()
+		}(),
+		"with misbehavior proofs": func() *EventPayload {
+			builder := MutableEventPayload{}
+			builder.SetVersion(3)
+			builder.SetMisbehaviourProofs([]MisbehaviourProof{
+				{
+					EventsDoublesign: &EventsDoublesign{
+						Pair: [2]SignedEventLocator{{}, {}},
+					},
+				},
+			})
+			return builder.Build()
+		}(),
+		"with proposal but missing has-proposal flag": func() *EventPayload {
+			builder := MutableEventPayload{}
+			builder.SetVersion(3)
+			builder.SetPayload(Payload{
+				Proposal: &Proposal{
+					Number: 1,
+				},
+			})
+			builder.hasProposal = false
+			return builder.Build()
+		}(),
+		"without proposal but with has-proposal flag": func() *EventPayload {
+			builder := MutableEventPayload{}
+			builder.SetVersion(3)
+			builder.hasProposal = true
+			return builder.Build()
+		}(),
+	}
+
+	for name, event := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := rlp.EncodeToBytes(event)
+			require.ErrorIs(err, ErrSerMalformedEvent)
+		})
+	}
+}
+
+func TestEventPayloadMarshalCSER_DetectsInvalidTransactionEncoding(t *testing.T) {
+	require := require.New(t)
+
+	invalidTx := types.NewTx(&types.AccessListTx{
+		ChainID: big.NewInt(-1),
+	})
+	_, want := invalidTx.MarshalBinary()
+	require.Error(want)
+
+	builder := MutableEventPayload{}
+	builder.SetVersion(3)
+	builder.SetPayload(Payload{
+		Proposal: &Proposal{
+			Transactions: []*types.Transaction{invalidTx},
+		},
+	})
+	event := builder.Build()
+
+	_, err := rlp.EncodeToBytes(&event)
+	require.ErrorIs(err, want)
+}
+
+func TestEventPayloadUnmarshalCSER_DetectsInvalidPayloadEncoding(t *testing.T) {
+	require := require.New(t)
+
+	payload := Payload{ProposalSyncState: ProposalSyncState{
+		LastSeenProposalTurn:  123,
+		LastSeenProposalFrame: 456,
+	}}
+	payloadData, err := payload.Serialize()
+	require.NoError(err)
+
+	builder := MutableEventPayload{}
+	builder.SetVersion(3)
+	builder.SetPayload(payload)
+	event := builder.Build()
+
+	data, err := rlp.EncodeToBytes(&event)
+	require.NoError(err)
+
+	var restored EventPayload
+	err = rlp.DecodeBytes(data, &restored)
+	require.NoError(err)
+
+	// Corrupt the payload data in the serialized event.
+	data = bytes.Replace(data, payloadData, make([]byte, len(payloadData)), 1)
+	err = rlp.DecodeBytes(data, &restored)
+	require.ErrorContains(err, "invalid wire-format")
+}
+
+func makeAllTransactionTypes() []*types.Transaction {
+	chainId := big.NewInt(1)
+
+	return []*types.Transaction{
+		types.NewTx(&types.LegacyTx{
+			Nonce:    1,
+			GasPrice: big.NewInt(1),
+			Gas:      1,
+			To:       nil,
+			Value:    big.NewInt(1),
+			Data:     []byte{1},
+			V:        big.NewInt(1),
+			R:        big.NewInt(123),
+			S:        big.NewInt(123),
+		}),
+		types.NewTx(&types.AccessListTx{
+			ChainID:  chainId,
+			Nonce:    1,
+			GasPrice: big.NewInt(1),
+			Gas:      1,
+			To:       nil,
+			Value:    big.NewInt(1),
+			Data:     []byte{1},
+			AccessList: types.AccessList{
+				types.AccessTuple{
+					Address: common.HexToAddress("0x1"),
+					StorageKeys: []common.Hash{
+						common.HexToHash("0x1"),
+					},
+				},
+			},
+			V: big.NewInt(1),
+			R: big.NewInt(123),
+			S: big.NewInt(123),
+		}),
+		types.NewTx(&types.DynamicFeeTx{
+			ChainID:   chainId,
+			Nonce:     1,
+			Gas:       1,
+			GasFeeCap: big.NewInt(1),
+			GasTipCap: big.NewInt(1),
+			To:        nil,
+			Value:     big.NewInt(1),
+			Data:      []byte{1},
+			AccessList: types.AccessList{
+				types.AccessTuple{
+					Address: common.HexToAddress("0x1"),
+					StorageKeys: []common.Hash{
+						common.HexToHash("0x1"),
+					},
+				},
+			},
+
+			V: big.NewInt(1),
+			R: big.NewInt(123),
+			S: big.NewInt(123),
+		}),
+		types.NewTx(&types.BlobTx{
+			ChainID:   uint256.MustFromBig(chainId),
+			Nonce:     1,
+			Gas:       1,
+			GasFeeCap: uint256.NewInt(1),
+			GasTipCap: uint256.NewInt(1),
+			To:        common.HexToAddress("0x1"),
+			Value:     uint256.NewInt(1),
+			Data:      []byte{1},
+			AccessList: types.AccessList{
+				types.AccessTuple{
+					Address: common.HexToAddress("0x1"),
+					StorageKeys: []common.Hash{
+						common.HexToHash("0x1"),
+					},
+				},
+			},
+			BlobFeeCap: uint256.NewInt(1),
+			BlobHashes: []common.Hash{
+				common.HexToHash("0x1"),
+			},
+			V: uint256.NewInt(1),
+			R: uint256.NewInt(123),
+			S: uint256.NewInt(123),
+		}),
+		types.NewTx(&types.SetCodeTx{
+			ChainID:   uint256.MustFromBig(chainId),
+			Nonce:     1,
+			Gas:       1,
+			GasFeeCap: uint256.NewInt(1),
+			GasTipCap: uint256.NewInt(1),
+			To:        common.HexToAddress("0x1"),
+			Value:     uint256.NewInt(1),
+			Data:      []byte{1},
+			AccessList: types.AccessList{
+				types.AccessTuple{
+					Address: common.HexToAddress("0x1"),
+					StorageKeys: []common.Hash{
+						common.HexToHash("0x1"),
+					},
+				},
+			},
+			AuthList: []types.SetCodeAuthorization{
+				{
+					ChainID: *uint256.MustFromBig(chainId),
+					Address: common.HexToAddress("0x1"),
+					Nonce:   1,
+					V:       1,
+					R:       *uint256.NewInt(123),
+					S:       *uint256.NewInt(123),
+				},
+			},
+		}),
+	}
+}
+
 func BenchmarkEventPayload_EncodeRLP_empty(b *testing.B) {
-	e := emptyEvent(0)
+	for version := range MaxSerializationVersion + 1 {
+		b.Run(fmt.Sprintf("version%d", version), func(b *testing.B) {
+			e := emptyEvent(0)
+			b.ResetTimer()
 
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		buf, err := rlp.EncodeToBytes(&e)
-		if err != nil {
-			b.Fatal(err)
-		}
-		b.ReportMetric(float64(len(buf)), "size")
+			for range b.N {
+				buf, err := rlp.EncodeToBytes(&e)
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.ReportMetric(float64(len(buf)), "size")
+			}
+		})
 	}
 }
 
@@ -294,7 +579,8 @@ func FakeEvent(version uint8, txsNum, mpsNum, bvsNum int, ersNum bool) *EventPay
 		for i := 0; i < len(h); i++ {
 			h[i] = byte(r.Uint32())
 		}
-		if i%3 == 0 {
+		switch i % 3 {
+		case 0:
 			tx := types.NewTx(&types.LegacyTx{
 				Nonce:    r.Uint64(),
 				GasPrice: randBig(r),
@@ -307,7 +593,7 @@ func FakeEvent(version uint8, txsNum, mpsNum, bvsNum int, ersNum bool) *EventPay
 				S:        h.Big(),
 			})
 			txs = append(txs, tx)
-		} else if i%3 == 1 {
+		case 1:
 			tx := types.NewTx(&types.AccessListTx{
 				ChainID:    randBig(r),
 				Nonce:      r.Uint64(),
@@ -322,7 +608,7 @@ func FakeEvent(version uint8, txsNum, mpsNum, bvsNum int, ersNum bool) *EventPay
 				S:          h.Big(),
 			})
 			txs = append(txs, tx)
-		} else {
+		default: // case 2:
 			tx := types.NewTx(&types.DynamicFeeTx{
 				ChainID:    randBig(r),
 				Nonce:      r.Uint64(),
@@ -348,7 +634,7 @@ func FakeEvent(version uint8, txsNum, mpsNum, bvsNum int, ersNum bool) *EventPay
 			// MPs are serialized with RLP, so no need to test extensively
 			mps = append(mps, MisbehaviourProof{
 				EventsDoublesign: &EventsDoublesign{
-					Pair: [2]SignedEventLocator{SignedEventLocator{}, SignedEventLocator{}},
+					Pair: [2]SignedEventLocator{{}, {}},
 				},
 				BlockVoteDoublesign: nil,
 				WrongBlockVote:      nil,
@@ -376,6 +662,22 @@ func FakeEvent(version uint8, txsNum, mpsNum, bvsNum int, ersNum bool) *EventPay
 		random.SetEpochVote(ers)
 	}
 
+	if version == 3 {
+		random.SetTxs(nil)
+		random.SetPayload(Payload{
+			ProposalSyncState: ProposalSyncState{
+				LastSeenProposalTurn:  Turn(rand.IntN(100)),
+				LastSeenProposalFrame: idx.Frame(rand.IntN(100)),
+			},
+			Proposal: &Proposal{
+				Number:       idx.Block(rand.IntN(10_000_000)),
+				ParentHash:   common.Hash(randHash(r)),
+				RandaoReveal: randao.RandaoReveal(randBytes(r, 64)),
+				Transactions: txs,
+			},
+		})
+	}
+
 	random.SetPayloadHash(CalcPayloadHash(random))
 
 	parent := MutableEventPayload{}
@@ -385,4 +687,30 @@ func FakeEvent(version uint8, txsNum, mpsNum, bvsNum int, ersNum bool) *EventPay
 	random.SetParents(hash.Events{parent.Build().ID()})
 
 	return random.Build()
+}
+
+func FuzzEventDeserialization(f *testing.F) {
+	examples := []EventPayload{
+		emptyEvent(0),
+		emptyEvent(1),
+		emptyEvent(2),
+		emptyEvent(3),
+		*FakeEvent(1, 12, 1, 1, true),
+		*FakeEvent(2, 12, 0, 0, false),
+		*FakeEvent(3, 12, 0, 0, false),
+	}
+
+	for _, example := range examples {
+		data, err := rlp.EncodeToBytes(&example)
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(data)
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		// Parsing errors are expected and OK. What we want to test for is
+		// whether the decoder can handle the data without panicking.
+		var event EventPayload
+		_ = rlp.DecodeBytes(data, &event)
+	})
 }

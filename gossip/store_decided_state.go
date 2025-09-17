@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package gossip
 
 import (
@@ -7,8 +23,9 @@ import (
 	ethparams "github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 
-	"github.com/Fantom-foundation/go-opera/inter/iblockproc"
-	"github.com/Fantom-foundation/go-opera/opera"
+	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/inter/iblockproc"
+	"github.com/0xsoniclabs/sonic/opera"
 )
 
 const sKey = "s"
@@ -18,6 +35,7 @@ type BlockEpochState struct {
 	EpochState *iblockproc.EpochState
 }
 
+// SetHistoryBlockEpochState stores the block and epoch state in the history table.
 // TODO propose to pass bs, es arguments by pointer
 func (s *Store) SetHistoryBlockEpochState(epoch idx.Epoch, bs iblockproc.BlockState, es iblockproc.EpochState) {
 	bs, es = bs.Copy(), es.Copy()
@@ -150,14 +168,23 @@ func (s *Store) GetLatestBlockIndex() idx.Block {
 	return s.GetBlockState().LastBlock.Idx
 }
 
+// GetLatestBlock retrieves the last completed block.
+func (s *Store) GetLatestBlock() *inter.Block {
+	return s.GetBlock(s.GetLatestBlockIndex())
+}
+
 // GetRules retrieves current network rules
 func (s *Store) GetRules() opera.Rules {
 	return s.GetEpochState().Rules
 }
 
 // GetEvmChainConfig retrieves current EVM chain config
-func (s *Store) GetEvmChainConfig() *ethparams.ChainConfig {
-	return s.GetRules().EvmChainConfig(s.GetUpgradeHeights())
+func (s *Store) GetEvmChainConfig(blockHeight idx.Block) *ethparams.ChainConfig {
+	return opera.CreateTransientEvmChainConfig(
+		s.GetRules().NetworkID,
+		s.GetUpgradeHeights(),
+		blockHeight,
+	)
 }
 
 // GetEpochRules retrieves current network rules and epoch atomically

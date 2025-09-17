@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package dagstreamleecher
 
 import (
@@ -11,7 +27,7 @@ import (
 	"github.com/Fantom-foundation/lachesis-base/inter/dag"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 
-	"github.com/Fantom-foundation/go-opera/gossip/protocols/dag/dagstream"
+	"github.com/0xsoniclabs/sonic/gossip/protocols/dag/dagstream"
 )
 
 // Leecher is responsible for requesting events based on lexicographic event streams
@@ -148,10 +164,11 @@ func (d *Leecher) startSession(candidates []string) {
 		}
 	}
 
+	// We only fetch IDs since fetching IDs and events leads to message decoding
+	// issues causing the peer connection the request was send to to be closed.
+	// By requesting IDs only, this issue is avoided. The payloads of events are
+	// then requested independently using the non-streaming P2P protocol.
 	typ := dagstream.RequestIDs
-	if d.callback.PeerEpoch(peer) > d.epoch && d.emptyState && d.session.try == 0 {
-		typ = dagstream.RequestEvents
-	}
 
 	session := dagstream.Session{
 		ID:    getSessionID(d.epoch, d.session.try),

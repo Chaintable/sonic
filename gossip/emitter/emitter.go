@@ -1,3 +1,19 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package emitter
 
 import (
@@ -11,24 +27,21 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Fantom-foundation/go-opera/utils"
-	"github.com/Fantom-foundation/go-opera/utils/txtime"
+	"github.com/0xsoniclabs/sonic/utils"
+	"github.com/0xsoniclabs/sonic/utils/txtime"
 	"github.com/Fantom-foundation/lachesis-base/emitter/ancestor"
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/Fantom-foundation/lachesis-base/inter/pos"
-	"github.com/Fantom-foundation/lachesis-base/utils/piecefunc"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/metrics"
 
-	"github.com/Fantom-foundation/go-opera/gossip/emitter/originatedtxs"
-	"github.com/Fantom-foundation/go-opera/gossip/gasprice/gaspricelimits"
-	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/Fantom-foundation/go-opera/logger"
-	"github.com/Fantom-foundation/go-opera/tracing"
-	"github.com/Fantom-foundation/go-opera/utils/errlock"
-	"github.com/Fantom-foundation/go-opera/utils/rate"
+	"github.com/0xsoniclabs/sonic/gossip/emitter/originatedtxs"
+	"github.com/0xsoniclabs/sonic/gossip/gasprice/gaspricelimits"
+	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/logger"
+	"github.com/0xsoniclabs/sonic/utils/errlock"
 )
 
 const (
@@ -36,11 +49,23 @@ const (
 	PayloadIndexerSize    = 5000
 )
 
+const (
+	// maxTotalTransactionsSizeInEventInBytes is the maximum size of all
+	// transactions in an event. There is a limit of ~10MB per event to ensure
+	// that it can be encoded and transferred over the network.
+	//
+	// This constant is local to the emitter and does not affect consensus. It
+	// may be altered without the need of a hard fork if need to improve the
+	// performance of the block formation process.
+	maxTotalTransactionsSizeInEventInBytes = 8 * 1024 * 1024 // 8 MiB
+)
+
 var (
 	emittedEventsCounter        = metrics.GetOrRegisterCounter("emitter/events", nil)                    // amount of emitted events
 	emittedEventsTxsCounter     = metrics.GetOrRegisterCounter("emitter/txs", nil)                       // amount of txs in emitted events
 	emittedGasCounter           = metrics.GetOrRegisterCounter("emitter/gas", nil)                       // consumed validator gas
 	txsSkippedNoValidatorGas    = metrics.GetOrRegisterCounter("emitter/skipped/novalidatorgas", nil)    // validator does not have enough gas
+	txsSkippedSizeLimit         = metrics.GetOrRegisterCounter("emitter/skipped/sizelimit", nil)         // tx skipped because of event size limit
 	txsSkippedEpochRules        = metrics.GetOrRegisterCounter("emitter/skipped/epochrules", nil)        // tx skipped because of epoch rules (like insufficient gasPrice)
 	txsSkippedConflictingSender = metrics.GetOrRegisterCounter("emitter/skipped/conflictingsender", nil) // tx by given sender in some unconfirmed event
 	txsSkippedNotMyTurn         = metrics.GetOrRegisterCounter("emitter/skipped/notmyturn", nil)         // tx should be handled by other validator
@@ -51,6 +76,9 @@ var (
 	eventTimeToConfirmTimer = metrics.GetOrRegisterTimer("emitter/timetoconfirm", nil)
 	txTimeToEmitTimer       = metrics.GetOrRegisterTimer("emitter/timetoemit", nil)
 	txEndToEndTimer         = metrics.GetOrRegisterTimer("emitter/endtoendtime", nil)
+
+	proposalSchedulingTimer          = metrics.GetOrRegisterTimer("emitter/proposal/scheduling", nil)
+	proposalSchedulingTimeoutCounter = metrics.GetOrRegisterCounter("emitter/proposal/scheduling_timeout", nil)
 )
 
 type Emitter struct {
@@ -60,16 +88,15 @@ type Emitter struct {
 
 	syncStatus syncStatus
 
-	prevIdleTime       time.Time
-	prevEmittedAtTime  time.Time
+	prevEmittedAtTime  atomic.Pointer[time.Time]
 	prevEmittedAtBlock idx.Block
 	originatedTxs      *originatedtxs.Buffer
 	pendingGas         uint64
 
 	// note: track validators and epoch internally to avoid referring to
 	// validators of a future epoch inside OnEventConnected of last epoch event
-	validators *pos.Validators
-	epoch      idx.Epoch
+	validators atomic.Pointer[pos.Validators]
+	epoch      atomic.Uint32
 
 	// challenges is deadlines when each validator should emit an event
 	challenges map[idx.ValidatorID]time.Time
@@ -86,7 +113,8 @@ type Emitter struct {
 	payloadIndexer *ancestor.PayloadIndexer
 
 	intervals                EmitIntervals
-	globalConfirmingInterval time.Duration
+	globalConfirmingInterval atomic.Uint64
+	intervalsMinLock         sync.Mutex // lock for intervals.Min
 
 	done chan struct{}
 	wg   sync.WaitGroup
@@ -103,13 +131,15 @@ type Emitter struct {
 	emittedEventFile *os.File
 	emittedBvsFile   *os.File
 	emittedEvFile    *os.File
-	busyRate         *rate.Gauge
 
 	logger.Periodic
 
 	baseFeeSource BaseFeeSource
+	errorLock     *errlock.ErrorLock
 
 	lastTimeAnEventWasConfirmed atomic.Pointer[time.Time]
+
+	proposalTracker inter.ProposalTracker
 }
 
 type BaseFeeSource interface {
@@ -121,21 +151,23 @@ func NewEmitter(
 	config Config,
 	world World,
 	baseFeeSource BaseFeeSource,
+	errorLock *errlock.ErrorLock,
 ) *Emitter {
 	// Randomize event time to decrease chance of 2 parallel instances emitting event at the same time
 	// It increases the chance of detecting parallel instances
 	rand := rand.New(rand.NewPCG(uint64(os.Getpid()), uint64(time.Now().UnixNano())))
 	config.EmitIntervals = config.EmitIntervals.RandomizeEmitTime(rand)
-
-	return &Emitter{
-		config:                   config,
-		world:                    world,
-		originatedTxs:            originatedtxs.New(SenderCountBufferSize),
-		intervals:                config.EmitIntervals,
-		globalConfirmingInterval: config.EmitIntervals.Confirming,
-		Periodic:                 logger.Periodic{Instance: logger.New()},
-		baseFeeSource:            baseFeeSource,
+	res := &Emitter{
+		config:        config,
+		world:         world,
+		originatedTxs: originatedtxs.New(SenderCountBufferSize),
+		intervals:     config.EmitIntervals,
+		Periodic:      logger.Periodic{Instance: logger.New()},
+		baseFeeSource: baseFeeSource,
+		errorLock:     errorLock,
 	}
+	res.globalConfirmingInterval.Store(uint64(config.EmitIntervals.Confirming))
+	return res
 }
 
 // init emitter without starting events emission
@@ -155,7 +187,6 @@ func (em *Emitter) init() {
 	if len(em.config.PrevEpochVoteFile.Path) != 0 {
 		em.emittedEvFile = openPrevActionFile(em.config.PrevEpochVoteFile.Path, em.config.PrevEpochVoteFile.SyncMode)
 	}
-	em.busyRate = rate.NewGauge()
 }
 
 // Start starts event emission.
@@ -199,7 +230,6 @@ func (em *Emitter) Stop() {
 	close(em.done)
 	em.done = nil
 	em.wg.Wait()
-	em.busyRate.Stop()
 }
 
 func (em *Emitter) tick() {
@@ -212,18 +242,17 @@ func (em *Emitter) tick() {
 		// synced time ~= last time when it's true that "not synced yet"
 		em.syncStatus.p2pSynced = time.Now()
 	}
-	if em.idle() {
-		em.busyRate.Mark(0)
-	} else {
-		em.busyRate.Mark(1)
-	}
 	if em.world.IsBusy() {
 		return
 	}
 
 	em.recheckChallenges()
-	em.recheckIdleTime()
-	if time.Since(em.prevEmittedAtTime) >= em.intervals.Min {
+
+	em.intervalsMinLock.Lock()
+	min := em.intervals.Min
+	em.intervalsMinLock.Unlock()
+
+	if em.timeSinceLastEmit() >= min {
 		_, err := em.EmitEvent()
 		if err != nil {
 			em.Log.Error("Event emitting error", "err", err)
@@ -270,7 +299,7 @@ func (em *Emitter) getSortedTxs(baseFee *big.Int) *transactionsByPriceAndNonce {
 		txs[from] = lazyTxs
 	}
 
-	sortedTxs := newTransactionsByPriceAndNonce(em.world.TxSigner, txs, baseFee)
+	sortedTxs := newTransactionsByPriceAndNonce(em.world.TransactionSigner, txs, baseFee)
 	em.cache.sortedTxs = sortedTxs
 	em.cache.poolCount = poolCount
 	em.cache.poolBlock = em.world.GetLatestBlockIndex()
@@ -279,8 +308,13 @@ func (em *Emitter) getSortedTxs(baseFee *big.Int) *transactionsByPriceAndNonce {
 }
 
 func (em *Emitter) EmitEvent() (*inter.EventPayload, error) {
-	if em.config.Validator.ID == 0 {
-		// short circuit if not a validator
+	// Check whether the node is a validator
+	if !em.isValidator() {
+		return nil, nil
+	}
+
+	// Check if it's time to emit.
+	if !em.isAllowedToEmit() {
 		return nil, nil
 	}
 
@@ -313,42 +347,35 @@ func (em *Emitter) EmitEvent() (*inter.EventPayload, error) {
 	em.world.Broadcast(e)
 
 	// metrics
-	emittedEventsTxsCounter.Inc(int64(e.Txs().Len()))
+	emittedEventsTxsCounter.Inc(int64(e.Transactions().Len()))
 	emittedGasCounter.Inc(int64(e.GasPowerUsed()))
 	emittedEventsCounter.Inc(1)
 
-	em.prevEmittedAtTime = time.Now() // record time after connecting, to add the event processing time
+	now := time.Now() // record time after connecting, to add the event processing time
+	em.prevEmittedAtTime.Store(&now)
 	em.prevEmittedAtBlock = em.world.GetLatestBlockIndex()
-
-	// metrics
-	if tracing.Enabled() {
-		for _, t := range e.Txs() {
-			span := tracing.CheckTx(t.Hash(), "Emitter.EmitEvent()")
-			defer span.Finish()
-		}
-	}
 
 	return e, nil
 }
 
 func (em *Emitter) loadPrevEmitTime() time.Time {
-	prevEventID := em.world.GetLastEvent(em.epoch, em.config.Validator.ID)
+	var prevEmittedAtTime time.Time
+	if time := em.prevEmittedAtTime.Load(); time != nil {
+		prevEmittedAtTime = *time
+	}
+	prevEventID := em.world.GetLastEvent(idx.Epoch(em.epoch.Load()), em.config.Validator.ID)
 	if prevEventID == nil {
-		return em.prevEmittedAtTime
+		return prevEmittedAtTime
 	}
 	prevEvent := em.world.GetEvent(*prevEventID)
 	if prevEvent == nil {
-		return em.prevEmittedAtTime
+		return prevEmittedAtTime
 	}
 	return prevEvent.CreationTime().Time()
 }
 
 // createEvent is not safe for concurrent use.
 func (em *Emitter) createEvent(sortedTxs *transactionsByPriceAndNonce) (*inter.EventPayload, error) {
-	if !em.isValidator() {
-		return nil, nil
-	}
-
 	if synced := em.logSyncStatus(em.isSyncedToEmit()); !synced {
 		// I'm reindexing my old events, so don't create events until connect all the existing self-events
 		return nil, nil
@@ -362,14 +389,16 @@ func (em *Emitter) createEvent(sortedTxs *transactionsByPriceAndNonce) (*inter.E
 	)
 
 	// Find parents
-	selfParent, parents, ok := em.chooseParents(em.epoch, em.config.Validator.ID)
+	selfParent, parents, ok := em.chooseParents(idx.Epoch(em.epoch.Load()), em.config.Validator.ID)
 	if !ok {
 		return nil, nil
 	}
 	prevEmitted := em.readLastEmittedEventID()
-	if prevEmitted != nil && prevEmitted.Epoch() >= em.epoch {
+	if prevEmitted != nil && prevEmitted.Epoch() >= idx.Epoch(em.epoch.Load()) {
 		if selfParent == nil || *selfParent != *prevEmitted {
-			errlock.Permanent(errors.New("Local database does not contain last emitted event - sync the node before enabling validation to avoid doublesign"))
+			// This is a user-facing error, so we want to provide a clear message.
+			//nolint:staticcheck // ST1005: allow capitalized error message and punctuation
+			em.errorLock.Permanent(errors.New("Local database does not contain last emitted event - sync the node before enabling validation to avoid double sign."))
 		}
 	}
 
@@ -383,7 +412,7 @@ func (em *Emitter) createEvent(sortedTxs *transactionsByPriceAndNonce) (*inter.E
 		parentHeaders[i] = parent
 		if parentHeaders[i].Creator() == em.config.Validator.ID && i != 0 {
 			// there are 2 heads from me, i.e. due to a fork, chooseParents could have found multiple self-parents
-			em.Periodic.Error(5*time.Second, "I've created a fork, events emitting isn't allowed", "creator", em.config.Validator.ID)
+			em.Error(5*time.Second, "I've created a fork, events emitting isn't allowed", "creator", em.config.Validator.ID)
 			return nil, nil
 		}
 		maxLamport = idx.MaxLamport(maxLamport, parent.Lamport())
@@ -399,7 +428,9 @@ func (em *Emitter) createEvent(sortedTxs *transactionsByPriceAndNonce) (*inter.E
 	}
 
 	version := uint8(0)
-	if em.world.GetRules().Upgrades.Sonic {
+	if em.world.GetRules().Upgrades.SingleProposerBlockFormation {
+		version = 3
+	} else if em.world.GetRules().Upgrades.Sonic {
 		version = 2
 	} else if em.world.GetRules().Upgrades.Llr {
 		version = 1
@@ -407,7 +438,7 @@ func (em *Emitter) createEvent(sortedTxs *transactionsByPriceAndNonce) (*inter.E
 
 	mutEvent := &inter.MutableEventPayload{}
 	mutEvent.SetVersion(version)
-	mutEvent.SetEpoch(em.epoch)
+	mutEvent.SetEpoch(idx.Epoch(em.epoch.Load()))
 	mutEvent.SetSeq(selfParentSeq + 1)
 	mutEvent.SetCreator(em.config.Validator.ID)
 
@@ -424,59 +455,37 @@ func (em *Emitter) createEvent(sortedTxs *transactionsByPriceAndNonce) (*inter.E
 	}
 
 	// set consensus fields
-	var metric ancestor.Metric
-	err := em.world.Build(mutEvent, func() {
-		// calculate event metric when it is indexed by the vector clock
-		if em.fcIndexer != nil {
-			pastMe := em.fcIndexer.ValidatorsPastMe()
-			metric = (ancestor.Metric(pastMe) * piecefunc.DecimalUnit) / ancestor.Metric(em.validators.TotalWeight())
-			if pastMe < em.validators.Quorum() {
-				metric /= 15
-			}
-			if metric < 0.03*piecefunc.DecimalUnit {
-				metric = 0.03 * piecefunc.DecimalUnit
-			}
-			metric = overheadAdjustedEventMetricF(em.validators.Len(), uint64(em.busyRate.Rate1()*piecefunc.DecimalUnit), metric)
-			metric = kickStartMetric(metric, mutEvent.Seq())
-		} else if em.quorumIndexer != nil {
-			metric = eventMetric(em.quorumIndexer.GetMetricOf(hash.Events{mutEvent.ID()}), mutEvent.Seq())
-			metric = overheadAdjustedEventMetricF(em.validators.Len(), uint64(em.busyRate.Rate1()*piecefunc.DecimalUnit), metric)
-		}
-	})
+	err := em.world.Build(mutEvent, nil)
 	if err != nil {
 		if err == ErrNotEnoughGasPower {
-			em.Periodic.Warn(time.Second, "Not enough gas power to emit event. Too small stake?",
-				"stake%", 100*float64(em.validators.Get(em.config.Validator.ID))/float64(em.validators.TotalWeight()))
+			validators := em.validators.Load()
+			em.Warn(time.Second, "Not enough gas power to emit event. Too small stake?",
+				"stake%", 100*float64(validators.Get(em.config.Validator.ID))/float64(validators.TotalWeight()))
 		} else {
 			em.Log.Warn("Dropped event while emitting", "err", err)
 		}
 		return nil, nil
 	}
 
-	// Pre-check if event should be emitted
-	// It is checked in advance to avoid adding transactions just to immediately drop the event later
-	if !em.isAllowedToEmit(mutEvent, true, metric, selfParentHeader) {
-		return nil, nil
-	}
-
-	// Add txs
-	em.addTxs(mutEvent, sortedTxs)
-
-	// Check if event should be emitted
-	// Check only if no txs were added, since check in a case with added txs was performed above
-	if mutEvent.Txs().Len() == 0 {
-		if !em.isAllowedToEmit(mutEvent, mutEvent.Txs().Len() != 0, metric, selfParentHeader) {
-			return nil, nil
+	if version == 3 {
+		// add proposal sync state and an optional proposal
+		payload, err := em.createPayload(mutEvent, sortedTxs)
+		if err != nil {
+			em.Log.Error("Failed to create payload", "err", err)
+			return nil, err
 		}
+		mutEvent.SetPayload(payload)
+	} else {
+		// Add txs
+		em.addTxs(mutEvent, sortedTxs)
+		// calc Payload hash
+		mutEvent.SetPayloadHash(inter.CalcPayloadHash(mutEvent))
 	}
-
-	// calc Payload hash
-	mutEvent.SetPayloadHash(inter.CalcPayloadHash(mutEvent))
 
 	// sign
-	bSig, err := em.world.Signer.Sign(em.config.Validator.PubKey, mutEvent.HashToSign().Bytes())
+	bSig, err := em.world.EventsSigner.Sign(common.Hash(mutEvent.HashToSign()))
 	if err != nil {
-		em.Periodic.Error(time.Second, "Failed to sign event", "err", err)
+		em.Error(time.Second, "Failed to sign event", "err", err)
 		return nil, err
 	}
 	var sig inter.Signature
@@ -488,14 +497,14 @@ func (em *Emitter) createEvent(sortedTxs *transactionsByPriceAndNonce) (*inter.E
 
 	// check
 	if err := em.world.Check(event, parentHeaders); err != nil {
-		em.Periodic.Error(time.Second, "Emitted incorrect event", "err", err)
+		em.Error(time.Second, "Emitted incorrect event", "err", err)
 		return nil, err
 	}
 
 	// set mutEvent name for debug
 	em.nameEventForDebug(event)
 
-	for _, tx := range event.Txs() {
+	for _, tx := range event.Transactions() {
 		txTime := txtime.Get(tx.Hash()) // time when was the tx seen first time
 		if !txTime.Equal(time.Time{}) {
 			txTimeToEmitTimer.Update(time.Since(txTime))
@@ -510,7 +519,7 @@ func (em *Emitter) idle() bool {
 }
 
 func (em *Emitter) isValidator() bool {
-	return em.config.Validator.ID != 0 && em.validators.Exists(em.config.Validator.ID)
+	return em.config.Validator.ID != 0 && em.validators.Load().Exists(em.config.Validator.ID)
 }
 
 func (em *Emitter) nameEventForDebug(e *inter.EventPayload) {

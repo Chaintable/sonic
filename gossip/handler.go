@@ -1,8 +1,26 @@
+// Copyright 2025 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
 package gossip
 
 import (
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"math"
 	"math/rand/v2"
 	"strings"
@@ -12,18 +30,19 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 
-	"github.com/Fantom-foundation/go-opera/eventcheck"
-	"github.com/Fantom-foundation/go-opera/eventcheck/epochcheck"
-	"github.com/Fantom-foundation/go-opera/eventcheck/heavycheck"
-	"github.com/Fantom-foundation/go-opera/eventcheck/parentlesscheck"
-	"github.com/Fantom-foundation/go-opera/evmcore"
-	"github.com/Fantom-foundation/go-opera/gossip/protocols/dag/dagstream"
-	"github.com/Fantom-foundation/go-opera/gossip/protocols/dag/dagstream/dagstreamleecher"
-	"github.com/Fantom-foundation/go-opera/gossip/protocols/dag/dagstream/dagstreamseeder"
-	"github.com/Fantom-foundation/go-opera/gossip/topology"
-	"github.com/Fantom-foundation/go-opera/inter"
-	"github.com/Fantom-foundation/go-opera/logger"
-	"github.com/Fantom-foundation/go-opera/utils/txtime"
+	"github.com/0xsoniclabs/sonic/eventcheck"
+	"github.com/0xsoniclabs/sonic/eventcheck/epochcheck"
+	"github.com/0xsoniclabs/sonic/eventcheck/heavycheck"
+	"github.com/0xsoniclabs/sonic/eventcheck/parentlesscheck"
+	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/gossip/protocols/dag/dagstream"
+	"github.com/0xsoniclabs/sonic/gossip/protocols/dag/dagstream/dagstreamleecher"
+	"github.com/0xsoniclabs/sonic/gossip/protocols/dag/dagstream/dagstreamseeder"
+	"github.com/0xsoniclabs/sonic/gossip/topology"
+	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/logger"
+	"github.com/0xsoniclabs/sonic/utils/caution"
+	"github.com/0xsoniclabs/sonic/utils/txtime"
 	"github.com/Fantom-foundation/lachesis-base/gossip/dagprocessor"
 	"github.com/Fantom-foundation/lachesis-base/gossip/itemsfetcher"
 	"github.com/Fantom-foundation/lachesis-base/hash"
@@ -156,8 +175,8 @@ type handler struct {
 	logger.Instance
 }
 
-// newHandler returns a new Fantom sub protocol manager. The Fantom sub protocol manages peers capable
-// with the Fantom network.
+// newHandler returns a new Sonic sub protocol manager. The Sonic sub protocol manages peers capable
+// with the Sonic network.
 func newHandler(
 	c handlerConfig,
 ) (
@@ -263,22 +282,12 @@ func (h *handler) makeDagProcessor(checkers *eventcheck.Checkers) *dagprocessor.
 		return nil
 	}
 	bufferedCheck := func(_e dag.Event, _parents dag.Events) error {
-		e := _e.(inter.EventI)
+		e := _e.(inter.EventPayloadI)
 		parents := make(inter.EventIs, len(_parents))
 		for i := range _parents {
 			parents[i] = _parents[i].(inter.EventI)
 		}
-		var selfParent inter.EventI
-		if e.SelfParent() != nil {
-			selfParent = parents[0]
-		}
-		if err := checkers.Parentscheck.Validate(e, parents); err != nil {
-			return err
-		}
-		if err := checkers.Gaspowercheck.Validate(e, selfParent); err != nil {
-			return err
-		}
-		return nil
+		return validateEventPropertiesDependingOnParents(checkers, e, parents)
 	}
 	parentlessChecker := parentlesscheck.Checker{
 		HeavyCheck: &heavycheck.EventsOnly{Checker: checkers.Heavycheck},
@@ -332,6 +341,27 @@ func (h *handler) makeDagProcessor(checkers *eventcheck.Checkers) *dagprocessor.
 	return newProcessor
 }
 
+func validateEventPropertiesDependingOnParents(
+	checkers *eventcheck.Checkers,
+	event inter.EventPayloadI,
+	parents inter.EventIs,
+) error {
+	var selfParent inter.EventI
+	if event.SelfParent() != nil {
+		selfParent = parents[0]
+	}
+	if err := checkers.Parentscheck.Validate(event, parents); err != nil {
+		return err
+	}
+	if err := checkers.Gaspowercheck.Validate(event, selfParent); err != nil {
+		return err
+	}
+	if err := checkers.Proposalcheck.Validate(event); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (h *handler) isEventInterested(id hash.Event, epoch idx.Epoch) bool {
 	if id.Epoch() != epoch {
 		return false
@@ -360,7 +390,7 @@ func (h *handler) onlyInterestedEventsI(ids []interface{}) []interface{} {
 func (h *handler) removePeer(id string) {
 	peer := h.peers.Peer(id)
 	if peer != nil {
-		peer.Peer.Disconnect(p2p.DiscUselessPeer)
+		peer.Disconnect(p2p.DiscUselessPeer)
 	}
 }
 
@@ -423,7 +453,7 @@ func (h *handler) Start(maxPeers int) {
 }
 
 func (h *handler) Stop() {
-	log.Info("Stopping Fantom protocol")
+	log.Info("Stopping Sonic protocol")
 
 	h.dagLeecher.Stop()
 	h.dagSeeder.Stop()
@@ -461,7 +491,7 @@ func (h *handler) Stop() {
 	h.wg.Wait()
 	h.peerWG.Wait()
 
-	log.Info("Fantom protocol stopped")
+	log.Info("Sonic protocol stopped")
 }
 
 func (h *handler) myProgress() PeerProgress {
@@ -553,7 +583,11 @@ func (h *handler) handle(p *peer) error {
 	// Handle incoming messages until the connection is torn down
 	for {
 		if err := h.handleMsg(p); err != nil {
-			p.Log().Debug("Message handling failed", "err", err, "peer", p.ID(), "name", p.Name())
+			level := slog.LevelWarn
+			if errors.Is(err, io.EOF) {
+				level = slog.LevelDebug
+			}
+			p.Log().Log(level, "Message handling failed", "err", err, "peer", p.ID(), "name", p.Name())
 			return err
 		}
 	}
@@ -647,7 +681,7 @@ func (h *handler) handleEvents(peer *peer, events dag.Events, ordered bool) {
 	// Mark the hashes as present at the remote node
 	now := time.Now()
 	for _, e := range events {
-		for _, tx := range e.(inter.EventPayloadI).Txs() {
+		for _, tx := range e.(inter.EventPayloadI).Transactions() {
 			txtime.Saw(tx.Hash(), now)
 		}
 		peer.MarkEvent(e.ID())
@@ -682,7 +716,7 @@ func (h *handler) handleEvents(peer *peer, events dag.Events, ordered bool) {
 
 // handleMsg is invoked whenever an inbound message is received from a remote
 // peer. The remote connection is torn down upon returning any error.
-func (h *handler) handleMsg(p *peer) error {
+func (h *handler) handleMsg(p *peer) (err error) {
 	// Read the next message from the remote peer, and ensure it's fully consumed
 	msg, err := p.rw.ReadMsg()
 	if err != nil {
@@ -691,7 +725,8 @@ func (h *handler) handleMsg(p *peer) error {
 	if msg.Size > protocolMaxMsgSize {
 		return errResp(ErrMsgTooLarge, "%v > %v", msg.Size, protocolMaxMsgSize)
 	}
-	defer msg.Discard()
+	defer caution.ExecuteAndReportError(&err, msg.Discard, "failed to discard message")
+
 	// Acquire semaphore for serialized messages
 	eventsSizeEst := dag.Metric{
 		Num:  1,
@@ -704,19 +739,19 @@ func (h *handler) handleMsg(p *peer) error {
 	defer h.msgSemaphore.Release(eventsSizeEst)
 
 	// Handle the message depending on its contents
-	switch {
-	case msg.Code == HandshakeMsg:
+	switch msg.Code {
+	case HandshakeMsg:
 		// Status messages should never arrive after the handshake
 		return errResp(ErrExtraStatusMsg, "uncontrolled status message")
 
-	case msg.Code == ProgressMsg:
+	case ProgressMsg:
 		var progress PeerProgress
 		if err := msg.Decode(&progress); err != nil {
 			return errResp(ErrDecode, "%v: %v", msg, err)
 		}
 		p.SetProgress(progress)
 
-	case msg.Code == EvmTxsMsg:
+	case EvmTxsMsg:
 		// Transactions arrived, make sure we have a valid and fresh graph to handle them
 		if !h.syncStatus.AcceptTxs() {
 			break
@@ -736,7 +771,7 @@ func (h *handler) handleMsg(p *peer) error {
 		_ = h.txFetcher.NotifyReceived(txids)
 		h.handleTxs(p, txs)
 
-	case msg.Code == NewEvmTxHashesMsg:
+	case NewEvmTxHashesMsg:
 		// Transactions arrived, make sure we have a valid and fresh graph to handle them
 		if !h.syncStatus.AcceptTxs() {
 			break
@@ -751,7 +786,7 @@ func (h *handler) handleMsg(p *peer) error {
 		}
 		h.handleTxHashes(p, txHashes)
 
-	case msg.Code == GetEvmTxsMsg:
+	case GetEvmTxsMsg:
 		var requests []common.Hash
 		if err := msg.Decode(&requests); err != nil {
 			return errResp(ErrDecode, "msg %v: %v", msg, err)
@@ -772,7 +807,7 @@ func (h *handler) handleMsg(p *peer) error {
 			p.EnqueueSendTransactions(batch, p.queue)
 		})
 
-	case msg.Code == EventsMsg:
+	case EventsMsg:
 		var events inter.EventPayloads
 		if err := msg.Decode(&events); err != nil {
 			return errResp(ErrDecode, "%v: %v", msg, err)
@@ -783,7 +818,7 @@ func (h *handler) handleMsg(p *peer) error {
 		_ = h.dagFetcher.NotifyReceived(eventIDsToInterfaces(events.IDs()))
 		h.handleEvents(p, events.Bases(), events.Len() > 1)
 
-	case msg.Code == NewEventIDsMsg:
+	case NewEventIDsMsg:
 		var announces hash.Events
 		if err := msg.Decode(&announces); err != nil {
 			return errResp(ErrDecode, "%v: %v", msg, err)
@@ -793,7 +828,7 @@ func (h *handler) handleMsg(p *peer) error {
 		}
 		h.handleEventHashes(p, announces)
 
-	case msg.Code == GetEventsMsg:
+	case GetEventsMsg:
 		var requests hash.Events
 		if err := msg.Decode(&requests); err != nil {
 			return errResp(ErrDecode, "%v: %v", msg, err)
@@ -821,7 +856,7 @@ func (h *handler) handleMsg(p *peer) error {
 			p.EnqueueSendEventsRLP(rawEvents, ids, p.queue)
 		}
 
-	case msg.Code == RequestEventsStream:
+	case RequestEventsStream:
 		var request dagstream.Request
 		if err := msg.Decode(&request); err != nil {
 			return errResp(ErrDecode, "%v: %v", msg, err)
@@ -845,7 +880,7 @@ func (h *handler) handleMsg(p *peer) error {
 			return peerErr
 		}
 
-	case msg.Code == EventsStreamResponse:
+	case EventsStreamResponse:
 		var chunk dagChunk
 		if err := msg.Decode(&chunk); err != nil {
 			return errResp(ErrDecode, "%v: %v", msg, err)
@@ -869,7 +904,7 @@ func (h *handler) handleMsg(p *peer) error {
 
 		_ = h.dagLeecher.NotifyChunkReceived(chunk.SessionID, last, chunk.Done)
 
-	case msg.Code == GetPeerInfosMsg:
+	case GetPeerInfosMsg:
 		infos := []peerInfo{}
 		for _, peer := range h.peers.List() {
 			if peer.Useless() {
@@ -890,7 +925,7 @@ func (h *handler) handleMsg(p *peer) error {
 			return err
 		}
 
-	case msg.Code == PeerInfosMsg:
+	case PeerInfosMsg:
 		var infos peerInfoMsg
 		if err := msg.Decode(&infos); err != nil {
 			return errResp(ErrDecode, "%v: %v", msg, err)
@@ -908,7 +943,7 @@ func (h *handler) handleMsg(p *peer) error {
 
 		h.connectionAdvisor.UpdatePeers(p.ID(), reportedPeers)
 
-	case msg.Code == GetEndPointMsg:
+	case GetEndPointMsg:
 		source := h.localEndPointSource
 		if source == nil {
 			return nil
@@ -921,7 +956,7 @@ func (h *handler) handleMsg(p *peer) error {
 			return err
 		}
 
-	case msg.Code == EndPointUpdateMsg:
+	case EndPointUpdateMsg:
 		var encoded string
 		if err := msg.Decode(&encoded); err != nil {
 			return errResp(ErrDecode, "%v: %v", msg, err)
@@ -1054,6 +1089,9 @@ func (h *handler) emittedBroadcastLoop() {
 	for {
 		select {
 		case emitted := <-h.emittedEventsCh:
+			// If this node starts emitting events, it is considered synced and
+			// can start accepting transactions.
+			h.syncStatus.MarkMaybeSynced()
 			h.BroadcastEvent(emitted, 0)
 		// Err() channel will be closed when unsubscribing.
 		case <-h.emittedEventsSub.Err():
@@ -1147,9 +1185,16 @@ func (h *handler) peerInfoCollectionLoop(stop <-chan struct{}) {
 			for _, peer := range peers {
 				// If we do not have the peer's end-point or it is too old, request it.
 				if info := peer.endPoint.Load(); info == nil || time.Since(info.timestamp) > h.config.Protocol.PeerEndPointUpdatePeriod {
-					peer.SendEndPointUpdateRequest()
+					if err := peer.SendEndPointUpdateRequest(); err != nil {
+						log.Warn("Failed to send end-point update request", "peer", peer.id, "err", err)
+						// If the end-point update request fails, do not send the peer info request.
+						continue
+					}
 				}
-				peer.SendPeerInfoRequest()
+
+				if err := peer.SendPeerInfoRequest(); err != nil {
+					log.Warn("Failed to send peer info request", "peer", peer.id, "err", err)
+				}
 			}
 
 			// Drop a redundant connection if there are too many connections.
