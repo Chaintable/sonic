@@ -28,7 +28,6 @@ require (
 	github.com/davecgh/go-spew v1.1.1
 	github.com/deckarep/golang-set v1.8.0
 	github.com/docker/docker v27.3.1+incompatible
-	github.com/dvyukov/go-fuzz v0.0.0-20240924070022-e577bee5275c
 	github.com/ethereum/go-ethereum v1.16.3
 	github.com/gballet/go-libpcsclite v0.0.0-20191108122812-4678299bea08
 	github.com/hashicorp/golang-lru v1.0.2
@@ -165,14 +164,7 @@ require (
 	pgregory.net/rand v1.0.2 // indirect
 )
 
-replace github.com/ethereum/go-ethereum => github.com/Chaintable/go-ethereum-sonic v0.0.0-20250916182536-4d6b1cf42222
-
-//=======
-//replace github.com/ethereum/go-ethereum => github.com/0xsoniclabs/go-ethereum v0.0.0-20250627083633-bbe492095a30
-//>>>>>>> v2.1.0
+// replace github.com/ethereum/go-ethereum => github.com/0xsoniclabs/go-ethereum v0.0.0-20251030102704-59b7e05cbf3d
+replace github.com/ethereum/go-ethereum => github.com/Chaintable/go-ethereum-sonic v0.0.0-20251212040727-81455a71d998
 
 replace github.com/Fantom-foundation/lachesis-base => github.com/Fantom-foundation/lachesis-base-sonic v0.0.0-20250701061954-44075d09185c
-
-replace github.com/dvyukov/go-fuzz => github.com/guzenok/go-fuzz v0.0.0-20210201043429-a8e90a2a4f88
-
-replace github.com/chenzhuoyu/iasm v0.9.0 => github.com/chenzhuoyu/iasm v0.0.0-20241031125313-4cba78b3538b

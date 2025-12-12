@@ -20,7 +20,6 @@ import (
 	"bytes"
 	"cmp"
 	"fmt"
-	"math/big"
 	"slices"
 	"sort"
 	"sync"
@@ -30,7 +29,6 @@ import (
 	"github.com/0xsoniclabs/sonic/evmcore"
 	"github.com/0xsoniclabs/sonic/scc/cert"
 	scc_node "github.com/0xsoniclabs/sonic/scc/node"
-	"github.com/0xsoniclabs/sonic/utils/signers/gsignercache"
 
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/dag"
@@ -248,7 +246,7 @@ func consensusCallbackBeginBlockFn(
 						unorderedTxs = append(unorderedTxs, e.Transactions()...)
 					}
 
-					signer := gsignercache.Wrap(types.MakeSigner(chainCfg, new(big.Int).SetUint64(number), uint64(atroposTime)))
+					signer := types.LatestSignerForChainID(chainCfg.ChainID)
 					proposal.Transactions = scrambler.GetExecutionOrder(unorderedTxs, signer, es.Rules.Upgrades.Sonic)
 				}
 
@@ -342,11 +340,11 @@ func consensusCallbackBeginBlockFn(
 
 				// Execute pre-internal transactions
 				preInternalTxs := blockProc.PreTxTransactor.PopInternalTxs(blockCtx, bs, es, sealing, statedb)
-				preInternalReceipts := evmProcessor.Execute(preInternalTxs, maxBlockGas)
+				preInternalProcessedTxs := evmProcessor.Execute(preInternalTxs, maxBlockGas)
 				bs = txListener.Finalize()
-				for _, r := range preInternalReceipts {
-					if r.Status == 0 {
-						log.Warn("Pre-internal transaction reverted", "txid", r.TxHash.String())
+				for _, tx := range preInternalProcessedTxs {
+					if tx.Receipt == nil || tx.Receipt.Status == 0 {
+						log.Warn("Pre-internal transaction skipped or reverted", "txid", tx.Transaction.Hash().String())
 					}
 				}
 
@@ -379,37 +377,62 @@ func consensusCallbackBeginBlockFn(
 						WithGasLimit(maxBlockGas).
 						WithDuration(blockDuration)
 
-					for i := range preInternalTxs {
-						blockBuilder.AddTransaction(
-							preInternalTxs[i],
-							preInternalReceipts[i],
-						)
+					// With the transition from v2.0 to v2.1, the handling of
+					// block-gas-limit updates has changed. In v2.0, epoch
+					// sealing blocks used to already adapt the new gas limit,
+					// while in v2.1 the old gas limit is kept and only the
+					// first block after the sealing block is adapting the new
+					// gas limit. As the list of transactions for the sealing
+					// block is assembled by validators using the rules of the
+					// current epoch, using the ending epoch's gas limit is
+					// matching the assumptions made by the validators.
+					//
+					// However, in the past, there was one epoch-sealing block
+					// (8054923) in which the gas limit was adapted. To support
+					// this one-time exception, we add a special case for
+					// this block here to ensure backward compatibility.
+					if es.Rules.NetworkID == 146 && number == 8054923 {
+						blockBuilder.WithGasLimit(es.Rules.Blocks.MaxBlockGas)
+					}
+
+					for _, cur := range preInternalProcessedTxs {
+						if cur.Receipt != nil {
+							blockBuilder.AddTransaction(
+								cur.Transaction,
+								cur.Receipt,
+							)
+						}
 					}
 
 					// Execute post-internal transactions
 					internalTxs := blockProc.PostTxTransactor.PopInternalTxs(blockCtx, bs, es, sealing, statedb)
-					internalReceipts := evmProcessor.Execute(internalTxs, maxBlockGas)
-					for _, r := range internalReceipts {
-						if r.Status == 0 {
-							log.Warn("Internal transaction reverted", "txid", r.TxHash.String())
+					internalProcessedTxs := evmProcessor.Execute(internalTxs, maxBlockGas)
+					for _, tx := range internalProcessedTxs {
+						if tx.Receipt == nil || tx.Receipt.Status == 0 {
+							log.Warn("Internal transaction skipped or reverted", "txid", tx.Transaction.Hash().String())
 						}
 					}
 
-					for i := range internalTxs {
-						blockBuilder.AddTransaction(
-							internalTxs[i],
-							internalReceipts[i],
-						)
+					for _, cur := range internalProcessedTxs {
+						if cur.Receipt != nil {
+							blockBuilder.AddTransaction(
+								cur.Transaction,
+								cur.Receipt,
+							)
+						}
 					}
 
 					orderedTxs := proposal.Transactions
-					for i, receipt := range evmProcessor.Execute(orderedTxs, userTransactionGasLimit) {
-						if receipt != nil { // < nil if skipped
-							blockBuilder.AddTransaction(orderedTxs[i], receipt)
+					for _, processed := range evmProcessor.Execute(orderedTxs, userTransactionGasLimit) {
+						if processed.Receipt != nil { // < nil if skipped
+							blockBuilder.AddTransaction(
+								processed.Transaction,
+								processed.Receipt,
+							)
 						}
 					}
 
-					evmBlock, skippedTxs, allReceipts := evmProcessor.Finalize()
+					evmBlock, numSkippedTxs, allReceipts := evmProcessor.Finalize()
 
 					// Add results of the transaction processing to the block.
 					blockBuilder.
@@ -606,7 +629,7 @@ func consensusCallbackBeginBlockFn(
 						"gas_used", evmBlock.GasUsed,
 						"gas_rate", float64(evmBlock.GasUsed)/blockDuration.Seconds(),
 						"base_fee", evmBlock.BaseFee.String(),
-						"txs", fmt.Sprintf("%d/%d", len(evmBlock.Transactions), len(skippedTxs)),
+						"txs", fmt.Sprintf("%d/%d", len(evmBlock.Transactions), numSkippedTxs),
 						"age", utils.PrettyDuration(blockAge),
 						"t", utils.PrettyDuration(now.Sub(start)),
 						"epoch", evmBlock.Epoch,
@@ -614,7 +637,7 @@ func consensusCallbackBeginBlockFn(
 					blockAgeGauge.Update(int64(blockAge.Nanoseconds()))
 
 					processedTxsMeter.Mark(int64(len(evmBlock.Transactions)))
-					skippedTxsMeter.Mark(int64(len(skippedTxs)))
+					skippedTxsMeter.Mark(int64(numSkippedTxs))
 				}
 				if confirmedEvents.Len() != 0 {
 					atomic.StoreUint32(blockBusyFlag, 1)

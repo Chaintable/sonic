@@ -22,6 +22,8 @@ import (
 	"testing"
 
 	"github.com/0xsoniclabs/sonic/opera"
+	"github.com/0xsoniclabs/sonic/tests"
+	"github.com/0xsoniclabs/sonic/tests/block_header"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -30,6 +32,7 @@ import (
 )
 
 func TestSingleProposerProtocol_CanProcessTransactions(t *testing.T) {
+
 	upgrades := map[string]opera.Upgrades{
 		"Sonic":   opera.GetSonicUpgrades(),
 		"Allegro": opera.GetAllegroUpgrades(),
@@ -61,7 +64,7 @@ func testSingleProposerProtocol_CanProcessTransactions(
 	upgrades.SingleProposerBlockFormation = true
 
 	require := require.New(t)
-	net := StartIntegrationTestNet(t, IntegrationTestNetOptions{
+	net := tests.StartIntegrationTestNet(t, tests.IntegrationTestNetOptions{
 		Upgrades: &upgrades,
 		NumNodes: numNodes,
 	})
@@ -74,10 +77,10 @@ func testSingleProposerProtocol_CanProcessTransactions(
 
 	// Create NumTxsPerRound accounts and send them each 1e18 wei to allow each
 	// of them to send independent transactions in each round.
-	accounts := make([]*Account, NumTxsPerRound)
+	accounts := make([]*tests.Account, NumTxsPerRound)
 	addresses := make([]common.Address, NumTxsPerRound)
 	for i := range accounts {
-		accounts[i] = NewAccount()
+		accounts[i] = tests.NewAccount()
 		addresses[i] = accounts[i].Address()
 	}
 	_, err = net.EndowAccounts(addresses, big.NewInt(1e18))
@@ -128,7 +131,7 @@ func testSingleProposerProtocol_CanProcessTransactions(
 		// processing and the epoch change. Thus, the first epoch will run for
 		// EpochLength/2 rounds, and the rest for EpochLength rounds.
 		if round%EpochLength == EpochLength/2 {
-			require.NoError(net.AdvanceEpoch(1))
+			net.AdvanceEpoch(t, 1)
 		}
 	}
 
@@ -150,6 +153,7 @@ func TestSingleProposerProtocol_CanBeEnabledAndDisabled(t *testing.T) {
 
 	for name, upgrades := range upgrades {
 		t.Run(name, func(t *testing.T) {
+
 			for _, numNodes := range []int{1, 3} {
 				t.Run(fmt.Sprintf("numNodes=%d", numNodes), func(t *testing.T) {
 					testSingleProposerProtocol_CanBeEnabledAndDisabled(t, numNodes, upgrades)
@@ -168,7 +172,7 @@ func testSingleProposerProtocol_CanBeEnabledAndDisabled(
 
 	// The network is initially started using the distributed protocol.
 	mode.SingleProposerBlockFormation = false
-	net := StartIntegrationTestNet(t, IntegrationTestNetOptions{
+	net := tests.StartIntegrationTestNet(t, tests.IntegrationTestNetOptions{
 		NumNodes: numNodes,
 		Upgrades: &mode,
 	})
@@ -206,7 +210,7 @@ func testSingleProposerProtocol_CanBeEnabledAndDisabled(
 			rulesDiff := rulesType{
 				Upgrades: upgrades{SingleProposerBlockFormation: step.flagValue},
 			}
-			updateNetworkRules(t, net, rulesDiff)
+			tests.UpdateNetworkRules(t, net, rulesDiff)
 
 			// The rules only take effect after the epoch change. Make sure that
 			// until then, transactions can be processed.
@@ -217,7 +221,7 @@ func testSingleProposerProtocol_CanBeEnabledAndDisabled(
 			require.Equal(step.versionBefore, getUsedEventVersion(t, client))
 
 			// Advance the epoch by one, enabling the single-proposer protocol.
-			require.NoError(net.AdvanceEpoch(1))
+			net.AdvanceEpoch(t, 1)
 
 			// Check that transactions can still be processed after the epoch change.
 			for range 5 {
@@ -235,18 +239,13 @@ func testSingleProposerProtocol_CanBeEnabledAndDisabled(
 	require.NoError(err)
 
 	// Test parent/child relation properties.
-	testHeaders_BlockNumberEqualsPositionInChain(t, headers)
-	testHeaders_ParentHashCoversParentContent(t, headers)
-	testHeaders_EncodesDurationAndNanoTimeInExtraData(t, headers)
-	testHeaders_TimeProgressesMonotonically(t, headers)
-	testHeaders_BaseFeeEvolutionFollowsPricingRules(t, headers)
-	testHeaders_GasUsedIsBelowGasLimit(t, headers)
+	block_header.HeadersParentChildProperties(t, headers)
 }
 
 // getUsedEventVersion retrieves the current event version used by the network.
 func getUsedEventVersion(
 	t *testing.T,
-	client *PooledEhtClient,
+	client *tests.PooledEhtClient,
 ) int {
 	t.Helper()
 	require := require.New(t)

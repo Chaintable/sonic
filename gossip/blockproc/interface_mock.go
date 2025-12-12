@@ -391,10 +391,10 @@ func (m *MockEVMProcessor) EXPECT() *MockEVMProcessorMockRecorder {
 }
 
 // Execute mocks base method.
-func (m *MockEVMProcessor) Execute(txs types.Transactions, gasLimit uint64) types.Receipts {
+func (m *MockEVMProcessor) Execute(txs types.Transactions, gasLimit uint64) []evmcore.ProcessedTransaction {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Execute", txs, gasLimit)
-	ret0, _ := ret[0].(types.Receipts)
+	ret0, _ := ret[0].([]evmcore.ProcessedTransaction)
 	return ret0
 }
 
@@ -405,11 +405,11 @@ func (mr *MockEVMProcessorMockRecorder) Execute(txs, gasLimit any) *gomock.Call 
 }
 
 // Finalize mocks base method.
-func (m *MockEVMProcessor) Finalize() (*evmcore.EvmBlock, []uint32, types.Receipts) {
+func (m *MockEVMProcessor) Finalize() (*evmcore.EvmBlock, int, types.Receipts) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Finalize")
 	ret0, _ := ret[0].(*evmcore.EvmBlock)
-	ret1, _ := ret[1].([]uint32)
+	ret1, _ := ret[1].(int)
 	ret2, _ := ret[2].(types.Receipts)
 	return ret0, ret1, ret2
 }

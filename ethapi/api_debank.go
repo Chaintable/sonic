@@ -61,7 +61,7 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	if err != nil {
 		return nil, err
 	}
-	fullBlock, err := RPCMarshalBlock(block, receipts, true, true)
+	fullBlock, err := RPCMarshalBlock(block, receipts, true, true, api.b.ChainID())
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +174,7 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 		return nil, fmt.Errorf("failed to get EVM for tracing: %w", err)
 	}
 
-	//log.Info("trace DebankBlock info", "txs", len(txs), "block", block.NumberU64(), "hash", block.Hash.Hex(), "vmConfig", vmConfig)
+	// log.Info("trace DebankBlock info", "txs", len(txs), "block", block.NumberU64(), "hash", block.Hash.Hex(), "vmConfig", vmConfig)
 	for i, tx := range txs {
 		msg, err := evmcore.TxAsMessage(tx, signer, block.BaseFee)
 		if err != nil {
