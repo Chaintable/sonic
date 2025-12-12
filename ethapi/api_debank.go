@@ -146,6 +146,8 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	if err != nil {
 		return nil, fmt.Errorf("failed to get vm config: %w", err)
 	}
+	vmConfig.NoBaseFee = true
+
 	rpcTracer := ptracer.RPCTracer{}
 	vmConfig.Tracer = &tracing.Hooks{
 		OnTxStart: rpcTracer.OnTxStart,
@@ -172,6 +174,7 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 		return nil, fmt.Errorf("failed to get EVM for tracing: %w", err)
 	}
 
+	//log.Info("trace DebankBlock info", "txs", len(txs), "block", block.NumberU64(), "hash", block.Hash.Hex(), "vmConfig", vmConfig)
 	for i, tx := range txs {
 		msg, err := evmcore.TxAsMessage(tx, signer, block.BaseFee)
 		if err != nil {

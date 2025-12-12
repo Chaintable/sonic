@@ -21,7 +21,7 @@ go 1.24.0
 require (
 	github.com/0xsoniclabs/carmen/go v0.0.0-20250708101910-3666ec34654c
 	github.com/0xsoniclabs/tosca v0.0.0-20250708111444-f020a558b11e
-	github.com/Chaintable/pipeline v0.0.53-sonic-v1.14.8-debank-1.0.20250916192111-17971f7a8217
+	github.com/Chaintable/pipeline v0.0.53-sonic-v1.14.8-debank-1.0.20250918085438-798a72da2151
 	github.com/Fantom-foundation/lachesis-base v0.0.0-20240116072301-a75735c4ef00
 	github.com/cespare/cp v1.1.1
 	github.com/consensys/gnark-crypto v0.18.0
