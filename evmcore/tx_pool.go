@@ -35,12 +35,15 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/holiman/uint256"
 
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/subsidies"
+	"github.com/0xsoniclabs/sonic/inter/state"
+	"github.com/0xsoniclabs/sonic/opera"
 	"github.com/0xsoniclabs/sonic/utils"
-	"github.com/0xsoniclabs/sonic/utils/signers/gsignercache"
 	"github.com/0xsoniclabs/sonic/utils/txtime"
 )
+
+//go:generate mockgen -source=tx_pool.go -destination=tx_pool_mock.go -package=evmcore
 
 const (
 	// chainHeadChanSize is the size of channel listening to ChainHeadNotify.
@@ -95,6 +98,14 @@ var (
 	// ErrOutOfOrderTxFromDelegated is returned when the transaction with gapped
 	// nonce received from the accounts with delegation or pending delegation.
 	ErrOutOfOrderTxFromDelegated = errors.New("gapped-nonce tx from delegated accounts")
+
+	// ErrSponsorshipRejected is returned when a sponsored transaction request is
+	// not backed by a valid subsidy.
+	ErrSponsorshipRejected = errors.New("transaction sponsorship rejected")
+
+	// ErrSponsoredTransactionsDisabled is returned when validating a sponsorship
+	// request if gas subsidies are disabled in the current network rules.
+	ErrSponsoredTransactionsDisabled = errors.New("sponsored transactions are disabled")
 )
 
 var (
@@ -150,24 +161,28 @@ const (
 	TxStatusIncluded
 )
 
-type TxPoolStateDB interface {
-	GetNonce(addr common.Address) uint64
-	GetBalance(addr common.Address) *uint256.Int
-	GetCodeHash(addr common.Address) common.Hash
-	Release()
-}
-
 // StateReader provides the state of blockchain and current gas limit to do
 // some pre checks in tx pool and event subscribers.
 type StateReader interface {
 	CurrentBlock() *EvmBlock
 	GetBlock(hash common.Hash, number uint64) *EvmBlock
-	GetTxPoolStateDB() (TxPoolStateDB, error)
+	GetTxPoolStateDB() (state.StateDB, error)
 	GetCurrentBaseFee() *big.Int
 	MaxGasLimit() uint64
 	SubscribeNewBlock(ch chan<- ChainHeadNotify) notify.Subscription
 	Config() *params.ChainConfig
+	GetCurrentRules() opera.Rules
+	GetHeader(common.Hash, uint64) *EvmHeader
 }
+
+// subsidiesCheckerFactory is a factory method to create a subsidies checker instance.
+// This facilitates testing of the TxPool by using injected mock implementations.
+type subsidiesCheckerFactory func(
+	rules opera.Rules,
+	chain StateReader,
+	state state.StateDB,
+	signer types.Signer,
+) subsidiesChecker
 
 // TxPoolConfig are the configuration parameters of the transaction pool.
 type TxPoolConfig struct {
@@ -284,7 +299,7 @@ type TxPool struct {
 	eip7623  bool // Fork indicator whether we are using EIP-7623 floor gas validation.
 	eip7702  bool // Fork indicator whether we are using EIP-7702 type transactions.
 
-	currentState  TxPoolStateDB // Current state in the blockchain head
+	currentState  state.StateDB // Current state in the blockchain head
 	pendingNonces *txNoncer     // Pending state tracking virtual nonces
 	currentMaxGas uint64        // Current gas limit for transaction caps
 
@@ -308,6 +323,9 @@ type TxPool struct {
 
 	waitForIdleReorgLoopRequestCh  chan struct{} // requests to wait for reorg completion
 	waitForIdleReorgLoopResponseCh chan struct{} // responses to waitForReorgDoneRequestCh
+
+	subsidiesCheckerFactory subsidiesCheckerFactory // Factory to create a subsidies checker instance
+	subsidiesCheckerCache   *subsidiesCheckerCache  // Cache for subsidies check results
 }
 
 type txpoolResetRequest struct {
@@ -316,7 +334,19 @@ type txpoolResetRequest struct {
 
 // NewTxPool creates a new transaction pool to gather, sort and filter inbound
 // transactions from the network.
-func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, chain StateReader) *TxPool {
+func NewTxPool(
+	config TxPoolConfig,
+	chainconfig *params.ChainConfig,
+	chain StateReader) *TxPool {
+	return newTxPool(config, chainconfig, chain, newSubsidiesChecker)
+}
+
+func newTxPool(
+	config TxPoolConfig,
+	chainconfig *params.ChainConfig,
+	chain StateReader,
+	subsidiesCheckerFactory subsidiesCheckerFactory,
+) *TxPool {
 	// Sanitize the input to ensure no vulnerable gas prices are set
 	config = (&config).sanitize()
 
@@ -325,7 +355,7 @@ func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, chain State
 		config:          config,
 		chainconfig:     chainconfig,
 		chain:           chain,
-		signer:          gsignercache.Wrap(types.LatestSignerForChainID(chainconfig.ChainID)),
+		signer:          types.LatestSignerForChainID(chainconfig.ChainID),
 		pending:         make(map[common.Address]*txList),
 		queue:           make(map[common.Address]*txList),
 		beats:           make(map[common.Address]time.Time),
@@ -340,6 +370,9 @@ func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, chain State
 
 		waitForIdleReorgLoopRequestCh:  make(chan struct{}),
 		waitForIdleReorgLoopResponseCh: make(chan struct{}),
+
+		subsidiesCheckerFactory: subsidiesCheckerFactory,
+		subsidiesCheckerCache:   newSubsidiesCheckerCache(-1), // use default size
 	}
 	pool.locals = newAccountSet(pool.signer)
 	for _, addr := range config.Locals {
@@ -573,7 +606,7 @@ func (pool *TxPool) Pending(enforceTips bool) (map[common.Address]types.Transact
 		// If the miner requests tip enforcement, cap the lists now
 		if enforceTips && !pool.locals.contains(addr) {
 			for i, tx := range txs {
-				if tx.EffectiveGasTipIntCmp(pool.minTip, pool.priced.urgent.baseFee) < 0 {
+				if tx.EffectiveGasTipIntCmp(pool.minTip, pool.priced.urgent.baseFee) < 0 && !subsidies.IsSponsorshipRequest(tx) {
 					txs = txs[:i]
 					break
 				}
@@ -661,14 +694,9 @@ func (pool *TxPool) local() map[common.Address]types.Transactions {
 // rules and adheres to some heuristic limits of the local node (price and size).
 func (pool *TxPool) validateTx(tx *types.Transaction, local bool) error {
 	opts := poolOptions{
-		currentState: pool.currentState,
-		minTip:       pool.minTip,
-		locals:       pool.locals,
-		isLocal:      local,
-	}
-	blockState := blockState{
-		maxGas:  pool.currentMaxGas,
-		baseFee: pool.chain.GetCurrentBaseFee(),
+		minTip:  pool.minTip,
+		locals:  pool.locals,
+		isLocal: local,
 	}
 	netRules := NetworkRules{
 		istanbul: pool.istanbul,
@@ -678,9 +706,21 @@ func (pool *TxPool) validateTx(tx *types.Transaction, local bool) error {
 		eip4844:  pool.eip4844,
 		eip7623:  pool.eip7623,
 		eip7702:  pool.eip7702,
-		signer:   pool.signer,
+
+		gasSubsidies: pool.chain.GetCurrentRules().Upgrades.GasSubsidies,
 	}
-	err := validateTx(tx, opts, blockState, netRules)
+
+	subsidiesChecker := pool.createSubsidiesChecker()
+
+	err := validateTx(
+		tx,
+		opts,
+		netRules,
+		pool.chain,
+		pool.currentState,
+		subsidiesChecker,
+		pool.signer,
+	)
 	if err != nil {
 		return err
 	}
@@ -694,8 +734,11 @@ func (pool *TxPool) validateTx(tx *types.Transaction, local bool) error {
 func (pool *TxPool) checkDelegationLimit(tx *types.Transaction) error {
 	from, _ := types.Sender(pool.signer, tx) // validated
 
+	codeHash := pool.currentState.GetCodeHash(from)
+	hasNoCode := codeHash == types.EmptyCodeHash || codeHash == common.Hash{}
+
 	// early return if the sender has neither delegation nor pending delegation.
-	if pool.currentState.GetCodeHash(from) == types.EmptyCodeHash && len(pool.all.auths[from]) == 0 {
+	if hasNoCode && len(pool.all.auths[from]) == 0 {
 		return nil
 	}
 	pending := pool.pending[from]
@@ -1434,12 +1477,27 @@ func (pool *TxPool) reset(oldHead, newHead *EvmHeader) {
 	pool.eip7702 = pool.chainconfig.IsPrague(next, uint64(newHead.Time.Unix()))
 }
 
+func (pool *TxPool) createSubsidiesChecker() subsidiesChecker {
+	return pool.subsidiesCheckerFactory(
+		pool.chain.GetCurrentRules(),
+		pool.chain,
+		pool.currentState,
+		pool.signer,
+	)
+}
+
+func (pool *TxPool) createCachedSubsidiesChecker() subsidiesChecker {
+	return pool.subsidiesCheckerCache.wrap(pool.createSubsidiesChecker())
+}
+
 // promoteExecutables moves transactions that have become processable from the
 // future queue to the set of pending transactions. During this process, all
 // invalidated transactions (low nonce, low balance) are deleted.
 func (pool *TxPool) promoteExecutables(accounts []common.Address) []*types.Transaction {
 	// Track the promoted transactions to broadcast them at once
 	var promoted []*types.Transaction
+
+	subsidiesChecker := pool.createCachedSubsidiesChecker()
 
 	// Iterate over all accounts and promote any executable transactions
 	for _, addr := range accounts {
@@ -1455,7 +1513,7 @@ func (pool *TxPool) promoteExecutables(accounts []common.Address) []*types.Trans
 		}
 		log.Trace("Removed old queued transactions", "count", len(forwards))
 		// Drop all transactions that are too costly (low balance or out of gas)
-		drops, _ := list.Filter(utils.Uint256ToBigInt(pool.currentState.GetBalance(addr)), pool.currentMaxGas)
+		drops, _ := list.Filter(utils.Uint256ToBigInt(pool.currentState.GetBalance(addr)), pool.currentMaxGas, subsidiesChecker)
 		for _, tx := range drops {
 			hash := tx.Hash()
 			pool.all.Remove(hash)
@@ -1639,6 +1697,9 @@ func (pool *TxPool) truncateQueue() {
 // is always explicitly triggered by SetBaseFee and it would be unnecessary and wasteful
 // to trigger a re-heap is this function
 func (pool *TxPool) demoteUnexecutables() {
+
+	subsidiesChecker := pool.createCachedSubsidiesChecker()
+
 	// Iterate over all accounts and demote any non-executable transactions
 	for addr, list := range pool.pending {
 		nonce := pool.currentState.GetNonce(addr)
@@ -1651,7 +1712,7 @@ func (pool *TxPool) demoteUnexecutables() {
 			log.Trace("Removed old pending transaction", "hash", hash)
 		}
 		// Drop all transactions that are too costly (low balance or out of gas), and queue any invalids back for later
-		drops, invalids := list.Filter(utils.Uint256ToBigInt(pool.currentState.GetBalance(addr)), pool.currentMaxGas)
+		drops, invalids := list.Filter(utils.Uint256ToBigInt(pool.currentState.GetBalance(addr)), pool.currentMaxGas, subsidiesChecker)
 		for _, tx := range drops {
 			hash := tx.Hash()
 			log.Trace("Removed unpayable pending transaction", "hash", hash)

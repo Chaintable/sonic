@@ -42,7 +42,6 @@ func TestIntegrationTestNet_CanStartRestartAndStopIntegrationTestNet(t *testing.
 func TestIntegrationTestNet_CanRestartWithGenesisExportAndImport(t *testing.T) {
 	for _, numNodes := range []int{1, 2} {
 		t.Run(fmt.Sprintf("NumNodes=%d", numNodes), func(t *testing.T) {
-			t.Parallel()
 			net := StartIntegrationTestNet(t, IntegrationTestNetOptions{
 				NumNodes: numNodes,
 			})
@@ -127,6 +126,8 @@ func testIntegrationTestNet_CanEndowAccountsWithTokens(t *testing.T, session Int
 		require.NoError(t, err, "Failed to endow account 1")
 		require.Equal(t, types.ReceiptStatusSuccessful, receipt.Status)
 
+		WaitForProofOf(t, client, int(receipt.BlockNumber.Uint64()))
+
 		want := balance.Add(balance, big.NewInt(int64(increment)))
 		balance, err = client.BalanceAt(t.Context(), address, nil)
 		require.NoError(t, err, "Failed to get balance for account")
@@ -179,8 +180,7 @@ func TestIntegrationTestNet_AdvanceEpoch(t *testing.T) {
 	err = client.Client().Call(&epochBefore, "eth_currentEpoch")
 	require.NoError(t, err)
 
-	err = net.AdvanceEpoch(13)
-	require.NoError(t, err)
+	net.AdvanceEpoch(t, 13)
 
 	var epochAfter hexutil.Uint64
 	err = client.Client().Call(&epochAfter, "eth_currentEpoch")
@@ -192,7 +192,6 @@ func TestIntegrationTestNet_AdvanceEpoch(t *testing.T) {
 func TestIntegrationTestNet_CanRunMultipleNodes(t *testing.T) {
 	for _, numNodes := range []int{1, 2, 3} {
 		t.Run(fmt.Sprintf("NumNodes%d", numNodes), func(t *testing.T) {
-			t.Parallel()
 			net := StartIntegrationTestNet(t, IntegrationTestNetOptions{
 				NumNodes: numNodes,
 			})
@@ -245,7 +244,7 @@ func TestIntegrationTestNet_CanStartWithCustomConfig(t *testing.T) {
 	client, err := net.GetClient()
 	require.NoError(t, err)
 
-	sender := makeAccountWithBalance(t, net, big.NewInt(1e18))
+	sender := MakeAccountWithBalance(t, net, big.NewInt(1e18))
 
 	chainId, err := client.ChainID(t.Context())
 	require.NoError(t, err)
@@ -256,7 +255,7 @@ func TestIntegrationTestNet_CanStartWithCustomConfig(t *testing.T) {
 	gas, err := core.IntrinsicGas(nil, nil, nil, true, true, true, true)
 	require.NoError(t, err)
 
-	tx := signTransaction(t, chainId, &types.DynamicFeeTx{
+	tx := SignTransaction(t, chainId, &types.DynamicFeeTx{
 		Nonce:     0,
 		Value:     big.NewInt(100),
 		Gas:       gas,
@@ -266,7 +265,7 @@ func TestIntegrationTestNet_CanStartWithCustomConfig(t *testing.T) {
 	err = client.SendTransaction(t.Context(), tx)
 	require.ErrorContains(t, err, "transaction underpriced")
 
-	tx = signTransaction(t, chainId, &types.DynamicFeeTx{
+	tx = SignTransaction(t, chainId, &types.DynamicFeeTx{
 		Nonce:     1,
 		Value:     big.NewInt(100),
 		Gas:       gas,
@@ -304,7 +303,7 @@ func TestIntegrationTestNet_AccountsToBeDeployedWithGenesisCanBeCalled(t *testin
 	require.NoError(t, err)
 	defer client.Close()
 
-	sender := makeAccountWithBalance(t, net, big.NewInt(1e18))
+	sender := MakeAccountWithBalance(t, net, big.NewInt(1e18))
 
 	gasPrice, err := client.SuggestGasPrice(t.Context())
 	require.NoError(t, err)
@@ -320,7 +319,7 @@ func TestIntegrationTestNet_AccountsToBeDeployedWithGenesisCanBeCalled(t *testin
 		Value:    big.NewInt(0),
 		Data:     []byte{},
 	}
-	tx := signTransaction(t, chainId, txData, sender)
+	tx := SignTransaction(t, chainId, txData, sender)
 
 	receipt, err := net.Run(tx)
 	require.NoError(t, err)

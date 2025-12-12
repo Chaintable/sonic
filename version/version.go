@@ -38,7 +38,7 @@ const (
 	// The patch version, which must only be non-zero for release candidates
 	// and official releases. All development versions must have a patch
 	// version of 0.
-	Patch = 0
+	Patch = 4
 
 	// The pre-release version. This is set to "dev" for development versions
 	// on the main branch and should be updated to "rc.X" for release candidates

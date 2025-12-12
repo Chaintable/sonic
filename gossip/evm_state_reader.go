@@ -60,6 +60,10 @@ func (r *EvmStateReader) Config() *params.ChainConfig {
 	return r.store.GetEvmChainConfig(idx.Block(blockNumber.Uint64()))
 }
 
+func (r *EvmStateReader) GetCurrentRules() opera.Rules {
+	return r.store.GetRules()
+}
+
 func (r *EvmStateReader) CurrentBlock() *evmcore.EvmBlock {
 	n := r.store.GetLatestBlockIndex()
 
@@ -162,7 +166,7 @@ func (r *EvmStateReader) getBlock(h common.Hash, n idx.Block, readTxs bool) *evm
 }
 
 // GetTxPoolStateDB obtains StateDB for TxPool
-func (r *EvmStateReader) GetTxPoolStateDB() (evmcore.TxPoolStateDB, error) {
+func (r *EvmStateReader) GetTxPoolStateDB() (state.StateDB, error) {
 	return r.store.evm.GetTxPoolStateDB()
 }
 
