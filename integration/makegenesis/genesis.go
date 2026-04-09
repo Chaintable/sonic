@@ -1,4 +1,4 @@
-// Copyright 2025 Sonic Operations Ltd
+// Copyright 2026 Sonic Operations Ltd
 // This file is part of the Sonic Client
 //
 // Sonic is free software: you can redistribute it and/or modify
@@ -105,7 +105,7 @@ func (b *GenesisBuilder) SetCode(acc common.Address, code []byte) {
 	if len(b.blocks) > 0 {
 		panic("cannot add code after block zero is finalized")
 	}
-	b.tmpStateDB.SetCode(acc, code)
+	b.tmpStateDB.SetCode(acc, code, tracing.CodeChangeGenesis)
 }
 
 func (b *GenesisBuilder) SetNonce(acc common.Address, nonce uint64) {

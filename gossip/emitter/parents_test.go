@@ -1,4 +1,4 @@
-// Copyright 2025 Sonic Operations Ltd
+// Copyright 2026 Sonic Operations Ltd
 // This file is part of the Sonic Client
 //
 // Sonic is free software: you can redistribute it and/or modify
@@ -19,6 +19,7 @@ package emitter
 import (
 	"testing"
 
+	"github.com/0xsoniclabs/sonic/gossip/emitter/config"
 	"github.com/0xsoniclabs/sonic/vecmt"
 	"github.com/Fantom-foundation/lachesis-base/emitter/ancestor"
 	"github.com/Fantom-foundation/lachesis-base/hash"
@@ -32,7 +33,7 @@ func TestChooseParents_NoParentsForGenesisEvent(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	external := NewMockExternal(ctrl)
 	em := NewEmitter(
-		DefaultConfig(),
+		config.DefaultConfig(),
 		World{External: external},
 		fixedPriceBaseFeeSource{},
 		nil,
@@ -59,7 +60,7 @@ func TestChooseParents_NonGenesisEventMustHaveOneSelfParent(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	external := NewMockExternal(ctrl)
 	em := NewEmitter(
-		DefaultConfig(),
+		config.DefaultConfig(),
 		World{External: external},
 		fixedPriceBaseFeeSource{},
 		nil,

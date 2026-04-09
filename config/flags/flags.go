@@ -22,6 +22,7 @@ import (
 
 	"github.com/0xsoniclabs/sonic/evmcore"
 	"github.com/0xsoniclabs/sonic/gossip"
+	emitter_config "github.com/0xsoniclabs/sonic/gossip/emitter/config"
 	"github.com/Fantom-foundation/lachesis-base/utils/cachescale"
 	pcsclite "github.com/gballet/go-libpcsclite"
 	"gopkg.in/urfave/cli.v1"
@@ -353,10 +354,31 @@ var (
 		Value: "",
 	}
 
+	// Event Emission Throttling
+	EnableThrottlingFlag = cli.BoolFlag{
+		Name:  "event-throttler",
+		Usage: "Enable event emission throttling based on network conditions.",
+	}
+	ThrottlingDominantThresholdFlag = cli.Float64Flag{
+		Name:  "event-throttler.dominant-threshold",
+		Usage: "The percentage of total stake which defines the dominating validator set. This value must be between 0.7 and 1.0.",
+		Value: emitter_config.DefaultConfig().ThrottlerConfig.DominantStakeThreshold,
+	}
+	ThrottlingDominatingTimeout = cli.Uint64Flag{
+		Name:  "event-throttler.dominating-timeout",
+		Usage: "Timeout in number of emission attempts after which a dominating validator is considered offline. This value must be greater or equal to 2.",
+		Value: uint64(emitter_config.DefaultConfig().ThrottlerConfig.DominatingTimeout),
+	}
+	ThrottlingNonDominatingTimeout = cli.Uint64Flag{
+		Name:  "event-throttler.non-dominating-timeout",
+		Usage: "Maximum number of emission attempts that a non-dominating validator can skip before being considered offline.",
+		Value: uint64(emitter_config.DefaultConfig().ThrottlerConfig.NonDominatingTimeout),
+	}
+
 	// Consensus
 	SuppressFramePanicFlag = cli.BoolFlag{
 		Name:  "lachesis.suppress-frame-panic",
-		Usage: "Suppress frame missmatch error (when testing on historical imported/synced events)",
+		Usage: "Suppress frame mismatch error (when testing on historical imported/synced events)",
 	}
 
 	// StateDb

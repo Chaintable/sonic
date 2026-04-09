@@ -1,4 +1,4 @@
-// Copyright 2025 Sonic Operations Ltd
+// Copyright 2026 Sonic Operations Ltd
 // This file is part of the Sonic Client
 //
 // Sonic is free software: you can redistribute it and/or modify
@@ -35,14 +35,19 @@ import (
 	"github.com/Fantom-foundation/lachesis-base/inter/pos"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/txpool"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 
+	"github.com/0xsoniclabs/sonic/gossip/emitter/config"
 	"github.com/0xsoniclabs/sonic/gossip/emitter/originatedtxs"
+	"github.com/0xsoniclabs/sonic/gossip/emitter/throttler"
 	"github.com/0xsoniclabs/sonic/gossip/gasprice/gaspricelimits"
 	"github.com/0xsoniclabs/sonic/inter"
 	"github.com/0xsoniclabs/sonic/logger"
 	"github.com/0xsoniclabs/sonic/utils/errlock"
 )
+
+//go:generate mockgen -source=emitter.go -destination=emitter_mock.go -package=emitter
 
 const (
 	SenderCountBufferSize = 20000
@@ -79,10 +84,14 @@ var (
 
 	proposalSchedulingTimer          = metrics.GetOrRegisterTimer("emitter/proposal/scheduling", nil)
 	proposalSchedulingTimeoutCounter = metrics.GetOrRegisterCounter("emitter/proposal/scheduling_timeout", nil)
+
+	skipEmissionNotAllowed = metrics.GetOrRegisterCounter("emitter/skip_emission/not_allowed", nil)
+	skipEmissionBusy       = metrics.GetOrRegisterCounter("emitter/skip_emission/busy", nil)
+	skipEmissionThrottle   = metrics.GetOrRegisterCounter("emitter/skip_emission/throttle", nil)
 )
 
 type Emitter struct {
-	config Config
+	config config.Config
 
 	world World
 
@@ -112,7 +121,7 @@ type Emitter struct {
 	fcIndexer      *ancestor.FCIndexer
 	payloadIndexer *ancestor.PayloadIndexer
 
-	intervals                EmitIntervals
+	intervals                config.EmitIntervals
 	globalConfirmingInterval atomic.Uint64
 	intervalsMinLock         sync.Mutex // lock for intervals.Min
 
@@ -140,15 +149,36 @@ type Emitter struct {
 	lastTimeAnEventWasConfirmed atomic.Pointer[time.Time]
 
 	proposalTracker inter.ProposalTracker
+
+	eventEmissionThrottler throttler.ThrottlingState
 }
 
 type BaseFeeSource interface {
 	GetCurrentBaseFee() *big.Int
 }
 
+type ThrottlerWorldAdapter struct {
+	World
+}
+
+func (wa *ThrottlerWorldAdapter) GetLastEvent(from idx.ValidatorID) *inter.Event {
+	_, epoch := wa.GetEpochValidators()
+	hash := wa.World.GetLastEvent(epoch, from)
+	if hash == nil {
+		return nil
+	}
+
+	event := wa.GetEvent(*hash)
+	if event == nil {
+		log.Error("event not found", "eventHash", hash, "from validator ID", from)
+		return nil
+	}
+	return event
+}
+
 // NewEmitter creation.
 func NewEmitter(
-	config Config,
+	config config.Config,
 	world World,
 	baseFeeSource BaseFeeSource,
 	errorLock *errlock.ErrorLock,
@@ -166,6 +196,11 @@ func NewEmitter(
 		baseFeeSource: baseFeeSource,
 		errorLock:     errorLock,
 	}
+	res.eventEmissionThrottler = throttler.NewThrottlingState(
+		config.Validator.ID,
+		config.ThrottlerConfig,
+		&ThrottlerWorldAdapter{world})
+
 	res.globalConfirmingInterval.Store(uint64(config.EmitIntervals.Confirming))
 	return res
 }
@@ -315,6 +350,7 @@ func (em *Emitter) EmitEvent() (*inter.EventPayload, error) {
 
 	// Check if it's time to emit.
 	if !em.isAllowedToEmit() {
+		skipEmissionNotAllowed.Inc(1)
 		return nil, nil
 	}
 
@@ -324,6 +360,7 @@ func (em *Emitter) EmitEvent() (*inter.EventPayload, error) {
 	sortedTxs := em.getSortedTxs(minimFeeCap)
 
 	if em.world.IsBusy() {
+		skipEmissionBusy.Inc(1)
 		return nil, nil
 	}
 
@@ -334,6 +371,21 @@ func (em *Emitter) EmitEvent() (*inter.EventPayload, error) {
 	if e == nil || err != nil {
 		return nil, err
 	}
+
+	// Right after creating the event, check whether to skip its emission
+	// this location allows to take into account the event creation time
+	// and frame in throttling decision.
+	if em.eventEmissionThrottler.CanSkipEventEmission(e) == throttler.SkipEventEmission {
+		skipEmissionThrottle.Inc(1)
+
+		// This event was intentionally not emitted, nevertheless the
+		// last emission timestamp is updated to avoid retry in 11 ms.
+		now := time.Now()
+		em.prevEmittedAtTime.Store(&now)
+
+		return nil, nil
+	}
+
 	em.syncStatus.prevLocalEmittedID = e.ID()
 
 	err = em.world.Process(e)

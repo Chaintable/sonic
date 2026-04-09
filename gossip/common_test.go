@@ -1,4 +1,4 @@
-// Copyright 2025 Sonic Operations Ltd
+// Copyright 2026 Sonic Operations Ltd
 // This file is part of the Sonic Client
 //
 // Sonic is free software: you can redistribute it and/or modify
@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/stretchr/testify/require"
 
+	emitter_config "github.com/0xsoniclabs/sonic/gossip/emitter/config"
 	"github.com/Fantom-foundation/lachesis-base/abft"
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/dag"
@@ -194,14 +195,14 @@ func newTestEnvWithUpgrades(
 
 	// register emitters
 	for i := idx.Validator(0); i < validatorsNum; i++ {
-		cfg := emitter.DefaultConfig()
+		cfg := emitter_config.DefaultConfig()
 		vid := store.GetValidators().GetID(i)
 		pubkey := store.GetEpochState().ValidatorProfiles[vid].PubKey
-		cfg.Validator = emitter.ValidatorConfig{
+		cfg.Validator = emitter_config.ValidatorConfig{
 			ID:     vid,
 			PubKey: pubkey,
 		}
-		cfg.EmitIntervals = emitter.EmitIntervals{}
+		cfg.EmitIntervals = emitter_config.EmitIntervals{}
 		cfg.MaxParents = idx.Event(validatorsNum/2 + 1)
 		cfg.MaxTxsPerAddress = 10000000
 		_ = keyStore.Add(pubkey, crypto.FromECDSA(makefakegenesis.FakeKey(vid)), validatorpk.FakePassword)
@@ -573,17 +574,17 @@ func (env *testEnv) SubscribeFilterLogs(ctx context.Context, query ethereum.Filt
 // CallMsgToMessage converts the given CallMsg to an evmcore.Message to allow passing it as a transaction simulator.
 func CallMsgToMessage(msg ethereum.CallMsg) *core.Message {
 	return &core.Message{
-		From:             msg.From,
-		To:               msg.To,
-		GasPrice:         msg.GasPrice,
-		GasTipCap:        msg.GasTipCap,
-		GasFeeCap:        msg.GasFeeCap,
-		GasLimit:         msg.Gas,
-		Value:            msg.Value,
-		Nonce:            0,
-		SkipNonceChecks:  true,
-		SkipFromEOACheck: true,
-		Data:             msg.Data,
-		AccessList:       msg.AccessList,
+		From:                  msg.From,
+		To:                    msg.To,
+		GasPrice:              msg.GasPrice,
+		GasTipCap:             msg.GasTipCap,
+		GasFeeCap:             msg.GasFeeCap,
+		GasLimit:              msg.Gas,
+		Value:                 msg.Value,
+		Nonce:                 0,
+		SkipNonceChecks:       true,
+		SkipTransactionChecks: true,
+		Data:                  msg.Data,
+		AccessList:            msg.AccessList,
 	}
 }

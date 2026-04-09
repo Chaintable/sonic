@@ -1,4 +1,4 @@
-// Copyright 2025 Sonic Operations Ltd
+// Copyright 2026 Sonic Operations Ltd
 // This file is part of the Sonic Client
 //
 // Sonic is free software: you can redistribute it and/or modify
@@ -31,7 +31,7 @@ import (
 
 	"github.com/0xsoniclabs/sonic/config"
 	"github.com/0xsoniclabs/sonic/gossip"
-	"github.com/0xsoniclabs/sonic/gossip/emitter"
+	emitter_config "github.com/0xsoniclabs/sonic/gossip/emitter/config"
 	"github.com/0xsoniclabs/sonic/inter"
 	"github.com/0xsoniclabs/sonic/utils/caution"
 	"github.com/0xsoniclabs/sonic/utils/ioread"
@@ -52,7 +52,7 @@ func EventsImport(ctx *cli.Context, files ...string) error {
 	}
 	cfg.Opera.Protocol.EventsSemaphoreLimit.Size = math.MaxUint32
 	cfg.Opera.Protocol.EventsSemaphoreLimit.Num = math.MaxUint32
-	cfg.Emitter.Validator = emitter.ValidatorConfig{}
+	cfg.Emitter.Validator = emitter_config.ValidatorConfig{}
 	cfg.TxPool.Journal = ""
 	cfg.Node.IPCPath = ""
 	cfg.Node.HTTPHost = ""

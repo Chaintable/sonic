@@ -1,4 +1,4 @@
-// Copyright 2025 Sonic Operations Ltd
+// Copyright 2026 Sonic Operations Ltd
 // This file is part of the Sonic Client
 //
 // Sonic is free software: you can redistribute it and/or modify
@@ -84,6 +84,10 @@ func initFlags() {
 		flags.ArchiveCacheFlag,
 		flags.StateDbCacheCapacityFlag,
 		flags.StateDbCheckPointInterval,
+		flags.EnableThrottlingFlag,
+		flags.ThrottlingDominantThresholdFlag,
+		flags.ThrottlingDominatingTimeout,
+		flags.ThrottlingNonDominatingTimeout,
 	}
 	networkingFlags = []cli.Flag{
 		flags.BootnodesFlag,

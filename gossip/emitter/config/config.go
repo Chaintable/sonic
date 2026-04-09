@@ -1,4 +1,4 @@
-// Copyright 2025 Sonic Operations Ltd
+// Copyright 2026 Sonic Operations Ltd
 // This file is part of the Sonic Client
 //
 // Sonic is free software: you can redistribute it and/or modify
@@ -14,9 +14,10 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with Sonic. If not, see <http://www.gnu.org/licenses/>.
 
-package emitter
+package config
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"time"
 
@@ -68,6 +69,35 @@ type Config struct {
 	PrevEmittedEventFile FileConfig
 	PrevBlockVotesFile   FileConfig
 	PrevEpochVoteFile    FileConfig
+
+	ThrottlerConfig ThrottlerConfig
+}
+
+// Attempt measures event emission attempts, it is used to define timeouts.
+type Attempt uint64
+
+// ThrottlerConfig is the configuration of event emission throttler.
+type ThrottlerConfig struct {
+	Enabled                bool
+	DominantStakeThreshold float64 // The aggregated stake threshold to consider the dominant set of validators
+	DominatingTimeout      Attempt // Number of attempts to wait before considering a dominant validator as offline
+	NonDominatingTimeout   Attempt // Maximum number of emission attempts that a suppressed validator can skip before being forced to emit
+}
+
+func (cfg *Config) Validate() error {
+	return cfg.ThrottlerConfig.Validate()
+}
+
+func (cfg *ThrottlerConfig) Validate() error {
+	if cfg.DominantStakeThreshold < 0.7 || 1 < cfg.DominantStakeThreshold {
+		return fmt.Errorf("invalid Event Throttle dominating threshold option. It must be between 0.7 and 1, but is %v",
+			cfg)
+	}
+	if cfg.DominatingTimeout < 2 {
+		return fmt.Errorf("invalid dominating emission timeout. It must be more than or equal to 2, but is %v",
+			cfg.DominatingTimeout)
+	}
+	return nil
 }
 
 // DefaultConfig returns the default configurations for the events emitter.
@@ -83,7 +113,7 @@ func DefaultConfig() Config {
 			ParallelInstanceProtection: 1 * time.Minute,
 		},
 
-		MaxTxsPerAddress: TxTurnNonces,
+		MaxTxsPerAddress: 32,
 
 		MaxParents: 0,
 
@@ -92,6 +122,17 @@ func DefaultConfig() Config {
 		EmergencyThreshold:  opera.DefaultEventGas * 5,
 
 		TxsCacheInvalidation: 200 * time.Millisecond,
+
+		ThrottlerConfig: DefaultThrottlerConfig(),
+	}
+}
+
+func DefaultThrottlerConfig() ThrottlerConfig {
+	return ThrottlerConfig{
+		Enabled:                false,
+		DominantStakeThreshold: 0.75,
+		DominatingTimeout:      3,
+		NonDominatingTimeout:   100,
 	}
 }
 

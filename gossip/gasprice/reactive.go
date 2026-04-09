@@ -1,4 +1,4 @@
-// Copyright 2025 Sonic Operations Ltd
+// Copyright 2026 Sonic Operations Ltd
 // This file is part of the Sonic Client
 //
 // Sonic is free software: you can redistribute it and/or modify
@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/0xsoniclabs/sonic/utils"
 	"github.com/Fantom-foundation/lachesis-base/utils/piecefunc"
 	"github.com/ethereum/go-ethereum/core/types"
 )
@@ -238,11 +239,12 @@ func (gpo *Oracle) calcTxpoolStat() txpoolStat {
 	const maxTxsToIndex = 400
 
 	minGasPrice := gpo.backend.GetRules().Economy.MinGasPrice
+	minGasPriceU256 := utils.BigIntToUint256Clamped(minGasPrice)
 	// txs are sorted from large price to small
 	sorted := txs
 	sort.Slice(sorted, func(i, j int) bool {
 		a, b := sorted[i], sorted[j]
-		cmp := a.EffectiveGasTipCmp(b, minGasPrice)
+		cmp := a.EffectiveGasTipCmp(b, minGasPriceU256)
 		if cmp == 0 {
 			return a.Gas() > b.Gas()
 		}

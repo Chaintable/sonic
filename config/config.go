@@ -1,4 +1,4 @@
-// Copyright 2025 Sonic Operations Ltd
+// Copyright 2026 Sonic Operations Ltd
 // This file is part of the Sonic Client
 //
 // Sonic is free software: you can redistribute it and/or modify
@@ -46,7 +46,7 @@ import (
 
 	"github.com/0xsoniclabs/sonic/evmcore"
 	"github.com/0xsoniclabs/sonic/gossip"
-	"github.com/0xsoniclabs/sonic/gossip/emitter"
+	emitter_config "github.com/0xsoniclabs/sonic/gossip/emitter/config"
 	"github.com/0xsoniclabs/sonic/integration"
 	"github.com/0xsoniclabs/sonic/utils/caution"
 	"github.com/0xsoniclabs/sonic/utils/memory"
@@ -74,7 +74,7 @@ var TomlSettings = toml.Config{
 type Config struct {
 	Node          node.Config
 	Opera         gossip.Config
-	Emitter       emitter.Config
+	Emitter       emitter_config.Config
 	TxPool        evmcore.TxPoolConfig
 	OperaStore    gossip.StoreConfig
 	Lachesis      abft.Config
@@ -347,7 +347,7 @@ func MakeAllConfigsFromFile(ctx *cli.Context, configFile string) (*Config, error
 	cfg := Config{
 		Node:          DefaultNodeConfig(),
 		Opera:         gossip.DefaultConfig(cacheRatio),
-		Emitter:       emitter.DefaultConfig(),
+		Emitter:       emitter_config.DefaultConfig(),
 		TxPool:        evmcore.DefaultTxPoolConfig,
 		OperaStore:    gossip.DefaultStoreConfig(cacheRatio),
 		Lachesis:      abft.DefaultConfig(),
@@ -360,7 +360,7 @@ func MakeAllConfigsFromFile(ctx *cli.Context, configFile string) (*Config, error
 		if err != nil {
 			return nil, fmt.Errorf("invalid fakenet flag")
 		}
-		cfg.Emitter = emitter.FakeConfig(num)
+		cfg.Emitter = emitter_config.FakeConfig(num)
 		setBootnodes(ctx, []string{}, &cfg.Node)
 	} else {
 		// "asDefault" means set network defaults
@@ -409,6 +409,19 @@ func MakeAllConfigsFromFile(ctx *cli.Context, configFile string) (*Config, error
 
 	if err := cfg.Opera.Validate(); err != nil {
 		return nil, err
+	}
+
+	if ctx.GlobalBool(flags.EnableThrottlingFlag.Name) {
+		cfg.Emitter.ThrottlerConfig = emitter_config.ThrottlerConfig{
+			Enabled:                true,
+			DominantStakeThreshold: ctx.GlobalFloat64(flags.ThrottlingDominantThresholdFlag.Name),
+			DominatingTimeout:      emitter_config.Attempt(ctx.GlobalUint64(flags.ThrottlingDominatingTimeout.Name)),
+			NonDominatingTimeout:   emitter_config.Attempt(ctx.GlobalUint64(flags.ThrottlingNonDominatingTimeout.Name)),
+		}
+	}
+
+	if err := cfg.Emitter.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid emitter config: %w", err)
 	}
 
 	if ctx.IsSet(flags.SuppressFramePanicFlag.Name) {

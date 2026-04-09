@@ -32,6 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 
+	"github.com/0xsoniclabs/sonic/ethapi"
 	"github.com/0xsoniclabs/sonic/evmcore"
 	"github.com/0xsoniclabs/sonic/gossip/evmstore"
 	"github.com/0xsoniclabs/sonic/topicsdb"
@@ -66,11 +67,11 @@ func (b *testBackend) HeaderByNumber(ctx context.Context, blockNr rpc.BlockNumbe
 	)
 	if blockNr == rpc.LatestBlockNumber {
 		hash = rawdb.ReadHeadBlockHash(b.db)
-		number := rawdb.ReadHeaderNumber(b.db, hash)
-		if number == nil {
+		number, ok := rawdb.ReadHeaderNumber(b.db, hash)
+		if !ok {
 			return nil, nil
 		}
-		num = *number
+		num = number
 	} else {
 		num = uint64(blockNr)
 		hash = rawdb.ReadCanonicalHash(b.db, num)
@@ -83,22 +84,23 @@ func (b *testBackend) HeaderByNumber(ctx context.Context, blockNr rpc.BlockNumbe
 }
 
 func (b *testBackend) HeaderByHash(ctx context.Context, hash common.Hash) (*evmcore.EvmHeader, error) {
-	number := rawdb.ReadHeaderNumber(b.db, hash)
-	if number == nil {
+	number, ok := rawdb.ReadHeaderNumber(b.db, hash)
+	if !ok {
 		return nil, nil
 	}
 
-	h := rawdb.ReadHeader(b.db, hash, *number)
+	h := rawdb.ReadHeader(b.db, hash, number)
 	eh := evmcore.ConvertFromEthHeader(h)
 	eh.Hash = h.Hash()
 	return eh, nil
 }
 
 func (b *testBackend) GetReceipts(ctx context.Context, hash common.Hash) (types.Receipts, error) {
-	if number := rawdb.ReadHeaderNumber(b.db, hash); number != nil {
-		return rawdb.ReadReceipts(b.db, hash, *number, 0 /*time*/, params.TestChainConfig), nil
+	number, ok := rawdb.ReadHeaderNumber(b.db, hash)
+	if !ok {
+		return nil, nil
 	}
-	return nil, nil
+	return rawdb.ReadReceipts(b.db, hash, number, 0 /*time*/, params.TestChainConfig), nil
 }
 
 func (b *testBackend) GetReceiptsByNumber(ctx context.Context, number rpc.BlockNumber) (types.Receipts, error) {
@@ -106,12 +108,12 @@ func (b *testBackend) GetReceiptsByNumber(ctx context.Context, number rpc.BlockN
 }
 
 func (b *testBackend) GetLogs(ctx context.Context, hash common.Hash) ([][]*types.Log, error) {
-	number := rawdb.ReadHeaderNumber(b.db, hash)
-	if number == nil {
+	number, ok := rawdb.ReadHeaderNumber(b.db, hash)
+	if !ok {
 		return nil, nil
 	}
 
-	receipts := rawdb.ReadReceipts(b.db, hash, *number, 0 /*time*/, params.TestChainConfig)
+	receipts := rawdb.ReadReceipts(b.db, hash, number, 0 /*time*/, params.TestChainConfig)
 	logs := make([][]*types.Log, len(receipts))
 	for i, receipt := range receipts {
 		logs[i] = receipt.Logs
@@ -151,9 +153,11 @@ func (b *testBackend) CalcBlockExtApi() bool {
 	return true
 }
 
-// TestPendingTxFilter tests whether pending tx filters retrieve all pending transactions that are posted to the event mux.
+func (b *testBackend) ChainID() *big.Int {
+	return params.TestChainConfig.ChainID
+}
+
 func TestPendingTxFilter(t *testing.T) {
-	t.Parallel()
 
 	var (
 		backend = newTestBackend()
@@ -166,42 +170,55 @@ func TestPendingTxFilter(t *testing.T) {
 			types.NewTransaction(3, common.HexToAddress("0xb794f5ea0ba39494ce83a213fffba74279579268"), new(big.Int), 0, new(big.Int), nil),
 			types.NewTransaction(4, common.HexToAddress("0xb794f5ea0ba39494ce83a213fffba74279579268"), new(big.Int), 0, new(big.Int), nil),
 		}
-
-		hashes []common.Hash
 	)
 
-	fid0 := api.NewPendingTransactionFilter()
+	trueBool := true
+	falseBool := false
+	for _, fullTx := range []*bool{nil, &trueBool, &falseBool} {
 
-	time.Sleep(1 * time.Second)
-	backend.txsFeed.Send(evmcore.NewTxsNotify{Txs: transactions})
+		fid0 := api.NewPendingTransactionFilter(fullTx)
 
-	timeout := time.Now().Add(1 * time.Second)
-	for {
-		results, err := api.GetFilterChanges(fid0)
-		if err != nil {
-			t.Fatalf("Unable to retrieve logs: %v", err)
+		time.Sleep(1 * time.Second)
+		backend.txsFeed.Send(evmcore.NewTxsNotify{Txs: transactions})
+
+		var receivedHashes []common.Hash
+		timeout := time.Now().Add(1 * time.Second)
+		for {
+			results, err := api.GetFilterChanges(fid0)
+			if err != nil {
+				t.Fatalf("Unable to retrieve logs: %v", err)
+			}
+
+			if fullTx == nil || !(*fullTx) {
+				h := results.([]any)
+				for _, hh := range h {
+					receivedHashes = append(receivedHashes, hh.(common.Hash))
+				}
+			} else {
+				txs := results.([]any)
+				for _, rpcTx := range txs {
+					receivedHashes = append(receivedHashes, rpcTx.(*ethapi.RPCTransaction).Hash)
+				}
+			}
+			if len(receivedHashes) >= len(transactions) {
+				break
+			}
+			// check timeout
+			if time.Now().After(timeout) {
+				break
+			}
+
+			time.Sleep(100 * time.Millisecond)
 		}
 
-		h := results.([]common.Hash)
-		hashes = append(hashes, h...)
-		if len(hashes) >= len(transactions) {
-			break
+		if len(receivedHashes) != len(transactions) {
+			t.Errorf("invalid number of transactions, want %d transactions(s), got %d", len(transactions), len(receivedHashes))
+			return
 		}
-		// check timeout
-		if time.Now().After(timeout) {
-			break
-		}
-
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	if len(hashes) != len(transactions) {
-		t.Errorf("invalid number of transactions, want %d transactions(s), got %d", len(transactions), len(hashes))
-		return
-	}
-	for i := range hashes {
-		if hashes[i] != transactions[i].Hash() {
-			t.Errorf("hashes[%d] invalid, want %x, got %x", i, transactions[i].Hash(), hashes[i])
+		for i := range receivedHashes {
+			if receivedHashes[i] != transactions[i].Hash() {
+				t.Errorf("hashes[%d] invalid, want %x, got %x", i, transactions[i].Hash(), receivedHashes[i])
+			}
 		}
 	}
 }

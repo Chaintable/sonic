@@ -1,4 +1,4 @@
-// Copyright 2025 Sonic Operations Ltd
+// Copyright 2026 Sonic Operations Ltd
 // This file is part of the Sonic Client
 //
 // Sonic is free software: you can redistribute it and/or modify
@@ -74,7 +74,7 @@ var DefaultVMConfig = func() vm.Config {
 
 	// For tracing, Geth's EVM is used.
 	gethFactory := func(evm *vm.EVM) vm.Interpreter {
-		return vm.NewEVMInterpreter(evm)
+		return vm.NewEvmInterpreter(evm)
 	}
 
 	return vm.Config{
