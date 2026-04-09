@@ -1,4 +1,4 @@
-// Copyright 2025 Sonic Operations Ltd
+// Copyright 2026 Sonic Operations Ltd
 // This file is part of the Sonic Client
 //
 // Sonic is free software: you can redistribute it and/or modify
@@ -56,9 +56,9 @@ func (l *LoggingStateDB) SubBalance(addr common.Address, amount *uint256.Int, re
 	return prev
 }
 
-func (l *LoggingStateDB) SetCode(addr common.Address, code []byte) []byte {
+func (l *LoggingStateDB) SetCode(addr common.Address, code []byte, reason tracing.CodeChangeReason) []byte {
 	prevCodeHash := l.GetCodeHash(addr)
-	prevCode := l.StateDB.SetCode(addr, code)
+	prevCode := l.StateDB.SetCode(addr, code, reason)
 	if l.logger.OnCodeChange != nil {
 		l.logger.OnCodeChange(addr, prevCodeHash, prevCode, l.GetCodeHash(addr), code)
 	}

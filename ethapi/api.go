@@ -994,7 +994,7 @@ func (diff *StateOverride) Apply(state state.StateDB) error {
 		}
 		// Override account(contract) code.
 		if account.Code != nil {
-			state.SetCode(addr, *account.Code)
+			state.SetCode(addr, *account.Code, tracing.CodeChangeUnspecified)
 		}
 		// Override account balance.
 		if account.Balance != nil {
@@ -1437,6 +1437,11 @@ func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber
 		copyAuthorizationList(tx, result)
 	}
 	return result
+}
+
+// NewRPCPendingTransaction returns a transaction that will serialize to the RPC representation.
+func NewRPCPendingTransaction(tx *types.Transaction, baseFee *big.Int, chainId *big.Int) *RPCTransaction {
+	return newRPCPendingTransaction(tx, baseFee, chainId)
 }
 
 // newRPCPendingTransaction returns a pending transaction that will serialize to the RPC representation

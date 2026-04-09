@@ -1,4 +1,4 @@
-// Copyright 2025 Sonic Operations Ltd
+// Copyright 2026 Sonic Operations Ltd
 // This file is part of the Sonic Client
 //
 // Sonic is free software: you can redistribute it and/or modify
@@ -419,7 +419,7 @@ func stateExpectCalls(state *state.MockStateDB) {
 	state.EXPECT().AddLog(any).AnyTimes()
 	state.EXPECT().AddRefund(any).AnyTimes()
 
-	state.EXPECT().SetCode(any, any).Return([]byte{}).AnyTimes()
+	state.EXPECT().SetCode(any, any, any).Return([]byte{}).AnyTimes()
 	state.EXPECT().SetNonce(any, any, any).AnyTimes()
 	state.EXPECT().SetState(any, any, any).Return(common.Hash{}).AnyTimes()
 
