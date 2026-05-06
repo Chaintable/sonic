@@ -3,7 +3,6 @@ package ethapi
 import (
 	"context"
 	"fmt"
-	"math/big"
 	"strings"
 	"time"
 
@@ -175,6 +174,7 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 		return nil, fmt.Errorf("no network rules found for block height %d", block.NumberU64())
 	}
 	vmConfig := opera.GetVmConfig(*rules)
+	vmConfig.NoBaseFee = true
 
 	rpcTracer := ptracer.RPCTracer{}
 	vmConfig.Tracer = newDebankTraceHooks(&rpcTracer)
@@ -190,7 +190,6 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	replayRules := *rules
 	replayRules.Upgrades.GasSubsidies = false
 	replayHeader := block.EvmHeader
-	replayHeader.BaseFee = new(big.Int)
 	replayBlock := &evmcore.EvmBlock{
 		EvmHeader:    replayHeader,
 		Transactions: block.Transactions,
