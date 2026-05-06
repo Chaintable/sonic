@@ -395,10 +395,34 @@ func (tp *TransactionProcessor) Run(i int, tx *types.Transaction) []ProcessedTra
 // this method takes an already created EVM instance as input.
 func ApplyTransactionWithEVM(msg *core.Message, config *params.ChainConfig, gp *core.GasPool, statedb state.StateDB, blockNumber *big.Int, blockHash common.Hash, tx *types.Transaction, usedGas *uint64, evm *vm.EVM) (receipt *types.Receipt, err error) {
 	if evm.Config.Tracer != nil && evm.Config.Tracer.OnTxStart != nil {
+		var (
+			txHasTopCall bool
+			onEnter      = evm.Config.Tracer.OnEnter
+		)
+		if onEnter != nil {
+			evm.Config.Tracer.OnEnter = func(depth int, typ byte, from common.Address, to common.Address, input []byte, gas uint64, value *big.Int) {
+				if depth == 0 {
+					txHasTopCall = true
+				}
+				onEnter(depth, typ, from, to, input, gas, value)
+			}
+			defer func() {
+				evm.Config.Tracer.OnEnter = onEnter
+			}()
+		}
 		evm.Config.Tracer.OnTxStart(evm.GetVMContext(), tx, msg.From)
 		if evm.Config.Tracer.OnTxEnd != nil {
 			defer func() {
 				log.Info("Transaction end", "tx", tx.Hash().Hex(), "err", err, "receipt", receipt)
+				if receipt == nil {
+					return
+				}
+				if onEnter != nil && err == nil && !txHasTopCall {
+					return
+				}
+				if receipt != nil {
+					receipt.SetEffectiveGasPrice(tx, evm.Context.BaseFee)
+				}
 				evm.Config.Tracer.OnTxEnd(receipt, err)
 			}()
 		}

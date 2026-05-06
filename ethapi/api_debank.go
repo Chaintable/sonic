@@ -15,7 +15,6 @@ import (
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
-	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -141,6 +140,7 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	if pStateDB == nil || err != nil {
 		return nil, err
 	}
+	defer pStateDB.Release()
 
 	vmConfig, err := GetVmConfig(ctx, api.b, idx.Block(block.NumberU64()))
 	if err != nil {
@@ -149,16 +149,11 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	vmConfig.NoBaseFee = true
 
 	rpcTracer := ptracer.RPCTracer{}
-	vmConfig.Tracer = &tracing.Hooks{
-		OnTxStart: rpcTracer.OnTxStart,
-		OnTxEnd:   rpcTracer.OnTxEnd,
-		OnEnter:   rpcTracer.OnEnter,
-		OnExit:    rpcTracer.OnExit,
-		OnOpcode:  rpcTracer.OnOpcode,
-		OnLog:     rpcTracer.OnLog,
-	}
+	vmConfig.Tracer = newDebankTraceHooks(&rpcTracer)
 
-	pStateDB = evmstore.WrapStateDbWithLogger(pStateDB, vmConfig.Tracer)
+	diffStateDB := newDebankStateDiffDB(pStateDB)
+	pStateDB = evmstore.WrapStateDbWithLogger(diffStateDB, vmConfig.Tracer)
+	pStateDB.BeginBlock(block.NumberU64())
 
 	rpcTracer.OnBlockStart(evmBlock, api.b.ChainConfig(idx.Block(block.NumberU64())))
 
@@ -174,6 +169,10 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 		return nil, fmt.Errorf("failed to get EVM for tracing: %w", err)
 	}
 
+	if api.b.ChainConfig(idx.Block(block.NumberU64())).IsPrague(block.Number, uint64(block.Time.Unix())) {
+		evmcore.ProcessParentBlockHash(block.ParentHash, evm, pStateDB)
+	}
+
 	// log.Info("trace DebankBlock info", "txs", len(txs), "block", block.NumberU64(), "hash", block.Hash.Hex(), "vmConfig", vmConfig)
 	for i, tx := range txs {
 		msg, err := evmcore.TxAsMessage(tx, signer, block.BaseFee)
@@ -183,14 +182,51 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 
 		pStateDB.SetTxContext(tx.Hash(), i)
 
-		receipt, err := evmcore.ApplyTransactionWithEVM(msg, api.b.ChainConfig(idx.Block(block.NumberU64())), gp, pStateDB, evmBlock.Number(), evmBlock.Hash(), tx, usedGas, evm)
+		_, err = evmcore.ApplyTransactionWithEVM(msg, api.b.ChainConfig(idx.Block(block.NumberU64())), gp, pStateDB, evmBlock.Number(), evmBlock.Hash(), tx, usedGas, evm)
 		if err != nil {
 			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 		}
-		receipt.SetEffectiveGasPrice(tx, block.Header().BaseFee)
 	}
 
-	res := rpcTracer.GetOutPut(parent.Root, block.Root)
+	pStateDB.EndBlock(block.NumberU64())
+	replayedRoot := pStateDB.GetStateHash()
+	if replayedRoot != block.Root {
+		return nil, fmt.Errorf("replayed state root mismatch for block %d: got %s, want %s", block.NumberU64(), replayedRoot, block.Root)
+	}
+
+	res := rpcTracer.GetOutPut(parent.Root, parent.Root)
+	if parent.Root != block.Root {
+		blockDiff := diffStateDB.BuildStateDiff(parent.Root, block.Root)
+		stateDiffBytes, err := util.EncodeToRlp(blockDiff)
+		if err != nil {
+			log.Error("Failed to encode state diff", "err", err)
+			stateDiffBytes = []byte{}
+		}
+		res.StateDiff = stateDiffBytes
+	}
+	res.BlockFile.StorageContracts = mergeStorageContracts(res.BlockFile.StorageContracts, diffStateDB.StorageContractAddresses())
 
 	return res, nil
+}
+
+func mergeStorageContracts(base []string, extra []string) []string {
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	merged := make([]string, 0, len(base)+len(extra))
+	for _, addr := range base {
+		key := strings.ToLower(addr)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, key)
+	}
+	for _, addr := range extra {
+		key := strings.ToLower(addr)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, key)
+	}
+	return merged
 }
