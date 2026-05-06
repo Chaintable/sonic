@@ -171,6 +171,7 @@ func (d *debankStateDiffDB) BuildStateDiff(originRoot, root common.Hash) *ptypes
 		return strings.Compare(addrs[i].Hex(), addrs[j].Hex()) < 0
 	})
 
+	seenCodeHashes := make(map[common.Hash]struct{})
 	for _, addr := range addrs {
 		change := d.changes[addr]
 		addrHash := debankAddressHash(addr)
@@ -189,10 +190,14 @@ func (d *debankStateDiffDB) BuildStateDiff(originRoot, root common.Hash) *ptypes
 		if change.codeTouched {
 			code := d.StateDB.GetCode(addr)
 			if len(code) > 0 {
-				diff.NewCodes = append(diff.NewCodes, ptypes.NewCode{
-					CodeHash: d.StateDB.GetCodeHash(addr),
-					Code:     common.CopyBytes(code),
-				})
+				codeHash := d.StateDB.GetCodeHash(addr)
+				if _, ok := seenCodeHashes[codeHash]; !ok {
+					seenCodeHashes[codeHash] = struct{}{}
+					diff.NewCodes = append(diff.NewCodes, ptypes.NewCode{
+						CodeHash: codeHash,
+						Code:     common.CopyBytes(code),
+					})
+				}
 			}
 		}
 		if values := d.storageValues(addr, change); len(values) > 0 {

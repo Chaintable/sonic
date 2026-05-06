@@ -5,6 +5,8 @@ import (
 
 	"github.com/0xsoniclabs/sonic/inter/state"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/tracing"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
@@ -48,4 +50,33 @@ func TestDebankStateDiffIncludesMetadataForStorageOnlyAccount(t *testing.T) {
 	require.Len(t, diff.StorageDiff, 1)
 	require.Equal(t, debankAddressHash(addr), diff.StorageDiff[0].Address)
 	require.Len(t, diff.StorageDiff[0].Values, 1)
+}
+
+func TestDebankStateDiffDeduplicatesNewCodesByHash(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mockState := state.NewMockStateDB(ctrl)
+
+	addr1 := common.HexToAddress("0x1001")
+	addr2 := common.HexToAddress("0x1002")
+	code := []byte{0x60, 0x00, 0x60, 0x00}
+	codeHash := crypto.Keccak256Hash(code)
+	zeroBalance := uint256.NewInt(0)
+
+	mockState.EXPECT().Exist(gomock.Any()).Return(false).AnyTimes()
+	mockState.EXPECT().GetNonce(gomock.Any()).Return(uint64(0)).AnyTimes()
+	mockState.EXPECT().GetCodeHash(gomock.Any()).Return(codeHash).AnyTimes()
+	mockState.EXPECT().GetBalance(gomock.Any()).Return(zeroBalance).AnyTimes()
+	mockState.EXPECT().SetCode(addr1, code, tracing.CodeChangeContractCreation).Return(nil)
+	mockState.EXPECT().SetCode(addr2, code, tracing.CodeChangeContractCreation).Return(nil)
+	mockState.EXPECT().HasSelfDestructed(gomock.Any()).Return(false).AnyTimes()
+	mockState.EXPECT().GetCode(gomock.Any()).Return(code).AnyTimes()
+
+	diffDB := newDebankStateDiffDB(mockState)
+	diffDB.SetCode(addr1, code, tracing.CodeChangeContractCreation)
+	diffDB.SetCode(addr2, code, tracing.CodeChangeContractCreation)
+
+	diff := diffDB.BuildStateDiff(common.HexToHash("0x10"), common.HexToHash("0x20"))
+	require.Len(t, diff.NewCodes, 1)
+	require.Equal(t, codeHash, diff.NewCodes[0].CodeHash)
+	require.Equal(t, code, diff.NewCodes[0].Code)
 }
