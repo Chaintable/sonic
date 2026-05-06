@@ -80,3 +80,82 @@ func TestDebankStateDiffDeduplicatesNewCodesByHash(t *testing.T) {
 	require.Equal(t, codeHash, diff.NewCodes[0].CodeHash)
 	require.Equal(t, code, diff.NewCodes[0].Code)
 }
+
+func TestValidateDebankReplayPostStateValuesAcceptsMatchingState(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	replayState := state.NewMockStateDB(ctrl)
+	postState := state.NewMockStateDB(ctrl)
+
+	addr := common.HexToAddress("0x1001")
+	slot := common.HexToHash("0x01")
+	value := common.HexToHash("0x02")
+	code := []byte{0x60, 0x00}
+	codeHash := crypto.Keccak256Hash(code)
+	balance := uint256.NewInt(9)
+
+	replayState.EXPECT().Exist(addr).Return(true).AnyTimes()
+	replayState.EXPECT().GetNonce(addr).Return(uint64(4)).AnyTimes()
+	replayState.EXPECT().GetCodeHash(addr).Return(codeHash).AnyTimes()
+	replayState.EXPECT().GetBalance(addr).Return(balance).AnyTimes()
+	replayState.EXPECT().GetCode(addr).Return(code).AnyTimes()
+	replayState.EXPECT().GetState(addr, slot).Return(value).AnyTimes()
+
+	postState.EXPECT().Exist(addr).Return(true).AnyTimes()
+	postState.EXPECT().GetNonce(addr).Return(uint64(4)).AnyTimes()
+	postState.EXPECT().GetCodeHash(addr).Return(codeHash).AnyTimes()
+	postState.EXPECT().GetBalance(addr).Return(balance).AnyTimes()
+	postState.EXPECT().GetCode(addr).Return(code).AnyTimes()
+	postState.EXPECT().GetState(addr, slot).Return(value).AnyTimes()
+
+	diffDB := &debankStateDiffDB{
+		StateDB: replayState,
+		changes: map[common.Address]*debankAccountChange{
+			addr: {
+				codeTouched: true,
+				storage: map[common.Hash]common.Hash{
+					slot: common.Hash{},
+				},
+			},
+		},
+	}
+
+	require.NoError(t, validateDebankReplayPostStateValues(1, diffDB, postState))
+}
+
+func TestValidateDebankReplayPostStateValuesRejectsStorageMismatch(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	replayState := state.NewMockStateDB(ctrl)
+	postState := state.NewMockStateDB(ctrl)
+
+	addr := common.HexToAddress("0x1001")
+	slot := common.HexToHash("0x01")
+	codeHash := common.HexToHash("0x03")
+	balance := uint256.NewInt(9)
+
+	replayState.EXPECT().Exist(addr).Return(true).AnyTimes()
+	replayState.EXPECT().GetNonce(addr).Return(uint64(4)).AnyTimes()
+	replayState.EXPECT().GetCodeHash(addr).Return(codeHash).AnyTimes()
+	replayState.EXPECT().GetBalance(addr).Return(balance).AnyTimes()
+	replayState.EXPECT().GetState(addr, slot).Return(common.HexToHash("0x02")).AnyTimes()
+
+	postState.EXPECT().Exist(addr).Return(true).AnyTimes()
+	postState.EXPECT().GetNonce(addr).Return(uint64(4)).AnyTimes()
+	postState.EXPECT().GetCodeHash(addr).Return(codeHash).AnyTimes()
+	postState.EXPECT().GetBalance(addr).Return(balance).AnyTimes()
+	postState.EXPECT().GetState(addr, slot).Return(common.HexToHash("0x03")).AnyTimes()
+
+	diffDB := &debankStateDiffDB{
+		StateDB: replayState,
+		changes: map[common.Address]*debankAccountChange{
+			addr: {
+				storage: map[common.Hash]common.Hash{
+					slot: common.Hash{},
+				},
+			},
+		},
+	}
+
+	err := validateDebankReplayPostStateValues(1, diffDB, postState)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "storage mismatch")
+}
