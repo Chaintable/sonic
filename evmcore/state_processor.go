@@ -417,7 +417,6 @@ func ApplyTransactionWithEVM(msg *core.Message, config *params.ChainConfig, gp *
 		evm.Config.Tracer.OnTxStart(evm.GetVMContext(), tx, msg.From)
 		if evm.Config.Tracer.OnTxEnd != nil {
 			defer func() {
-				log.Info("Transaction end", "tx", tx.Hash().Hex(), "err", err, "receipt", receipt)
 				if receipt == nil {
 					return
 				}

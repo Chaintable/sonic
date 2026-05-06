@@ -79,6 +79,9 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 		log.Error("Failed to get block", "err", err, "blockNrOrHash", blockNrOrHash)
 		return nil, err
 	}
+	if block == nil {
+		return nil, fmt.Errorf("block %v not found", blockNrOrHash)
+	}
 
 	receipts, err := api.getBlockReceipts(ctx, rpc.BlockNumber(block.NumberU64()))
 	if err != nil {
@@ -159,10 +162,16 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	if err != nil {
 		return nil, err
 	}
+	if parent == nil {
+		return nil, fmt.Errorf("parent block %d not found", block.NumberU64()-1)
+	}
 
 	pStateDB, _, err := api.b.StateAndHeaderByNumberOrHash(ctx, rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(parent.NumberU64())))
-	if pStateDB == nil || err != nil {
+	if err != nil {
 		return nil, err
+	}
+	if pStateDB == nil {
+		return nil, fmt.Errorf("state for parent block %d not found", parent.NumberU64())
 	}
 	defer pStateDB.Release()
 
