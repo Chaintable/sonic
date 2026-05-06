@@ -1,21 +1,23 @@
 package ethapi
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/0xsoniclabs/sonic/evmcore"
 	"github.com/0xsoniclabs/sonic/gossip/evmstore"
 	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/inter/state"
+	"github.com/0xsoniclabs/sonic/opera"
 	ptracer "github.com/Chaintable/pipeline/tracer"
 	ptypes "github.com/Chaintable/pipeline/types"
 	"github.com/Chaintable/pipeline/util"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core"
-	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -30,6 +32,30 @@ func NewDebankAPI(b Backend) *DebankAPI {
 	return &DebankAPI{
 		b: b,
 	}
+}
+
+type debankHeaderReader struct {
+	ctx context.Context
+	b   Backend
+}
+
+func (r debankHeaderReader) GetHeader(hash common.Hash, number uint64) *evmcore.EvmHeader {
+	if hash != (common.Hash{}) {
+		header, err := r.b.HeaderByHash(r.ctx, hash)
+		if err == nil && header != nil {
+			return header
+		}
+	}
+
+	header, err := r.b.HeaderByNumber(r.ctx, rpc.BlockNumber(number))
+	if err != nil {
+		log.Warn("Failed to read header for Debank replay", "number", number, "hash", hash, "err", err)
+		return nil
+	}
+	if hash != (common.Hash{}) && header != nil && header.Hash != hash {
+		return nil
+	}
+	return header
 }
 
 func (api *DebankAPI) getBlockReceipts(ctx context.Context, blkNumber rpc.BlockNumber) (types.Receipts, error) {
@@ -55,6 +81,9 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	if err != nil {
 		log.Error("Failed to get block", "err", err, "blockNrOrHash", blockNrOrHash)
 		return nil, err
+	}
+	if block == nil {
+		return nil, fmt.Errorf("block %v not found", blockNrOrHash)
 	}
 
 	receipts, err := api.getBlockReceipts(ctx, rpc.BlockNumber(block.NumberU64()))
@@ -101,7 +130,7 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	if block.NumberU64() == 0 {
 		header := util.BuildPilelineBlockHeader(evmBlock)
 		blockDiff := ptracer.GenesisAllocToStateDiff(evmcore.GenesisAlloc)
-		blockDiff.Hash = evmBlockHeader.Hash()
+		blockDiff.Hash = evmBlockHeader.Root
 		blockDiff.ParentHash = types.EmptyRootHash
 		blockFile := &ptypes.BlockFile{
 			Block:            util.BuildPipelineBlock(evmBlock),
@@ -136,61 +165,197 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	if err != nil {
 		return nil, err
 	}
+	if parent == nil {
+		return nil, fmt.Errorf("parent block %d not found", block.NumberU64()-1)
+	}
 
 	pStateDB, _, err := api.b.StateAndHeaderByNumberOrHash(ctx, rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(parent.NumberU64())))
-	if pStateDB == nil || err != nil {
+	if err != nil {
 		return nil, err
 	}
-
-	vmConfig, err := GetVmConfig(ctx, api.b, idx.Block(block.NumberU64()))
-	if err != nil {
-		return nil, fmt.Errorf("failed to get vm config: %w", err)
+	if pStateDB == nil {
+		return nil, fmt.Errorf("state for parent block %d not found", parent.NumberU64())
 	}
+	defer pStateDB.Release()
+
+	rules, err := api.b.GetNetworkRules(ctx, idx.Block(block.NumberU64()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get network rules: %w", err)
+	}
+	if rules == nil {
+		return nil, fmt.Errorf("no network rules found for block height %d", block.NumberU64())
+	}
+	vmConfig := opera.GetVmConfig(*rules)
 	vmConfig.NoBaseFee = true
 
 	rpcTracer := ptracer.RPCTracer{}
-	vmConfig.Tracer = &tracing.Hooks{
-		OnTxStart: rpcTracer.OnTxStart,
-		OnTxEnd:   rpcTracer.OnTxEnd,
-		OnEnter:   rpcTracer.OnEnter,
-		OnExit:    rpcTracer.OnExit,
-		OnOpcode:  rpcTracer.OnOpcode,
-		OnLog:     rpcTracer.OnLog,
+	vmConfig.Tracer = newDebankTraceHooks(&rpcTracer)
+
+	diffStateDB := newDebankStateDiffDB(pStateDB)
+	pStateDB = evmstore.WrapStateDbWithLogger(diffStateDB, vmConfig.Tracer)
+	pStateDB.BeginBlock(block.NumberU64())
+
+	blockIdx := idx.Block(block.NumberU64())
+	chainConfig := api.b.ChainConfig(blockIdx)
+	rpcTracer.OnBlockStart(evmBlock, chainConfig)
+
+	replayRules := *rules
+	replayRules.Upgrades.GasSubsidies = false
+	replayHeader := block.EvmHeader
+	replayBlock := &evmcore.EvmBlock{
+		EvmHeader:    replayHeader,
+		Transactions: block.Transactions,
+	}
+	var usedGas uint64
+	processed := evmcore.NewStateProcessor(
+		chainConfig,
+		debankHeaderReader{ctx: ctx, b: api.b},
+		replayRules.Upgrades,
+	).Process(replayBlock, pStateDB, vmConfig, block.GasLimit, &usedGas, nil)
+	if err := validateDebankReplayReceipts(block, processed, evmBlockHeader.ReceiptHash, evmBlockHeader.Bloom); err != nil {
+		return nil, err
 	}
 
-	pStateDB = evmstore.WrapStateDbWithLogger(pStateDB, vmConfig.Tracer)
-
-	rpcTracer.OnBlockStart(evmBlock, api.b.ChainConfig(idx.Block(block.NumberU64())))
-
-	var (
-		txs     = block.Transactions
-		signer  = types.MakeSigner(api.b.ChainConfig(idx.Block(block.NumberU64())), block.Number, uint64(block.Time.Unix()))
-		gp      = new(core.GasPool).AddGas(block.GasLimit)
-		usedGas = new(uint64)
-	)
-
-	evm, _, err := api.b.GetEVM(ctx, pStateDB, block.Header(), &vmConfig, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get EVM for tracing: %w", err)
-	}
-
-	// log.Info("trace DebankBlock info", "txs", len(txs), "block", block.NumberU64(), "hash", block.Hash.Hex(), "vmConfig", vmConfig)
-	for i, tx := range txs {
-		msg, err := evmcore.TxAsMessage(tx, signer, block.BaseFee)
-		if err != nil {
-			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+	pStateDB.EndBlock(block.NumberU64())
+	replayedRoot := pStateDB.GetStateHash()
+	if replayedRoot != block.Root {
+		// RPC archive states are non-committable: replay can execute transactions,
+		// but EndBlock cannot apply the block update, so the hash stays at parent.
+		if replayedRoot != parent.Root || parent.Root == block.Root || len(diffStateDB.changes) == 0 {
+			return nil, fmt.Errorf("replayed state root mismatch for block %d: got %s, want %s (txs=%d processed=%d usedGas=%d blockGasUsed=%d)", block.NumberU64(), replayedRoot, block.Root, len(block.Transactions), len(processed), usedGas, block.GasUsed)
 		}
-
-		pStateDB.SetTxContext(tx.Hash(), i)
-
-		receipt, err := evmcore.ApplyTransactionWithEVM(msg, api.b.ChainConfig(idx.Block(block.NumberU64())), gp, pStateDB, evmBlock.Number(), evmBlock.Hash(), tx, usedGas, evm)
-		if err != nil {
-			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+		if err := api.validateDebankReplayPostState(ctx, block, diffStateDB); err != nil {
+			return nil, fmt.Errorf("replayed state root mismatch for block %d: got %s, want %s (txs=%d processed=%d usedGas=%d blockGasUsed=%d); post-state validation failed: %w", block.NumberU64(), replayedRoot, block.Root, len(block.Transactions), len(processed), usedGas, block.GasUsed, err)
 		}
-		receipt.SetEffectiveGasPrice(tx, block.Header().BaseFee)
+		log.Debug("Validated Debank replay against canonical post-state because archive StateDB cannot commit root", "block", block.NumberU64(), "replayedRoot", replayedRoot, "blockRoot", block.Root)
+	}
+	if usedGas != block.GasUsed {
+		return nil, fmt.Errorf("replayed gas used mismatch for block %d: got %d, want %d (txs=%d processed=%d)", block.NumberU64(), usedGas, block.GasUsed, len(block.Transactions), len(processed))
 	}
 
-	res := rpcTracer.GetOutPut(parent.Root, block.Root)
+	res := rpcTracer.GetOutPut(parent.Root, parent.Root)
+	if err := validateDebankBlockFileTxs(block, res.BlockFile.Txs); err != nil {
+		return nil, err
+	}
+	if parent.Root != block.Root {
+		blockDiff := diffStateDB.BuildStateDiff(parent.Root, block.Root)
+		stateDiffBytes, err := util.EncodeToRlp(blockDiff)
+		if err != nil {
+			log.Error("Failed to encode state diff", "err", err)
+			stateDiffBytes = []byte{}
+		}
+		res.StateDiff = stateDiffBytes
+	}
+	res.BlockFile.StorageContracts = mergeStorageContracts(res.BlockFile.StorageContracts, diffStateDB.StorageContractAddresses())
 
 	return res, nil
+}
+
+func (api *DebankAPI) validateDebankReplayPostState(ctx context.Context, block *evmcore.EvmBlock, replayState *debankStateDiffDB) error {
+	postState, _, err := api.b.StateAndHeaderByNumberOrHash(ctx, rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(block.NumberU64())))
+	if err != nil {
+		return err
+	}
+	if postState == nil {
+		return fmt.Errorf("post-state for block %d not found", block.NumberU64())
+	}
+	defer postState.Release()
+	return validateDebankReplayPostStateValues(block.NumberU64(), replayState, postState)
+}
+
+func validateDebankReplayPostStateValues(blockNumber uint64, replayState *debankStateDiffDB, postState state.StateDB) error {
+	addrs := make([]common.Address, 0, len(replayState.changes))
+	for addr := range replayState.changes {
+		addrs = append(addrs, addr)
+	}
+	sort.Slice(addrs, func(i, j int) bool {
+		return strings.Compare(addrs[i].Hex(), addrs[j].Hex()) < 0
+	})
+
+	for _, addr := range addrs {
+		change := replayState.changes[addr]
+		if got, want := replayState.Exist(addr), postState.Exist(addr); got != want {
+			return fmt.Errorf("account existence mismatch for block %d addr %s: got %t, want %t", blockNumber, addr, got, want)
+		}
+		if got, want := replayState.GetNonce(addr), postState.GetNonce(addr); got != want {
+			return fmt.Errorf("account nonce mismatch for block %d addr %s: got %d, want %d", blockNumber, addr, got, want)
+		}
+		if got, want := replayState.GetCodeHash(addr), postState.GetCodeHash(addr); got != want {
+			return fmt.Errorf("account code hash mismatch for block %d addr %s: got %s, want %s", blockNumber, addr, got, want)
+		}
+		if got, want := replayState.GetBalance(addr), postState.GetBalance(addr); got.Cmp(want) != 0 {
+			return fmt.Errorf("account balance mismatch for block %d addr %s: got %s, want %s", blockNumber, addr, got, want)
+		}
+		if change.codeTouched && !bytes.Equal(replayState.GetCode(addr), postState.GetCode(addr)) {
+			return fmt.Errorf("account code mismatch for block %d addr %s", blockNumber, addr)
+		}
+		for key := range change.storage {
+			if got, want := replayState.GetState(addr, key), postState.GetState(addr, key); got != want {
+				return fmt.Errorf("storage mismatch for block %d addr %s slot %s: got %s, want %s", blockNumber, addr, key, got, want)
+			}
+		}
+	}
+	return nil
+}
+
+func validateDebankReplayReceipts(block *evmcore.EvmBlock, processed []evmcore.ProcessedTransaction, receiptHash common.Hash, bloom types.Bloom) error {
+	if len(processed) != len(block.Transactions) {
+		return fmt.Errorf("replayed tx count mismatch for block %d: got %d, want %d", block.NumberU64(), len(processed), len(block.Transactions))
+	}
+	replayReceipts := make(types.Receipts, 0, len(processed))
+	for i, processedTx := range processed {
+		if processedTx.Transaction == nil {
+			return fmt.Errorf("replayed tx %d in block %d has nil transaction", i, block.NumberU64())
+		}
+		if processedTx.Transaction.Hash() != block.Transactions[i].Hash() {
+			return fmt.Errorf("replayed tx %d mismatch for block %d: got %s, want %s", i, block.NumberU64(), processedTx.Transaction.Hash(), block.Transactions[i].Hash())
+		}
+		if processedTx.Receipt == nil {
+			return fmt.Errorf("could not replay tx %d [%v] in block %d", i, processedTx.Transaction.Hash().Hex(), block.NumberU64())
+		}
+		replayReceipts = append(replayReceipts, processedTx.Receipt)
+	}
+	replayedReceiptHash := types.DeriveSha(replayReceipts, trie.NewStackTrie(nil))
+	if replayedReceiptHash != receiptHash {
+		return fmt.Errorf("replayed receipt root mismatch for block %d: got %s, want %s (txs=%d)", block.NumberU64(), replayedReceiptHash, receiptHash, len(block.Transactions))
+	}
+	replayedBloom := types.MergeBloom(replayReceipts)
+	if replayedBloom != bloom {
+		return fmt.Errorf("replayed logs bloom mismatch for block %d", block.NumberU64())
+	}
+	return nil
+}
+
+func validateDebankBlockFileTxs(block *evmcore.EvmBlock, txs []ptypes.Transaction) error {
+	if len(txs) != len(block.Transactions) {
+		return fmt.Errorf("block_file tx count mismatch for block %d: got %d, want %d", block.NumberU64(), len(txs), len(block.Transactions))
+	}
+	for i, tx := range block.Transactions {
+		if txs[i].ID != tx.Hash().Hex() {
+			return fmt.Errorf("block_file tx %d id mismatch for block %d: got %s, want %s", i, block.NumberU64(), txs[i].ID, tx.Hash().Hex())
+		}
+	}
+	return nil
+}
+
+func mergeStorageContracts(base []string, extra []string) []string {
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	merged := make([]string, 0, len(base)+len(extra))
+	for _, addr := range base {
+		key := strings.ToLower(addr)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, key)
+	}
+	for _, addr := range extra {
+		key := strings.ToLower(addr)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, key)
+	}
+	return merged
 }
