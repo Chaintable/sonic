@@ -526,13 +526,40 @@ func applyTransaction(
 	evm *vm.EVM,
 	onNewLog func(*types.Log),
 ) (
-	*types.Receipt,
-	uint64,
-	error,
+	receipt *types.Receipt,
+	gas uint64,
+	err error,
 ) {
 	if hooks := evm.Config.Tracer; hooks != nil {
+		var (
+			txHasTopCall bool
+			onEnter      = hooks.OnEnter
+		)
+		if onEnter != nil {
+			hooks.OnEnter = func(depth int, typ byte, from common.Address, to common.Address, input []byte, gas uint64, value *big.Int) {
+				if depth == 0 {
+					txHasTopCall = true
+				}
+				onEnter(depth, typ, from, to, input, gas, value)
+			}
+			defer func() {
+				hooks.OnEnter = onEnter
+			}()
+		}
 		if hooks.OnTxStart != nil {
 			hooks.OnTxStart(evm.GetVMContext(), tx, msg.From)
+		}
+		if hooks.OnTxEnd != nil {
+			defer func() {
+				if receipt == nil {
+					return
+				}
+				if onEnter != nil && err == nil && !txHasTopCall {
+					return
+				}
+				receipt.SetEffectiveGasPrice(tx, evm.Context.BaseFee)
+				hooks.OnTxEnd(receipt, err)
+			}()
 		}
 	}
 	// Create a new context to be used in the EVM environment.
@@ -584,7 +611,7 @@ func applyTransaction(
 
 	// Create a new receipt for the transaction, storing the intermediate root and gas used
 	// by the tx.
-	receipt := &types.Receipt{Type: tx.Type(), CumulativeGasUsed: *usedGas}
+	receipt = &types.Receipt{Type: tx.Type(), CumulativeGasUsed: *usedGas}
 	if result.Failed() {
 		receipt.Status = types.ReceiptStatusFailed
 	} else {
@@ -603,12 +630,6 @@ func applyTransaction(
 	receipt.Bloom = types.CreateBloom(receipt)
 	receipt.BlockNumber = blockNumber
 	receipt.TransactionIndex = uint(statedb.TxIndex())
-
-	//if hooks := evm.Config.Tracer; hooks != nil {
-	//	if hooks.OnTxEnd != nil {
-	//		defer func() { hooks.OnTxEnd(receipt, err) }()
-	//	}
-	//}
 
 	return receipt, result.UsedGas, nil
 }

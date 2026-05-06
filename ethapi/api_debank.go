@@ -3,18 +3,19 @@ package ethapi
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"strings"
 	"time"
 
 	"github.com/0xsoniclabs/sonic/evmcore"
 	"github.com/0xsoniclabs/sonic/gossip/evmstore"
 	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/opera"
 	ptracer "github.com/Chaintable/pipeline/tracer"
 	ptypes "github.com/Chaintable/pipeline/types"
 	"github.com/Chaintable/pipeline/util"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -29,6 +30,30 @@ func NewDebankAPI(b Backend) *DebankAPI {
 	return &DebankAPI{
 		b: b,
 	}
+}
+
+type debankHeaderReader struct {
+	ctx context.Context
+	b   Backend
+}
+
+func (r debankHeaderReader) GetHeader(hash common.Hash, number uint64) *evmcore.EvmHeader {
+	if hash != (common.Hash{}) {
+		header, err := r.b.HeaderByHash(r.ctx, hash)
+		if err == nil && header != nil {
+			return header
+		}
+	}
+
+	header, err := r.b.HeaderByNumber(r.ctx, rpc.BlockNumber(number))
+	if err != nil {
+		log.Warn("Failed to read header for Debank replay", "number", number, "hash", hash, "err", err)
+		return nil
+	}
+	if hash != (common.Hash{}) && header != nil && header.Hash != hash {
+		return nil
+	}
+	return header
 }
 
 func (api *DebankAPI) getBlockReceipts(ctx context.Context, blkNumber rpc.BlockNumber) (types.Receipts, error) {
@@ -142,11 +167,14 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	}
 	defer pStateDB.Release()
 
-	vmConfig, err := GetVmConfig(ctx, api.b, idx.Block(block.NumberU64()))
+	rules, err := api.b.GetNetworkRules(ctx, idx.Block(block.NumberU64()))
 	if err != nil {
-		return nil, fmt.Errorf("failed to get vm config: %w", err)
+		return nil, fmt.Errorf("failed to get network rules: %w", err)
 	}
-	vmConfig.NoBaseFee = true
+	if rules == nil {
+		return nil, fmt.Errorf("no network rules found for block height %d", block.NumberU64())
+	}
+	vmConfig := opera.GetVmConfig(*rules)
 
 	rpcTracer := ptracer.RPCTracer{}
 	vmConfig.Tracer = newDebankTraceHooks(&rpcTracer)
@@ -155,43 +183,37 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	pStateDB = evmstore.WrapStateDbWithLogger(diffStateDB, vmConfig.Tracer)
 	pStateDB.BeginBlock(block.NumberU64())
 
-	rpcTracer.OnBlockStart(evmBlock, api.b.ChainConfig(idx.Block(block.NumberU64())))
+	blockIdx := idx.Block(block.NumberU64())
+	chainConfig := api.b.ChainConfig(blockIdx)
+	rpcTracer.OnBlockStart(evmBlock, chainConfig)
 
-	var (
-		txs     = block.Transactions
-		signer  = types.MakeSigner(api.b.ChainConfig(idx.Block(block.NumberU64())), block.Number, uint64(block.Time.Unix()))
-		gp      = new(core.GasPool).AddGas(block.GasLimit)
-		usedGas = new(uint64)
-	)
-
-	evm, _, err := api.b.GetEVM(ctx, pStateDB, block.Header(), &vmConfig, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get EVM for tracing: %w", err)
+	replayRules := *rules
+	replayRules.Upgrades.GasSubsidies = false
+	replayHeader := block.EvmHeader
+	replayHeader.BaseFee = new(big.Int)
+	replayBlock := &evmcore.EvmBlock{
+		EvmHeader:    replayHeader,
+		Transactions: block.Transactions,
 	}
-
-	if api.b.ChainConfig(idx.Block(block.NumberU64())).IsPrague(block.Number, uint64(block.Time.Unix())) {
-		evmcore.ProcessParentBlockHash(block.ParentHash, evm, pStateDB)
-	}
-
-	// log.Info("trace DebankBlock info", "txs", len(txs), "block", block.NumberU64(), "hash", block.Hash.Hex(), "vmConfig", vmConfig)
-	for i, tx := range txs {
-		msg, err := evmcore.TxAsMessage(tx, signer, block.BaseFee)
-		if err != nil {
-			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
-		}
-
-		pStateDB.SetTxContext(tx.Hash(), i)
-
-		_, err = evmcore.ApplyTransactionWithEVM(msg, api.b.ChainConfig(idx.Block(block.NumberU64())), gp, pStateDB, evmBlock.Number(), evmBlock.Hash(), tx, usedGas, evm)
-		if err != nil {
-			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+	var usedGas uint64
+	processed := evmcore.NewStateProcessor(
+		chainConfig,
+		debankHeaderReader{ctx: ctx, b: api.b},
+		replayRules.Upgrades,
+	).Process(replayBlock, pStateDB, vmConfig, block.GasLimit, &usedGas, nil)
+	for i, processedTx := range processed {
+		if processedTx.Receipt == nil {
+			return nil, fmt.Errorf("could not replay tx %d [%v] in block %d", i, processedTx.Transaction.Hash().Hex(), block.NumberU64())
 		}
 	}
 
 	pStateDB.EndBlock(block.NumberU64())
 	replayedRoot := pStateDB.GetStateHash()
 	if replayedRoot != block.Root {
-		return nil, fmt.Errorf("replayed state root mismatch for block %d: got %s, want %s", block.NumberU64(), replayedRoot, block.Root)
+		return nil, fmt.Errorf("replayed state root mismatch for block %d: got %s, want %s (txs=%d processed=%d usedGas=%d blockGasUsed=%d)", block.NumberU64(), replayedRoot, block.Root, len(block.Transactions), len(processed), usedGas, block.GasUsed)
+	}
+	if usedGas != block.GasUsed {
+		return nil, fmt.Errorf("replayed gas used mismatch for block %d: got %d, want %d (txs=%d processed=%d)", block.NumberU64(), usedGas, block.GasUsed, len(block.Transactions), len(processed))
 	}
 
 	res := rpcTracer.GetOutPut(parent.Root, parent.Root)
