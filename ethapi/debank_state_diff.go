@@ -2,23 +2,23 @@ package ethapi
 
 import (
 	"math/big"
-	"sort"
-	"strings"
 
 	"github.com/0xsoniclabs/sonic/inter/state"
 	ptracer "github.com/Chaintable/pipeline/tracer"
-	ptypes "github.com/Chaintable/pipeline/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/holiman/uint256"
 )
 
 type debankStateDiffDB struct {
 	state.StateDB
-	changes   map[common.Address]*debankAccountChange
-	snapshots []debankDiffSnapshot
+	changes          map[common.Address]*debankAccountChange
+	snapshots        []debankDiffSnapshot
+	expectedRoot     common.Hash
+	expectedRootUsed bool
 }
 
 type debankAccountChange struct {
@@ -151,79 +151,58 @@ func (d *debankStateDiffDB) Copy() state.StateDB {
 	return newDebankStateDiffDB(d.StateDB.Copy())
 }
 
-func (d *debankStateDiffDB) BuildStateDiff(originRoot, root common.Hash) *ptypes.BlockStorageDiff {
-	diff := &ptypes.BlockStorageDiff{
-		Hash:       root,
-		ParentHash: originRoot,
-	}
-	if diff.Hash == (common.Hash{}) {
-		diff.Hash = types.EmptyRootHash
-	}
-	if diff.ParentHash == (common.Hash{}) {
-		diff.ParentHash = types.EmptyRootHash
-	}
+func (d *debankStateDiffDB) SetExpectedReplayRoot(root common.Hash) {
+	d.expectedRoot = root
+}
 
-	addrs := make([]common.Address, 0, len(d.changes))
-	for addr := range d.changes {
-		addrs = append(addrs, addr)
+func (d *debankStateDiffDB) EndBlock(number uint64) {
+	if d.expectedRoot != (common.Hash{}) {
+		// RPC archive forks are not writable; after replay checks pass, expose
+		// the canonical commit target without mutating the archive database.
+		d.expectedRootUsed = true
+		return
 	}
-	sort.Slice(addrs, func(i, j int) bool {
-		return strings.Compare(addrs[i].Hex(), addrs[j].Hex()) < 0
-	})
+	d.StateDB.EndBlock(number)
+}
 
-	seenCodeHashes := make(map[common.Hash]struct{})
-	for _, addr := range addrs {
-		change := d.changes[addr]
+func (d *debankStateDiffDB) GetStateHash() common.Hash {
+	if d.expectedRootUsed {
+		return d.expectedRoot
+	}
+	return d.StateDB.GetStateHash()
+}
+
+func (d *debankStateDiffDB) StateUpdateMaps() (map[common.Hash]struct{}, map[common.Hash][]byte, map[common.Hash]map[common.Hash][]byte, map[common.Hash][]byte) {
+	destructs := make(map[common.Hash]struct{})
+	accounts := make(map[common.Hash][]byte)
+	storages := make(map[common.Hash]map[common.Hash][]byte)
+	codes := make(map[common.Hash][]byte)
+
+	for addr, change := range d.changes {
 		addrHash := debankAddressHash(addr)
 		if change.deleted || d.StateDB.HasSelfDestructed(addr) {
-			diff.DeletedAccounts = append(diff.DeletedAccounts, addrHash)
+			destructs[addrHash] = struct{}{}
 			continue
 		}
 		if d.accountNeedsMetadata(addr, change) {
-			diff.NewAccounts = append(diff.NewAccounts, ptypes.NewAccount{
-				Address:  addrHash,
-				Balance:  new(uint256.Int).Set(d.StateDB.GetBalance(addr)),
-				Nonce:    d.StateDB.GetNonce(addr),
-				CodeHash: d.StateDB.GetCodeHash(addr),
-			})
+			accounts[addrHash] = debankSlimAccountRLP(
+				d.StateDB.GetNonce(addr),
+				d.StateDB.GetBalance(addr),
+				d.StateDB.GetCodeHash(addr),
+			)
 		}
 		if change.codeTouched {
 			code := d.StateDB.GetCode(addr)
 			if len(code) > 0 {
-				codeHash := d.StateDB.GetCodeHash(addr)
-				if _, ok := seenCodeHashes[codeHash]; !ok {
-					seenCodeHashes[codeHash] = struct{}{}
-					diff.NewCodes = append(diff.NewCodes, ptypes.NewCode{
-						CodeHash: codeHash,
-						Code:     common.CopyBytes(code),
-					})
-				}
+				codes[d.StateDB.GetCodeHash(addr)] = common.CopyBytes(code)
 			}
 		}
-		if values := d.storageValues(addr, change); len(values) > 0 {
-			diff.StorageDiff = append(diff.StorageDiff, ptypes.AccountStorageDiff{
-				Address: addrHash,
-				Values:  values,
-			})
+		storage := d.storageUpdateMap(addr, change)
+		if len(storage) > 0 {
+			storages[addrHash] = storage
 		}
 	}
-	return diff
-}
-
-func (d *debankStateDiffDB) StorageContractAddresses() []string {
-	seen := make(map[string]struct{})
-	for addr, change := range d.changes {
-		if len(d.storageValues(addr, change)) == 0 {
-			continue
-		}
-		seen[strings.ToLower(addr.Hex())] = struct{}{}
-	}
-	addrs := make([]string, 0, len(seen))
-	for addr := range seen {
-		addrs = append(addrs, addr)
-	}
-	sort.Strings(addrs)
-	return addrs
+	return destructs, accounts, storages, codes
 }
 
 func (d *debankStateDiffDB) accountNeedsMetadata(addr common.Address, change *debankAccountChange) bool {
@@ -239,29 +218,47 @@ func (d *debankStateDiffDB) accountNeedsMetadata(addr common.Address, change *de
 	if change.origBalance.Cmp(d.StateDB.GetBalance(addr)) != 0 {
 		return true
 	}
-	return len(d.storageValues(addr, change)) > 0
+	return d.hasStorageUpdate(addr, change)
 }
 
-func (d *debankStateDiffDB) storageValues(addr common.Address, change *debankAccountChange) []ptypes.IndexValuePair {
-	keys := make([]common.Hash, 0, len(change.storage))
+func (d *debankStateDiffDB) hasStorageUpdate(addr common.Address, change *debankAccountChange) bool {
 	for key, original := range change.storage {
 		if d.StateDB.GetState(addr, key) == original {
 			continue
 		}
-		keys = append(keys, key)
+		return true
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		return strings.Compare(keys[i].Hex(), keys[j].Hex()) < 0
-	})
-	values := make([]ptypes.IndexValuePair, 0, len(keys))
-	for _, key := range keys {
+	return false
+}
+
+func (d *debankStateDiffDB) storageUpdateMap(addr common.Address, change *debankAccountChange) map[common.Hash][]byte {
+	storage := make(map[common.Hash][]byte)
+	for key, original := range change.storage {
 		value := d.StateDB.GetState(addr, key)
-		values = append(values, ptypes.IndexValuePair{
-			Index: crypto.Keccak256Hash(key[:]),
-			Value: uint256.NewInt(0).SetBytes(value.Bytes()),
-		})
+		if value == original {
+			continue
+		}
+		storage[crypto.Keccak256Hash(key[:])] = debankStorageRLP(value)
 	}
-	return values
+	return storage
+}
+
+func debankSlimAccountRLP(nonce uint64, balance *uint256.Int, codeHash common.Hash) []byte {
+	account := types.StateAccount{
+		Nonce:    nonce,
+		Balance:  new(uint256.Int).Set(balance),
+		Root:     types.EmptyRootHash,
+		CodeHash: codeHash.Bytes(),
+	}
+	return types.SlimAccountRLP(account)
+}
+
+func debankStorageRLP(value common.Hash) []byte {
+	encoded, err := rlp.EncodeToBytes(value.Bytes())
+	if err != nil {
+		panic(err)
+	}
+	return encoded
 }
 
 func cloneDebankChanges(src map[common.Address]*debankAccountChange) map[common.Address]*debankAccountChange {

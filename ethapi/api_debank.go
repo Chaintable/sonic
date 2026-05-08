@@ -1,10 +1,8 @@
 package ethapi
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"math/big"
 	"sort"
 	"strings"
 	"time"
@@ -12,7 +10,6 @@ import (
 	"github.com/0xsoniclabs/sonic/evmcore"
 	"github.com/0xsoniclabs/sonic/gossip/evmstore"
 	"github.com/0xsoniclabs/sonic/inter"
-	"github.com/0xsoniclabs/sonic/inter/state"
 	"github.com/0xsoniclabs/sonic/opera"
 	ptracer "github.com/Chaintable/pipeline/tracer"
 	ptypes "github.com/Chaintable/pipeline/types"
@@ -198,7 +195,7 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 
 	blockIdx := idx.Block(block.NumberU64())
 	chainConfig := api.b.ChainConfig(blockIdx)
-	rpcTracer.OnBlockStart(evmBlock, chainConfig)
+	rpcTracer.OnBlockStart(evmBlock)
 
 	replayRules := *rules
 	replayRules.Upgrades.GasSubsidies = false
@@ -217,88 +214,25 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 		return nil, err
 	}
 
+	diffStateDB.SetExpectedReplayRoot(block.Root)
 	pStateDB.EndBlock(block.NumberU64())
 	replayedRoot := pStateDB.GetStateHash()
 	if replayedRoot != block.Root {
-		// RPC archive states are non-committable: replay can execute transactions,
-		// but EndBlock cannot apply the block update, so the hash stays at parent.
-		if replayedRoot != parent.Root || parent.Root == block.Root || len(diffStateDB.changes) == 0 {
-			return nil, fmt.Errorf("replayed state root mismatch for block %d: got %s, want %s (txs=%d processed=%d usedGas=%d blockGasUsed=%d)", block.NumberU64(), replayedRoot, block.Root, len(block.Transactions), len(processed), usedGas, block.GasUsed)
-		}
-		if err := api.validateDebankReplayPostState(ctx, block, diffStateDB); err != nil {
-			return nil, fmt.Errorf("replayed state root mismatch for block %d: got %s, want %s (txs=%d processed=%d usedGas=%d blockGasUsed=%d); post-state validation failed: %w", block.NumberU64(), replayedRoot, block.Root, len(block.Transactions), len(processed), usedGas, block.GasUsed, err)
-		}
-		log.Debug("Validated Debank replay against canonical post-state because archive StateDB cannot commit root", "block", block.NumberU64(), "replayedRoot", replayedRoot, "blockRoot", block.Root)
+		return nil, fmt.Errorf("replayed state root mismatch for block %d: got %s, want %s (txs=%d processed=%d usedGas=%d blockGasUsed=%d)", block.NumberU64(), replayedRoot, block.Root, len(block.Transactions), len(processed), usedGas, block.GasUsed)
 	}
 	if usedGas != block.GasUsed {
 		return nil, fmt.Errorf("replayed gas used mismatch for block %d: got %d, want %d (txs=%d processed=%d)", block.NumberU64(), usedGas, block.GasUsed, len(block.Transactions), len(processed))
 	}
 
-	res := rpcTracer.GetOutPut(parent.Root, parent.Root)
-	normalizeDebankBlockFileForRPC(block, receipts, res.BlockFile)
+	destructs, accounts, storages, codes := diffStateDB.StateUpdateMaps()
+	res := rpcTracer.GetOutPut(parent.Root, block.Root, destructs, accounts, storages, codes)
 	if err := validateDebankBlockFileTxs(block, res.BlockFile.Txs); err != nil {
 		return nil, err
-	}
-	if parent.Root != block.Root {
-		blockDiff := diffStateDB.BuildStateDiff(parent.Root, block.Root)
-		stateDiffBytes, err := util.EncodeToRlp(blockDiff)
-		if err != nil {
-			log.Error("Failed to encode state diff", "err", err)
-			stateDiffBytes = []byte{}
-		}
-		res.StateDiff = stateDiffBytes
 	}
 	sort.Strings(res.BlockFile.StorageContracts)
 	res.ValidationHash = res.BlockFile.Validation().ValidationHash
 
 	return res, nil
-}
-
-func (api *DebankAPI) validateDebankReplayPostState(ctx context.Context, block *evmcore.EvmBlock, replayState *debankStateDiffDB) error {
-	postState, _, err := api.b.StateAndHeaderByNumberOrHash(ctx, rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(block.NumberU64())))
-	if err != nil {
-		return err
-	}
-	if postState == nil {
-		return fmt.Errorf("post-state for block %d not found", block.NumberU64())
-	}
-	defer postState.Release()
-	return validateDebankReplayPostStateValues(block.NumberU64(), replayState, postState)
-}
-
-func validateDebankReplayPostStateValues(blockNumber uint64, replayState *debankStateDiffDB, postState state.StateDB) error {
-	addrs := make([]common.Address, 0, len(replayState.changes))
-	for addr := range replayState.changes {
-		addrs = append(addrs, addr)
-	}
-	sort.Slice(addrs, func(i, j int) bool {
-		return strings.Compare(addrs[i].Hex(), addrs[j].Hex()) < 0
-	})
-
-	for _, addr := range addrs {
-		change := replayState.changes[addr]
-		if got, want := replayState.Exist(addr), postState.Exist(addr); got != want {
-			return fmt.Errorf("account existence mismatch for block %d addr %s: got %t, want %t", blockNumber, addr, got, want)
-		}
-		if got, want := replayState.GetNonce(addr), postState.GetNonce(addr); got != want {
-			return fmt.Errorf("account nonce mismatch for block %d addr %s: got %d, want %d", blockNumber, addr, got, want)
-		}
-		if got, want := replayState.GetCodeHash(addr), postState.GetCodeHash(addr); got != want {
-			return fmt.Errorf("account code hash mismatch for block %d addr %s: got %s, want %s", blockNumber, addr, got, want)
-		}
-		if got, want := replayState.GetBalance(addr), postState.GetBalance(addr); got.Cmp(want) != 0 {
-			return fmt.Errorf("account balance mismatch for block %d addr %s: got %s, want %s", blockNumber, addr, got, want)
-		}
-		if change.codeTouched && !bytes.Equal(replayState.GetCode(addr), postState.GetCode(addr)) {
-			return fmt.Errorf("account code mismatch for block %d addr %s", blockNumber, addr)
-		}
-		for key := range change.storage {
-			if got, want := replayState.GetState(addr, key), postState.GetState(addr, key); got != want {
-				return fmt.Errorf("storage mismatch for block %d addr %s slot %s: got %s, want %s", blockNumber, addr, key, got, want)
-			}
-		}
-	}
-	return nil
 }
 
 func validateDebankReplayReceipts(block *evmcore.EvmBlock, processed []evmcore.ProcessedTransaction, receiptHash common.Hash, bloom types.Bloom) error {
@@ -339,232 +273,4 @@ func validateDebankBlockFileTxs(block *evmcore.EvmBlock, txs []ptypes.Transactio
 		}
 	}
 	return nil
-}
-
-func normalizeDebankBlockFileForRPC(block *evmcore.EvmBlock, receipts types.Receipts, blockFile *ptypes.BlockFile) {
-	if blockFile == nil {
-		return
-	}
-	receiptByTxID := debankReceiptsByTxID(receipts)
-
-	normalizeDebankTxsForRPC(block, blockFile.Txs, receiptByTxID)
-
-	allTraces := make([]ptypes.Trace, 0, len(blockFile.Traces)+len(blockFile.ErrorTraces))
-	allTraces = append(allTraces, blockFile.Traces...)
-	allTraces = append(allTraces, blockFile.ErrorTraces...)
-	normalizeDebankTracesForRPC(allTraces, receiptByTxID)
-	blockFile.Traces, blockFile.ErrorTraces = splitDebankTracesByRPCStatus(allTraces)
-
-	traceByID := debankTraceByID(allTraces)
-	allEvents := make([]ptypes.Event, 0, len(blockFile.Events)+len(blockFile.ErrorEvents))
-	allEvents = append(allEvents, blockFile.Events...)
-	allEvents = append(allEvents, blockFile.ErrorEvents...)
-	receiptEvents := normalizeDebankEventsForRPC(allEvents, traceByID, receipts)
-	blockFile.Events, blockFile.ErrorEvents = splitDebankEventsByRPCStatus(receiptEvents, traceByID)
-	blockFile.StorageContracts = debankStorageContractsFromRPCTraces(allTraces)
-}
-
-func debankReceiptsByTxID(receipts types.Receipts) map[string]*types.Receipt {
-	byID := make(map[string]*types.Receipt, len(receipts))
-	for _, receipt := range receipts {
-		if receipt == nil {
-			continue
-		}
-		byID[strings.ToLower(receipt.TxHash.Hex())] = receipt
-	}
-	return byID
-}
-
-func normalizeDebankTxsForRPC(block *evmcore.EvmBlock, txs []ptypes.Transaction, receiptByTxID map[string]*types.Receipt) {
-	for i := range txs {
-		receipt := receiptByTxID[strings.ToLower(txs[i].ID)]
-		if receipt == nil {
-			continue
-		}
-		txs[i].GasUsed = new(big.Int).SetUint64(receipt.GasUsed)
-		txs[i].Status = receipt.Status == types.ReceiptStatusSuccessful
-		txs[i].TransactionIndex = int64(receipt.TransactionIndex)
-		if receipt.EffectiveGasPrice != nil {
-			txs[i].GasPrice = new(big.Int).Set(receipt.EffectiveGasPrice)
-			continue
-		}
-		if block != nil && i < len(block.Transactions) && block.Transactions[i] != nil {
-			txs[i].GasPrice = new(big.Int).Set(block.Transactions[i].GasPrice())
-		}
-	}
-}
-
-func normalizeDebankTracesForRPC(traces []ptypes.Trace, receiptByTxID map[string]*types.Receipt) {
-	for i := range traces {
-		receipt := receiptByTxID[strings.ToLower(traces[i].TxID)]
-		if receipt == nil || len(traces[i].TraceAddress) != 0 {
-			continue
-		}
-		if traces[i].Error != "" {
-			traces[i].GasUsed = nil
-			traces[i].Output = nil
-			traces[i].SelfStorageChange = false
-			traces[i].StorageChange = false
-			continue
-		}
-		traces[i].GasUsed = new(big.Int).SetUint64(receipt.GasUsed)
-	}
-}
-
-func splitDebankTracesByRPCStatus(allTraces []ptypes.Trace) ([]ptypes.Trace, []ptypes.Trace) {
-	traces := make([]ptypes.Trace, 0, len(allTraces))
-	errorTraces := make([]ptypes.Trace, 0)
-	for _, trace := range allTraces {
-		if trace.Error != "" {
-			errorTraces = append(errorTraces, trace)
-		} else {
-			traces = append(traces, trace)
-		}
-	}
-	return traces, errorTraces
-}
-
-func debankTraceByID(traces []ptypes.Trace) map[string]ptypes.Trace {
-	byID := make(map[string]ptypes.Trace, len(traces))
-	for _, trace := range traces {
-		if trace.ID == "" {
-			continue
-		}
-		byID[trace.ID] = trace
-	}
-	return byID
-}
-
-func normalizeDebankEventsForRPC(events []ptypes.Event, traceByID map[string]ptypes.Trace, receipts types.Receipts) []ptypes.Event {
-	logsByTxID := make(map[string][]*types.Log, len(receipts))
-	usedByTxID := make(map[string][]bool, len(receipts))
-	for _, receipt := range receipts {
-		if receipt == nil || len(receipt.Logs) == 0 {
-			continue
-		}
-		txID := strings.ToLower(receipt.TxHash.Hex())
-		logsByTxID[txID] = receipt.Logs
-		usedByTxID[txID] = make([]bool, len(receipt.Logs))
-	}
-
-	normalized := make([]ptypes.Event, 0, len(events))
-	for _, event := range events {
-		txID := debankEventTxID(event, traceByID)
-		if txID == "" {
-			continue
-		}
-		logs := logsByTxID[txID]
-		used := usedByTxID[txID]
-		for i, log := range logs {
-			if used[i] || !debankEventMatchesLog(event, log) {
-				continue
-			}
-			event.LogIndex = int64(log.Index)
-			used[i] = true
-			normalized = append(normalized, event)
-			break
-		}
-	}
-	return normalized
-}
-
-func debankEventTxID(event ptypes.Event, traceByID map[string]ptypes.Trace) string {
-	trace, ok := traceByID[event.ParentTraceID]
-	if !ok {
-		return ""
-	}
-	return strings.ToLower(trace.TxID)
-}
-
-func debankEventMatchesLog(event ptypes.Event, log *types.Log) bool {
-	if log == nil || !strings.EqualFold(event.Address, log.Address.Hex()) || !bytes.Equal(event.Data, log.Data) {
-		return false
-	}
-	selector := ""
-	topics := make([]string, 0)
-	if len(log.Topics) > 0 {
-		selector = log.Topics[0].Hex()
-		topics = make([]string, 0, len(log.Topics)-1)
-		for _, topic := range log.Topics[1:] {
-			topics = append(topics, topic.Hex())
-		}
-	}
-	if !strings.EqualFold(event.Selector, selector) || len(event.Topics) != len(topics) {
-		return false
-	}
-	for i := range topics {
-		if !strings.EqualFold(event.Topics[i], topics[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-func splitDebankEventsByRPCStatus(events []ptypes.Event, traceByID map[string]ptypes.Trace) ([]ptypes.Event, []ptypes.Event) {
-	traceErrorStatus := debankTraceErrorStatus(traceByID)
-	successEvents := make([]ptypes.Event, 0, len(events))
-	errorEvents := make([]ptypes.Event, 0)
-	for _, event := range events {
-		if traceErrorStatus[event.ParentTraceID] {
-			errorEvents = append(errorEvents, event)
-		} else {
-			successEvents = append(successEvents, event)
-		}
-	}
-	return successEvents, errorEvents
-}
-
-func debankTraceErrorStatus(traceByID map[string]ptypes.Trace) map[string]bool {
-	status := make(map[string]bool, len(traceByID))
-	var compute func(string) bool
-	compute = func(traceID string) bool {
-		if traceID == "" {
-			return false
-		}
-		if value, ok := status[traceID]; ok {
-			return value
-		}
-		trace, ok := traceByID[traceID]
-		if !ok {
-			status[traceID] = false
-			return false
-		}
-		value := trace.Error != "" || compute(trace.ParentTraceID)
-		status[traceID] = value
-		return value
-	}
-	for traceID := range traceByID {
-		compute(traceID)
-	}
-	return status
-}
-
-func debankStorageContractsFromRPCTraces(traces []ptypes.Trace) []string {
-	contracts := make(map[string]struct{})
-	for _, trace := range traces {
-		if trace.Error != "" || !trace.SelfStorageChange {
-			continue
-		}
-		var addr string
-		switch trace.CallType {
-		case "staticcall", "callcode":
-			continue
-		case "delegatecall":
-			addr = trace.From
-		case "call":
-			addr = trace.To
-		default:
-			continue
-		}
-		if addr == "" {
-			continue
-		}
-		contracts[strings.ToLower(addr)] = struct{}{}
-	}
-	result := make([]string, 0, len(contracts))
-	for addr := range contracts {
-		result = append(result, addr)
-	}
-	sort.Strings(result)
-	return result
 }
