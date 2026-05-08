@@ -2,10 +2,8 @@ github.com/0xsoniclabs/carmen/go v0.0.0-20250708101910-3666ec34654c h1:xWV02BKxk
 github.com/0xsoniclabs/carmen/go v0.0.0-20250708101910-3666ec34654c/go.mod h1:pOYoZnXK6Dacga5Yoh7/38ibbOJ57/B3Q54zMxWtqG8=
 github.com/0xsoniclabs/tosca v0.0.0-20260224095910-31d2f9b784f0 h1:BEKgH4oTLWSz3oe5jAvqgQzvsatjgb+FDEUtlioava4=
 github.com/0xsoniclabs/tosca v0.0.0-20260224095910-31d2f9b784f0/go.mod h1:JmMMxsmviQMvhIinh4wayiEIk+e/kRHrbWvgt3ctrL4=
-github.com/Chaintable/go-ethereum-sonic v0.0.0-20260407013020-b698cab4fb8d h1:JzWvX4MI39Xpm43WB5Hll1hqnxQXKg3OCYecxvfl5nQ=
-github.com/Chaintable/go-ethereum-sonic v0.0.0-20260407013020-b698cab4fb8d/go.mod h1:IuF0RJo7Itwvn4/AAVLLJ7AtwV7Sf5j9B86P2N0arEI=
-github.com/Chaintable/pipeline v0.0.53-sonic-v1.14.8-debank-1.0.20250918085438-798a72da2151 h1:Aj3iLsE6dy3s52e0pIi/WI9+z3qk3FweQMSaLfaKepg=
-github.com/Chaintable/pipeline v0.0.53-sonic-v1.14.8-debank-1.0.20250918085438-798a72da2151/go.mod h1:Mp8MR0WngBp6zjpHLE5lw/S9fYC7eY+KjaZZyQ36Eco=
+github.com/Chaintable/go-ethereum-sonic v0.0.0-20260508154537-b1aefb6f2091 h1:AaNQVy8sbYuCiUtaDVYSZnA9hBKVfLuUO/DwSrKAps0=
+github.com/Chaintable/go-ethereum-sonic v0.0.0-20260508154537-b1aefb6f2091/go.mod h1:w0+LTgi2jewbpzbX2cYpVQ7K5teqmS4EHEzO9GFwJq0=
 github.com/Chaintable/pipeline v0.0.63 h1:CO6MUriiK0+1YZab/KqJciEIq05YsLeaZ5NYHkhtrgI=
 github.com/Chaintable/pipeline v0.0.63/go.mod h1:l0GT8LwhbRwaxrLze5FjDv3lHgxxqdf9opAVjJtXNh4=
 github.com/DataDog/zstd v1.5.6 h1:LbEglqepa/ipmmQJUDnSsfvA8e8IStVcGaFWDuxvGOY=
@@ -171,8 +169,8 @@ github.com/golang/snappy v1.0.0/go.mod h1:/XxbfmMg8lxefKM7IXC3fBNl/7bRcc72aCRzEW
 github.com/google/go-cmp v0.3.0/go.mod h1:8QqcDgzrUqlUb/G2PQTWiueGozuR1884gddMywk6iLU=
 github.com/google/go-cmp v0.3.1/go.mod h1:8QqcDgzrUqlUb/G2PQTWiueGozuR1884gddMywk6iLU=
 github.com/google/go-cmp v0.4.0/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
-github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
-github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
+github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
+github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
 github.com/google/gofuzz v1.2.0 h1:xRy4A+RhZaiKjJ1bPfwQ8sedCA+YS2YcCHW6ec7JMi0=
 github.com/google/gofuzz v1.2.0/go.mod h1:dBl0BpW6vV/+mYPU4Po3pmUjxk6FQPldtuIdl/M65Eg=
 github.com/google/pprof v0.0.0-20240910150728-a0b0bb1d4134 h1:c5FlPPgxOn7kJz3VoPLkQYQXGBS3EklQ4Zfi57uOuqQ=
@@ -361,6 +359,8 @@ go.etcd.io/etcd/client/pkg/v3 v3.5.10 h1:kfYIdQftBnbAq8pUWFXfpuuxFSKzlmM5cSn76JB
 go.etcd.io/etcd/client/pkg/v3 v3.5.10/go.mod h1:DYivfIviIuQ8+/lCq4vcxuseg2P2XbHygkKwFo9fc8U=
 go.etcd.io/etcd/client/v3 v3.5.10 h1:W9TXNZ+oB3MCd/8UjxHTWK5J9Nquw9fQBLJd5ne5/Ao=
 go.etcd.io/etcd/client/v3 v3.5.10/go.mod h1:RVeBnDz2PUEZqTpgqwAtUd8nAPf5kjyFyND7P1VkOKc=
+go.uber.org/goleak v1.3.0 h1:2K3zAYmnTNqV73imy9J1T3WC+gmCePx2hEGkimedGto=
+go.uber.org/goleak v1.3.0/go.mod h1:CoHD4mav9JJNrW/WLlf7HGZPjdw8EucARQHekz1X6bE=
 go.uber.org/mock v0.4.0 h1:VcM4ZOtdbR4f6VXfiOpwpVJDL6lCReaZ6mw31wqh7KU=
 go.uber.org/mock v0.4.0/go.mod h1:a6FSlNadKUHUa9IP5Vyt1zh4fC7uAwxMutEAscFbkZc=
 go.uber.org/multierr v1.11.0 h1:blXXJkSxSSfBVBlC76pxqeO+LN3aDfLQo+309xJstO0=
