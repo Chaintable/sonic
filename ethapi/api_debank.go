@@ -1,6 +1,7 @@
 package ethapi
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math/big"
@@ -11,6 +12,7 @@ import (
 	"github.com/0xsoniclabs/sonic/evmcore"
 	"github.com/0xsoniclabs/sonic/gossip/evmstore"
 	"github.com/0xsoniclabs/sonic/inter"
+	"github.com/0xsoniclabs/sonic/inter/state"
 	"github.com/0xsoniclabs/sonic/opera"
 	ptracer "github.com/Chaintable/pipeline/tracer"
 	ptypes "github.com/Chaintable/pipeline/types"
@@ -301,7 +303,13 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	replayStateDB.EndBlock(block.NumberU64())
 	replayedRoot := replayStateDB.GetStateHash()
 	if replayedRoot != block.Root {
-		return nil, fmt.Errorf("replayed state root mismatch for block %d: got %s, want %s (txs=%d processed=%d usedGas=%d blockGasUsed=%d)", block.NumberU64(), replayedRoot, block.Root, len(block.Transactions), len(processed), usedGas, block.GasUsed)
+		if replayedRoot != parent.Root || parent.Root == block.Root || len(diffStateDB.changes) == 0 {
+			return nil, fmt.Errorf("replayed state root mismatch for block %d: got %s, want %s (txs=%d processed=%d usedGas=%d blockGasUsed=%d)", block.NumberU64(), replayedRoot, block.Root, len(block.Transactions), len(processed), usedGas, block.GasUsed)
+		}
+		if err := api.validateDebankReplayPostState(ctx, block, diffStateDB); err != nil {
+			return nil, fmt.Errorf("replayed state root mismatch for block %d: got %s, want %s (txs=%d processed=%d usedGas=%d blockGasUsed=%d); post-state validation failed: %w", block.NumberU64(), replayedRoot, block.Root, len(block.Transactions), len(processed), usedGas, block.GasUsed, err)
+		}
+		log.Debug("Validated Debank replay against canonical post-state because archive StateDB cannot commit root", "block", block.NumberU64(), "replayedRoot", replayedRoot, "blockRoot", block.Root)
 	}
 	if usedGas != block.GasUsed {
 		return nil, fmt.Errorf("replayed gas used mismatch for block %d: got %d, want %d (txs=%d processed=%d)", block.NumberU64(), usedGas, block.GasUsed, len(block.Transactions), len(processed))
@@ -317,6 +325,53 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	res.ValidationHash = res.BlockFile.Validation().ValidationHash
 
 	return newDebankOutPut(res), nil
+}
+
+func (api *DebankAPI) validateDebankReplayPostState(ctx context.Context, block *evmcore.EvmBlock, replayState *debankStateDiffDB) error {
+	postState, _, err := api.b.StateAndHeaderByNumberOrHash(ctx, rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(block.NumberU64())))
+	if err != nil {
+		return err
+	}
+	if postState == nil {
+		return fmt.Errorf("post-state for block %d not found", block.NumberU64())
+	}
+	defer postState.Release()
+	return validateDebankReplayPostStateValues(block.NumberU64(), replayState, postState)
+}
+
+func validateDebankReplayPostStateValues(blockNumber uint64, replayState *debankStateDiffDB, postState state.StateDB) error {
+	addrs := make([]common.Address, 0, len(replayState.changes))
+	for addr := range replayState.changes {
+		addrs = append(addrs, addr)
+	}
+	sort.Slice(addrs, func(i, j int) bool {
+		return strings.Compare(addrs[i].Hex(), addrs[j].Hex()) < 0
+	})
+
+	for _, addr := range addrs {
+		change := replayState.changes[addr]
+		if got, want := replayState.Exist(addr), postState.Exist(addr); got != want {
+			return fmt.Errorf("account existence mismatch for block %d addr %s: got %t, want %t", blockNumber, addr, got, want)
+		}
+		if got, want := replayState.GetNonce(addr), postState.GetNonce(addr); got != want {
+			return fmt.Errorf("account nonce mismatch for block %d addr %s: got %d, want %d", blockNumber, addr, got, want)
+		}
+		if got, want := replayState.GetCodeHash(addr), postState.GetCodeHash(addr); got != want {
+			return fmt.Errorf("account code hash mismatch for block %d addr %s: got %s, want %s", blockNumber, addr, got, want)
+		}
+		if got, want := replayState.GetBalance(addr), postState.GetBalance(addr); got.Cmp(want) != 0 {
+			return fmt.Errorf("account balance mismatch for block %d addr %s: got %s, want %s", blockNumber, addr, got, want)
+		}
+		if change.codeTouched && !bytes.Equal(replayState.GetCode(addr), postState.GetCode(addr)) {
+			return fmt.Errorf("account code mismatch for block %d addr %s", blockNumber, addr)
+		}
+		for key := range change.storage {
+			if got, want := replayState.GetState(addr, key), postState.GetState(addr, key); got != want {
+				return fmt.Errorf("storage mismatch for block %d addr %s slot %s: got %s, want %s", blockNumber, addr, key, got, want)
+			}
+		}
+	}
+	return nil
 }
 
 func validateDebankReplayReceipts(block *evmcore.EvmBlock, processed []evmcore.ProcessedTransaction, receiptHash common.Hash, bloom types.Bloom) error {
