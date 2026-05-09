@@ -1,0 +1,2954 @@
+Block Number: 2842100
+Block Hash: 0x8f340395e4556bae3236de4657069ff39293d95b90755eac364bcd9c74fc1673
+Chain ID: 146
+Content Type: file
+Timestamp: 2026-05-09T02:12:03Z
+
+Legend: S3 data(green), RPC data(red)
+
+{
+  "block": {
+    "base_fee_per_gas": 1000000000,
+    "gas_limit": 1000000000,
+    "gas_used": 1527187,
+    "height": 2842100,
+    "id": "0x8f340395e4556bae3236de4657069ff39293d95b90755eac364bcd9c74fc1673",
+    "miner": "0x0000000000000000000000000000000000000000",
+    "parent_id": "0xdc2ed2d4520a0b28f2cad12016447cd8153eb3f2f161108df5702b1f811b50b5",
+    "process_start_timestamp": 1778292577253,
+    "timestamp": 1736243615
+  },
+  "error_events": [],
+  "error_traces": [
+    {
+      "call_type": "staticcall",
+      "error": "execution reverted",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4292405,
+[31m      "gas_used": null,[0m
+[31m[0m[32m      "gas_used": 171,[0m
+[32m[0m      "id": "4ee5074f54ed217a48c6c26f81383801",
+      "input": "0x4f2bfe5b",
+      "output": "0x",
+      "parent_trace_id": "adea1cb474e485b73c55923923305014",
+      "pos_in_parent_trace": 4,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x3d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "trace_address": [
+        1,
+        4
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "error": "execution reverted",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4320486,
+[31m      "gas_used": null,[0m
+[31m[0m[32m      "gas_used": 171,[0m
+[32m[0m      "id": "234b1b82ad3c873bda993bcd00746612",
+      "input": "0x4f2bfe5b",
+      "output": "0x",
+      "parent_trace_id": "bccbac043e81155a478a67e7088463af",
+      "pos_in_parent_trace": 4,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x3d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "trace_address": [
+        0,
+        4
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "error": "execution reverted",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4294048,
+[31m      "gas_used": null,[0m
+[31m[0m[32m      "gas_used": 171,[0m
+[32m[0m      "id": "99213aa1fa0a474a0e5dca1aff69768b",
+      "input": "0x88e8006d0000000000000000000000000000000000000000000000000000000000000000",
+      "output": "0x",
+      "parent_trace_id": "adea1cb474e485b73c55923923305014",
+      "pos_in_parent_trace": 1,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x3d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "trace_address": [
+        1,
+        1
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "error": "execution reverted",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4322129,
+[31m      "gas_used": null,[0m
+[31m[0m[32m      "gas_used": 171,[0m
+[32m[0m      "id": "b71b50e66e55d29260cb10c9da763624",
+      "input": "0x88e8006d0000000000000000000000000000000000000000000000000000000000000000",
+      "output": "0x",
+      "parent_trace_id": "bccbac043e81155a478a67e7088463af",
+      "pos_in_parent_trace": 1,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x3d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "trace_address": [
+        0,
+        1
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "error": "execution reverted",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4292952,
+[31m      "gas_used": null,[0m
+[31m[0m[32m      "gas_used": 203,[0m
+[32m[0m      "id": "87cb95b7ceea2e990edeee9e4b646a6e",
+      "input": "0x97e9dc31",
+      "output": "0x",
+      "parent_trace_id": "adea1cb474e485b73c55923923305014",
+      "pos_in_parent_trace": 3,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x3d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "trace_address": [
+        1,
+        3
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "error": "execution reverted",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4321034,
+[31m      "gas_used": null,[0m
+[31m[0m[32m      "gas_used": 203,[0m
+[32m[0m      "id": "32bb3242fde2d216f36eaed072579f1a",
+      "input": "0x97e9dc31",
+      "output": "0x",
+      "parent_trace_id": "bccbac043e81155a478a67e7088463af",
+      "pos_in_parent_trace": 3,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x3d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "trace_address": [
+        0,
+        3
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "error": "execution reverted",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4293500,
+[31m      "gas_used": null,[0m
+[31m[0m[32m      "gas_used": 203,[0m
+[32m[0m      "id": "4a65dca2f0afb7ad8a5684c3721aa41d",
+      "input": "0xbc8520d30000000000000000000000000000000000000000000000000000000000000000",
+      "output": "0x",
+      "parent_trace_id": "adea1cb474e485b73c55923923305014",
+      "pos_in_parent_trace": 2,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x3d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "trace_address": [
+        1,
+        2
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "error": "execution reverted",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4321581,
+[31m      "gas_used": null,[0m
+[31m[0m[32m      "gas_used": 203,[0m
+[32m[0m      "id": "c33d9fecfa443f1bf2da43096b962183",
+      "input": "0xbc8520d30000000000000000000000000000000000000000000000000000000000000000",
+      "output": "0x",
+      "parent_trace_id": "bccbac043e81155a478a67e7088463af",
+      "pos_in_parent_trace": 2,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x3d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "trace_address": [
+        0,
+        2
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "error": "execution reverted",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4292415,
+[31m      "gas_used": null,[0m
+[31m[0m[32m      "gas_used": 171,[0m
+[32m[0m      "id": "7d762c639f13a02665e09c171ba5fa49",
+      "input": "0x4f2bfe5b",
+      "output": "0x",
+      "parent_trace_id": "a55c3939682223fe275f51ea43123526",
+      "pos_in_parent_trace": 4,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x3d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "trace_address": [
+        1,
+        4
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "error": "execution reverted",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4320486,
+[31m      "gas_used": null,[0m
+[31m[0m[32m      "gas_used": 171,[0m
+[32m[0m      "id": "4b179b3b4b2fe6c2a386e16735e880f5",
+      "input": "0x4f2bfe5b",
+      "output": "0x",
+      "parent_trace_id": "1e8dcb4ebfc484516cbd21d836f3b488",
+      "pos_in_parent_trace": 4,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x3d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "trace_address": [
+        0,
+        4
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "error": "execution reverted",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4294058,
+[31m      "gas_used": null,[0m
+[31m[0m[32m      "gas_used": 171,[0m
+[32m[0m      "id": "fc31579936f48e4e23d734db39e19858",
+      "input": "0x88e8006d0000000000000000000000000000000000000000000000000000000000000000",
+      "output": "0x",
+      "parent_trace_id": "a55c3939682223fe275f51ea43123526",
+      "pos_in_parent_trace": 1,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x3d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "trace_address": [
+        1,
+        1
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "error": "execution reverted",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4322129,
+[31m      "gas_used": null,[0m
+[31m[0m[32m      "gas_used": 171,[0m
+[32m[0m      "id": "5426123c25e0183575d78c2865e8fce0",
+      "input": "0x88e8006d0000000000000000000000000000000000000000000000000000000000000000",
+      "output": "0x",
+      "parent_trace_id": "1e8dcb4ebfc484516cbd21d836f3b488",
+      "pos_in_parent_trace": 1,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x3d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "trace_address": [
+        0,
+        1
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "error": "execution reverted",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4292962,
+[31m      "gas_used": null,[0m
+[31m[0m[32m      "gas_used": 203,[0m
+[32m[0m      "id": "0ea94bdcd0e92560c046bbaaa50746b1",
+      "input": "0x97e9dc31",
+      "output": "0x",
+      "parent_trace_id": "a55c3939682223fe275f51ea43123526",
+      "pos_in_parent_trace": 3,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x3d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "trace_address": [
+        1,
+        3
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "error": "execution reverted",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4321034,
+[31m      "gas_used": null,[0m
+[31m[0m[32m      "gas_used": 203,[0m
+[32m[0m      "id": "e4fbe2848ec1a2ccb7335110e18a9fea",
+      "input": "0x97e9dc31",
+      "output": "0x",
+      "parent_trace_id": "1e8dcb4ebfc484516cbd21d836f3b488",
+      "pos_in_parent_trace": 3,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x3d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "trace_address": [
+        0,
+        3
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "error": "execution reverted",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4293510,
+[31m      "gas_used": null,[0m
+[31m[0m[32m      "gas_used": 203,[0m
+[32m[0m      "id": "d193511f0f0b168640a7c3ccc6016093",
+      "input": "0xbc8520d30000000000000000000000000000000000000000000000000000000000000000",
+      "output": "0x",
+      "parent_trace_id": "a55c3939682223fe275f51ea43123526",
+      "pos_in_parent_trace": 2,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x3d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "trace_address": [
+        1,
+        2
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "error": "execution reverted",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4321581,
+[31m      "gas_used": null,[0m
+[31m[0m[32m      "gas_used": 203,[0m
+[32m[0m      "id": "7139ae958c0293c25f4ad5ba8e71b21d",
+      "input": "0xbc8520d30000000000000000000000000000000000000000000000000000000000000000",
+      "output": "0x",
+      "parent_trace_id": "1e8dcb4ebfc484516cbd21d836f3b488",
+      "pos_in_parent_trace": 2,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x3d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "trace_address": [
+        0,
+        2
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    }
+  ],
+  "events": [
+    {
+      "contract_id": "0x039e2fb66102314ce7b64ce5ce3e5183bc94ad38",
+      "data": "0x0000000000000000000000000000000000000000000000015cade06fe1d46a9b",
+[31m      "id": "",[0m
+[31m      "idx": 1,[0m
+[31m      "parent_trace_id": "",[0m
+[31m[0m[32m      "id": "47bee3c4e38008112decca4d7e9fc145",[0m
+[32m      "idx": 0,[0m
+[32m      "parent_trace_id": "c6ed1c58309845bc0d226c5eaea970bd",[0m
+[32m[0m      "pos_in_parent_trace": 0,
+      "selector": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+      "topics": [
+        "0x0000000000000000000000005c68742e8e483519e942237f2c8cf294f0759180",
+        "0x00000000000000000000000056b404073c990e828691af936bcfff710f6c97a1"
+[31m      ][0m
+[31m[0m[32m      ],[0m
+[32m      "tx_id": null[0m
+[32m[0m    },
+    {
+      "contract_id": "0x29219dd400f2bf60e5a23d13be72b486d4038894",
+      "data": "0x0000000000000000000000000000000000000000000000000000000000000c37",
+[31m      "id": "",[0m
+[31m      "idx": 7,[0m
+[31m      "parent_trace_id": "",[0m
+[31m[0m[32m      "id": "ce50ed29ed95cf7866ce54de9ada20bd",[0m
+[32m      "idx": 0,[0m
+[32m      "parent_trace_id": "d56ef0861d54ea34837e3d60f787c910",[0m
+[32m[0m      "pos_in_parent_trace": 0,
+      "selector": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+      "topics": [
+        "0x000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b6",
+        "0x0000000000000000000000000df9a8932b1ccacfcad3f1409431ebf8800f42e8"
+[31m      ][0m
+[31m[0m[32m      ],[0m
+[32m      "tx_id": null[0m
+[32m[0m    },
+    {
+      "contract_id": "0x29219dd400f2bf60e5a23d13be72b486d4038894",
+      "data": "0x0000000000000000000000000000000000000000000000000000000001296de8",
+[31m      "id": "",[0m
+[31m      "idx": 6,[0m
+[31m      "parent_trace_id": "",[0m
+[31m[0m[32m      "id": "a849be875e4d4ee379d48c8fe4a19560",[0m
+[32m      "idx": 0,[0m
+[32m      "parent_trace_id": "4cdc42a2f7573ec0654a7d5e448880d4",[0m
+[32m[0m      "pos_in_parent_trace": 0,
+      "selector": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+      "topics": [
+        "0x000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b6",
+        "0x0000000000000000000000005e44978abf812de9db3d9abc8ed0ed9ff4d0b20c"
+[31m      ][0m
+[31m[0m[32m      ],[0m
+[32m      "tx_id": null[0m
+[32m[0m    },
+    {
+      "contract_id": "0x29219dd400f2bf60e5a23d13be72b486d4038894",
+      "data": "0x0000000000000000000000000000000000000000000000000000000001297a1f",
+[31m      "id": "",[0m
+[31m      "idx": 5,[0m
+[31m      "parent_trace_id": "",[0m
+[31m[0m[32m      "id": "872c9adebae755d906d459bd00516564",[0m
+[32m      "idx": 0,[0m
+[32m      "parent_trace_id": "b3c16fd9b2dd802b745c06ea2c6b0215",[0m
+[32m[0m      "pos_in_parent_trace": 0,
+      "selector": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+      "topics": [
+        "0x00000000000000000000000056b404073c990e828691af936bcfff710f6c97a1",
+        "0x000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b6"
+[31m      ][0m
+[31m[0m[32m      ],[0m
+[32m      "tx_id": null[0m
+[32m[0m    },
+    {
+      "contract_id": "0x29219dd400f2bf60e5a23d13be72b486d4038894",
+      "data": "0x00000000000000000000000000000000000000000000000000000000e3a8cdd3",
+[31m      "id": "",[0m
+[31m      "idx": 11,[0m
+[31m      "parent_trace_id": "",[0m
+[31m[0m[32m      "id": "1974970aaa5a5beb619fd9f1423515ac",[0m
+[32m      "idx": 0,[0m
+[32m      "parent_trace_id": "8c0d41e8d70b37217cf01fa6b41cee80",[0m
+[32m[0m      "pos_in_parent_trace": 0,
+      "selector": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+      "topics": [
+        "0x00000000000000000000000056b404073c990e828691af936bcfff710f6c97a1",
+        "0x00000000000000000000000067803fe6d76409640efdc9b7abcd2c6c2e7cba48"
+[31m      ][0m
+[31m[0m[32m      ],[0m
+[32m      "tx_id": null[0m
+[32m[0m    },
+    {
+      "contract_id": "0x29219dd400f2bf60e5a23d13be72b486d4038894",
+      "data": "0x00000000000000000000000000000000000000000000000000000000e3a8cdd3",
+[31m      "id": "",[0m
+[31m      "idx": 12,[0m
+[31m      "parent_trace_id": "",[0m
+[31m[0m[32m      "id": "3f63cf942ca2615764d02d10b1aefeee",[0m
+[32m      "idx": 0,[0m
+[32m      "parent_trace_id": "9e1a2b58f1df5396a04d6aafee1261d7",[0m
+[32m[0m      "pos_in_parent_trace": 0,
+      "selector": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+      "topics": [
+        "0x00000000000000000000000067803fe6d76409640efdc9b7abcd2c6c2e7cba48",
+        "0x00000000000000000000000098c1803ff7ab06224b0042c191e7ce45da3307d3"
+[31m      ][0m
+[31m[0m[32m      ],[0m
+[32m      "tx_id": null[0m
+[32m[0m    },
+    {
+      "contract_id": "0x50c42deacd8fc9773493ed674b675be577f2634b",
+      "data": "0x0000000000000000000000000000000000000000000000000012ec2678431529",
+[31m      "id": "4dc843c3174d94f813c9b1265b6112c3",[0m
+[31m[0m[32m      "id": "ed9fd542b98d3512b11864ec5d02bb21",[0m
+[32m[0m      "idx": 0,
+[31m      "parent_trace_id": "e18f0ba4735fa81e75ea192b120b017a",[0m
+[31m[0m[32m      "parent_trace_id": "cc40203757db3ae62c83080d655917ef",[0m
+[32m[0m      "pos_in_parent_trace": 0,
+      "selector": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+      "topics": [
+        "0x0000000000000000000000005e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+        "0x000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b6"
+[31m      ][0m
+[31m[0m[32m      ],[0m
+[32m      "tx_id": null[0m
+[32m[0m    },
+    {
+      "contract_id": "0x50c42deacd8fc9773493ed674b675be577f2634b",
+      "data": "0x0000000000000000000000000000000000000000000000000012ec2678431529",
+[31m      "id": "",[0m
+[31m      "idx": 2,[0m
+[31m      "parent_trace_id": "",[0m
+[31m[0m[32m      "id": "4dc843c3174d94f813c9b1265b6112c3",[0m
+[32m      "idx": 0,[0m
+[32m      "parent_trace_id": "e18f0ba4735fa81e75ea192b120b017a",[0m
+[32m[0m      "pos_in_parent_trace": 0,
+      "selector": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+      "topics": [
+        "0x000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b6",
+        "0x0000000000000000000000005c68742e8e483519e942237f2c8cf294f0759180"
+[31m      ][0m
+[31m[0m[32m      ],[0m
+[32m      "tx_id": null[0m
+[32m[0m    },
+    {
+      "contract_id": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "data": "0x00000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000080000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000007fc97a000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000011918f6aa70d6c606f0685",
+[31m      "id": "",[0m
+[31m      "idx": 9,[0m
+[31m      "parent_trace_id": "",[0m
+[31m      "pos_in_parent_trace": 0,[0m
+[31m[0m[32m      "id": "c3f7dcb7964cb7bceefb90ee21b4c48e",[0m
+[32m      "idx": 0,[0m
+[32m      "parent_trace_id": "644f1668251c4fc296cbafa8d1447592",[0m
+[32m      "pos_in_parent_trace": 1,[0m
+[32m[0m      "selector": "0x4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb",
+      "topics": [
+        "0x00000000000000000000000067803fe6d76409640efdc9b7abcd2c6c2e7cba48",
+        "0x00000000000000000000000098c1803ff7ab06224b0042c191e7ce45da3307d3",
+        "0x0000000000000000000000000000000000000000000000000000000000000000"
+[31m      ][0m
+[31m[0m[32m      ],[0m
+[32m      "tx_id": null[0m
+[32m[0m    },
+    {
+      "contract_id": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "data": "0x00000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000080000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000007fc97a0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000e3a8cdd300000000000000000000000000000000",
+[31m      "id": "",[0m
+[31m      "idx": 10,[0m
+[31m      "parent_trace_id": "",[0m
+[31m      "pos_in_parent_trace": 0,[0m
+[31m[0m[32m      "id": "04f4d40fc37d672bf88bfc0228c16957",[0m
+[32m      "idx": 0,[0m
+[32m      "parent_trace_id": "644f1668251c4fc296cbafa8d1447592",[0m
+[32m      "pos_in_parent_trace": 2,[0m
+[32m[0m      "selector": "0xa32e146844d6144a22e94c586715a1317d58a8aa3581ec33d040113ddcb24350",
+      "topics": [
+        "0x00000000000000000000000067803fe6d76409640efdc9b7abcd2c6c2e7cba48",
+        "0x00000000000000000000000067803fe6d76409640efdc9b7abcd2c6c2e7cba48"
+[31m      ][0m
+[31m[0m[32m      ],[0m
+[32m      "tx_id": null[0m
+[32m[0m    },
+    {
+      "contract_id": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "data": "0x00000000000000000000000000000000000000000000000000000000007fc97d0000000000000000000000000000000000000000000000015c747b37d1610f0000000000000000000000000001297a1f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000753000000000000000000000000000000000000000000000000000e594e041cd6e6c0000000000000000000000000000000000000000000000000039653810735b9b",
+[31m      "id": "",[0m
+[31m      "idx": 4,[0m
+[31m      "parent_trace_id": "",[0m
+[31m      "pos_in_parent_trace": 0,[0m
+[31m[0m[32m      "id": "f738a1ab29bbad4cfe5680b555f8cbf5",[0m
+[32m      "idx": 0,[0m
+[32m      "parent_trace_id": "c965d9a297a563c290720cdf930fe46e",[0m
+[32m      "pos_in_parent_trace": 2,[0m
+[32m[0m      "selector": "0xad7d6f97abf51ce18e17a38f4d70e975be9c0708474987bb3e26ad21bd93ca70",
+      "topics": [
+        "0x000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b6",
+        "0x000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b6"
+[31m      ][0m
+[31m[0m[32m      ],[0m
+[32m      "tx_id": null[0m
+[32m[0m    },
+    {
+      "contract_id": "0x5c68742e8e483519e942237f2c8cf294f0759180",
+      "data": "0xfffffffffffffffffffffffffffffffffffffffffffffffea3521f901e2b95650000000000000000000000000000000000000000000000000012ec2678431529000000000000000000000000000000000000000003b9fea1aa996fded1c6ac7d0000000000000000000000000000000000000000000000e5080f9278ec28de90fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeb589",
+[31m      "id": "",[0m
+[31m      "idx": 3,[0m
+[31m      "parent_trace_id": "",[0m
+[31m      "pos_in_parent_trace": 0,[0m
+[31m[0m[32m      "id": "48fb05f1fbced3d57fb8b5a3c5a66f20",[0m
+[32m      "idx": 0,[0m
+[32m      "parent_trace_id": "4b56b86ff6f24cd8b6615840b53188a4",[0m
+[32m      "pos_in_parent_trace": 4,[0m
+[32m[0m      "selector": "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67",
+      "topics": [
+        "0x000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b6",
+        "0x00000000000000000000000056b404073c990e828691af936bcfff710f6c97a1"
+[31m      ][0m
+[31m[0m[32m      ],[0m
+[32m      "tx_id": null[0m
+[32m[0m    },
+    {
+      "contract_id": "0x5e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+      "data": "0x0000000000000000000000000000000000000000000000000000000001296de8ffffffffffffffffffffffffffffffffffffffffffffffffffed13d987bcead70000000000000000000000000000000000004095a4592350ed2550c623dc9acc000000000000000000000000000000000000000000000000000eab0a5d1a638a000000000000000000000000000000000000000000000000000000000002f6e0",
+[31m      "id": "",[0m
+[31m      "idx": 8,[0m
+[31m      "parent_trace_id": "",[0m
+[31m      "pos_in_parent_trace": 0,[0m
+[31m[0m[32m      "id": "5bc55fb85a4828e38f0f2c3e916ddb6d",[0m
+[32m      "idx": 0,[0m
+[32m      "parent_trace_id": "055032f2a21f39547f738c376701b1e8",[0m
+[32m      "pos_in_parent_trace": 4,[0m
+[32m[0m      "selector": "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67",
+      "topics": [
+        "0x000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b6",
+        "0x000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b6"
+[31m      ][0m
+[31m[0m[32m      ],[0m
+[32m      "tx_id": null[0m
+[32m[0m    }
+  ],
+  "storage_contracts": [
+    "0x039e2fb66102314ce7b64ce5ce3e5183bc94ad38",
+    "0x29219dd400f2bf60e5a23d13be72b486d4038894",
+    "0x50c42deacd8fc9773493ed674b675be577f2634b",
+    "0x56b404073c990e828691af936bcfff710f6c97a1",
+    "0x5c68742e8e483519e942237f2c8cf294f0759180",
+    "0x5e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+    "0xd231bd753d6d4dc8b4371f1d1ca6b10cb20cd435"
+  ],
+  "traces": [
+    {
+      "call_type": "call",
+      "from_addr": "0x1157f4b6fed3897680097e9f82120106f2fa58e6",
+      "gas_limit": 4477000,
+[31m      "gas_used": 547639,[0m
+[31m[0m[32m      "gas_used": 85488,[0m
+[32m[0m      "id": "8ab51c2c4be74f891671431f73d2a669",
+      "input": "0x0000000000000000000001296de64c0040fedb1e6a51a42225b3965caa0b829219dd400f2bf60e5a23d13be72b486d40388945e44978abf812de9db3d9abc8ed0ed9ff4d0b20c90e14310b7ab363f25dcd24fb59d2d9d6f95dfc98d2d71a1d0ba3920d467a5088dfcb233ca53c1d646000c056b404073c990e828691af936bcfff710f6c97a1",
+      "output": "0x",
+      "parent_trace_id": "",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 3,
+      "to_addr": "0xe414a5a72fa07ab0a0814922fd779730d43ad8b6",
+      "trace_address": [],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "gas_limit": 4267352,
+      "gas_used": 11646,
+      "id": "a5b78795b1b5b9190444f0e36bdb9582",
+      "input": "0xe77366f80000000000000000000000000000000000000000000000015c907e03fccdc4db0000000000000000000000000000000000000000000000000000000000000001039e2fb66102314ce7b64ce5ce3e5183bc94ad3829219dd400f2bf60e5a23d13be72b486d40388940014002c",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000129610d00000000000000000000000000000000000000000000000000e5818741083bdc",
+      "parent_trace_id": "a423be780cab4f476448516570595452",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0xed06734629e22277d395d8eb8b67cc75c27cb6a2",
+      "trace_address": [
+        2,
+        0
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4291862,
+      "gas_used": 479,
+      "id": "7b7ef8ae8210692acbbdac1bbe95fb34",
+      "input": "0x22afcccb0000000000000000000000000000000000000000000000000000000000000000",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "parent_trace_id": "adea1cb474e485b73c55923923305014",
+      "pos_in_parent_trace": 5,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x3d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "trace_address": [
+        1,
+        5
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4319943,
+      "gas_used": 2479,
+      "id": "83af7a70db73bd7589422461546518d3",
+      "input": "0x22afcccb0000000000000000000000000000000000000000000000000000000000000000",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "parent_trace_id": "bccbac043e81155a478a67e7088463af",
+      "pos_in_parent_trace": 5,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x3d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "trace_address": [
+        0,
+        5
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4285756,
+      "gas_used": 2428,
+      "id": "9fc688c72dffb22a2e87d4123f55e422",
+      "input": "0x1a686502",
+      "output": "0x0000000000000000000000000000000000000000000000e5080f9278ec28de90",
+      "parent_trace_id": "adea1cb474e485b73c55923923305014",
+      "pos_in_parent_trace": 9,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5c68742e8e483519e942237f2c8cf294f0759180",
+      "trace_address": [
+        1,
+        9
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4290538,
+      "gas_used": 2696,
+      "id": "689ac3b7145c12c695895bcf5ecc3c2a",
+      "input": "0x3850c7bd",
+      "output": "0x000000000000000000000000000000000000000003b9fea1aa996fded1c6ac7dfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeb58900000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+      "parent_trace_id": "adea1cb474e485b73c55923923305014",
+      "pos_in_parent_trace": 6,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5c68742e8e483519e942237f2c8cf294f0759180",
+      "trace_address": [
+        1,
+        6
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4282225,
+      "gas_used": 2525,
+      "id": "8d8a24759a9b4265bcdce897787a31f1",
+      "input": "0x5339c296ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffde",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "parent_trace_id": "adea1cb474e485b73c55923923305014",
+      "pos_in_parent_trace": 10,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5c68742e8e483519e942237f2c8cf294f0759180",
+      "trace_address": [
+        1,
+        10
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4294738,
+      "gas_used": 264,
+      "id": "400f750e900d030f3dbfebd41b37d554",
+      "input": "0xc45a0155",
+      "output": "0x0000000000000000000000003d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "parent_trace_id": "adea1cb474e485b73c55923923305014",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5c68742e8e483519e942237f2c8cf294f0759180",
+      "trace_address": [
+        1,
+        0
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4287222,
+      "gas_used": 279,
+      "id": "dcf85c8b9190816521fa55c9c3a82838",
+      "input": "0xd0c93a7c",
+      "output": "0x000000000000000000000000000000000000000000000000000000000000000a",
+      "parent_trace_id": "adea1cb474e485b73c55923923305014",
+      "pos_in_parent_trace": 7,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5c68742e8e483519e942237f2c8cf294f0759180",
+      "trace_address": [
+        1,
+        7
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4286429,
+      "gas_used": 251,
+      "id": "96b3c1af68ed6be308dc8a7ce1fd0b68",
+      "input": "0xddca3f43",
+      "output": "0x00000000000000000000000000000000000000000000000000000000000001f4",
+      "parent_trace_id": "adea1cb474e485b73c55923923305014",
+      "pos_in_parent_trace": 8,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5c68742e8e483519e942237f2c8cf294f0759180",
+      "trace_address": [
+        1,
+        8
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4311878,
+      "gas_used": 2428,
+      "id": "b4aaff52569e05cb8fc329b42f94fac7",
+      "input": "0x1a686502",
+      "output": "0x000000000000000000000000000000000000000000000000000eab0a5d1a638a",
+      "parent_trace_id": "bccbac043e81155a478a67e7088463af",
+      "pos_in_parent_trace": 9,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+      "trace_address": [
+        0,
+        9
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4316650,
+      "gas_used": 2696,
+      "id": "947994c42367971633a364904144b51c",
+      "input": "0x3850c7bd",
+      "output": "0x0000000000000000000000000000000000004095a4592350ed2550c623dc9acc000000000000000000000000000000000000000000000000000000000002f6e000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+      "parent_trace_id": "bccbac043e81155a478a67e7088463af",
+      "pos_in_parent_trace": 6,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+      "trace_address": [
+        0,
+        6
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4308407,
+      "gas_used": 2525,
+      "id": "6b8978148a1a99613da6dc95966c59bf",
+      "input": "0x5339c296000000000000000000000000000000000000000000000000000000000000004b",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "parent_trace_id": "bccbac043e81155a478a67e7088463af",
+      "pos_in_parent_trace": 10,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+      "trace_address": [
+        0,
+        10
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4325280,
+      "gas_used": 264,
+      "id": "54e9f7bf8a47ce82e32a999b110d5bf7",
+      "input": "0xc45a0155",
+      "output": "0x0000000000000000000000003d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "parent_trace_id": "bccbac043e81155a478a67e7088463af",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+      "trace_address": [
+        0,
+        0
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4313345,
+      "gas_used": 279,
+      "id": "ef0ea15cfb2f47b3b24209cce703f9ef",
+      "input": "0xd0c93a7c",
+      "output": "0x000000000000000000000000000000000000000000000000000000000000000a",
+      "parent_trace_id": "bccbac043e81155a478a67e7088463af",
+      "pos_in_parent_trace": 7,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+      "trace_address": [
+        0,
+        7
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4312551,
+      "gas_used": 251,
+      "id": "e88c21f9a5dc4923ad4ac97ef4216183",
+      "input": "0xddca3f43",
+      "output": "0x00000000000000000000000000000000000000000000000000000000000001f4",
+      "parent_trace_id": "bccbac043e81155a478a67e7088463af",
+      "pos_in_parent_trace": 8,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+      "trace_address": [
+        0,
+        8
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xe414a5a72fa07ab0a0814922fd779730d43ad8b6",
+      "gas_limit": 4337757,
+      "gas_used": 14352,
+      "id": "a423be780cab4f476448516570595452",
+      "input": "0xe77366f80000000000000000000000000000000000000000000000015c907e03fccdc4db0000000000000000000000000000000000000000000000000000000000000001",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000129610d00000000000000000000000000000000000000000000000000e5818741083bdc",
+      "parent_trace_id": "8ab51c2c4be74f891671431f73d2a669",
+      "pos_in_parent_trace": 2,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 1,
+      "to_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "trace_address": [
+        2
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xe414a5a72fa07ab0a0814922fd779730d43ad8b6",
+      "gas_limit": 4366007,
+      "gas_used": 25298,
+      "id": "adea1cb474e485b73c55923923305014",
+      "input": "0xfba21b3d0000000000000000000000005c68742e8e483519e942237f2c8cf294f075918000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000012eb64daba0e1b",
+      "output": "0x0000000000000000000000000000000000000000000000015c907e03fccdc4db",
+      "parent_trace_id": "8ab51c2c4be74f891671431f73d2a669",
+      "pos_in_parent_trace": 1,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 11,
+      "to_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "trace_address": [
+        1
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xe414a5a72fa07ab0a0814922fd779730d43ad8b6",
+      "gas_limit": 4397024,
+      "gas_used": 30520,
+      "id": "bccbac043e81155a478a67e7088463af",
+      "input": "0xfba21b3d0000000000000000000000005e44978abf812de9db3d9abc8ed0ed9ff4d0b20c00000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000001296de6",
+      "output": "0x0000000000000000000000000000000000000000000000000012eb64daba0e1b",
+      "parent_trace_id": "8ab51c2c4be74f891671431f73d2a669",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 11,
+      "to_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "trace_address": [
+        0
+      ],
+      "tx_id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x29219dd400f2bf60e5a23d13be72b486d4038894",
+      "gas_limit": 239366,
+      "gas_used": 33363,
+      "id": "8c0d41e8d70b37217cf01fa6b41cee80",
+      "input": "0xa9059cbb00000000000000000000000067803fe6d76409640efdc9b7abcd2c6c2e7cba4800000000000000000000000000000000000000000000000000000000e3a8cdd3",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "parent_trace_id": "42d01cad0818188b393a29fd79b656e9",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": true,
+      "storage_change": true,
+      "subtraces": 0,
+      "to_addr": "0x229e64252e2901a424600e22c28a722404d92dcc",
+      "trace_address": [
+        2,
+        0,
+        1,
+        0
+      ],
+      "tx_id": "0x7c5d088b7154bb4b5b4afb717567b13fcb22d7892ba0acb10029d5e945f4302f",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x29219dd400f2bf60e5a23d13be72b486d4038894",
+      "gas_limit": 213859,
+      "gas_used": 26563,
+      "id": "9e1a2b58f1df5396a04d6aafee1261d7",
+      "input": "0xa9059cbb00000000000000000000000098c1803ff7ab06224b0042c191e7ce45da3307d300000000000000000000000000000000000000000000000000000000e3a8cdd3",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "parent_trace_id": "790fe735df0b2fff5e2db8742ce77233",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": true,
+      "storage_change": true,
+      "subtraces": 0,
+      "to_addr": "0x229e64252e2901a424600e22c28a722404d92dcc",
+      "trace_address": [
+        3,
+        0
+      ],
+      "tx_id": "0x7c5d088b7154bb4b5b4afb717567b13fcb22d7892ba0acb10029d5e945f4302f",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "call",
+      "from_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "gas_limit": 250324,
+      "gas_used": 40563,
+      "id": "42d01cad0818188b393a29fd79b656e9",
+      "input": "0xa9059cbb00000000000000000000000067803fe6d76409640efdc9b7abcd2c6c2e7cba4800000000000000000000000000000000000000000000000000000000e3a8cdd3",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "parent_trace_id": "644f1668251c4fc296cbafa8d1447592",
+      "pos_in_parent_trace": 3,
+      "self_storage_change": false,
+      "storage_change": true,
+      "subtraces": 1,
+      "to_addr": "0x29219dd400f2bf60e5a23d13be72b486d4038894",
+      "trace_address": [
+        2,
+        0,
+        1
+      ],
+      "tx_id": "0x7c5d088b7154bb4b5b4afb717567b13fcb22d7892ba0acb10029d5e945f4302f",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "call",
+      "from_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "gas_limit": 323133,
+      "gas_used": 42515,
+      "id": "2cb79b9ae5740d8570defdd2858db00b",
+      "input": "0xea9db9d300000000000000000000000067803fe6d76409640efdc9b7abcd2c6c2e7cba4800000000000000000000000098c1803ff7ab06224b0042c191e7ce45da3307d300000000000000000000000067803fe6d76409640efdc9b7abcd2c6c2e7cba4800000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000e0000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000007fc97a000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000011918f6aa70d6c606f0685",
+      "output": "0xea9db9d300000000000000000000000000000000000000000000000000000000",
+      "parent_trace_id": "644f1668251c4fc296cbafa8d1447592",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": true,
+      "subtraces": 1,
+      "to_addr": "0xd231bd753d6d4dc8b4371f1d1ca6b10cb20cd435",
+      "trace_address": [
+        2,
+        0,
+        0
+      ],
+      "tx_id": "0x7c5d088b7154bb4b5b4afb717567b13fcb22d7892ba0acb10029d5e945f4302f",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "gas_limit": 301379,
+      "gas_used": 2680,
+      "id": "7917af2e3878b9043b9bfa43bf324ec8",
+      "input": "0x00fdd58e00000000000000000000000098c1803ff7ab06224b0042c191e7ce45da3307d300000000000000000000000000000000000000000000000000000000007fc97a039e2fb66102314ce7b64ce5ce3e5183bc94ad3829219dd400f2bf60e5a23d13be72b486d40388940014002c",
+      "output": "0x00000000000000000000000000000000000000000011918f6aa70d6c606f0685",
+      "parent_trace_id": "4fdcf29a900b37ca5b1a810a272174c7",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0xed06734629e22277d395d8eb8b67cc75c27cb6a2",
+      "trace_address": [
+        2,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "tx_id": "0x7c5d088b7154bb4b5b4afb717567b13fcb22d7892ba0acb10029d5e945f4302f",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "gas_limit": 342299,
+      "gas_used": 129715,
+      "id": "644f1668251c4fc296cbafa8d1447592",
+      "input": "0xc9939f5e00000000000000000000000098c1803ff7ab06224b0042c191e7ce45da3307d300000000000000000000000067803fe6d76409640efdc9b7abcd2c6c2e7cba48000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000c0000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000007fc97a000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000011918f6aa70d6c606f0685039e2fb66102314ce7b64ce5ce3e5183bc94ad3829219dd400f2bf60e5a23d13be72b486d40388940014002c",
+      "output": "0x00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000001000000000000000000000000e3a8cdd300000000000000000000000000000000",
+      "parent_trace_id": "d59a328c9e8f9087bf5c62d0a43089f6",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": true,
+      "storage_change": true,
+      "subtraces": 2,
+      "to_addr": "0xed06734629e22277d395d8eb8b67cc75c27cb6a2",
+      "trace_address": [
+        2,
+        0
+      ],
+      "tx_id": "0x7c5d088b7154bb4b5b4afb717567b13fcb22d7892ba0acb10029d5e945f4302f",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "gas_limit": 343954,
+      "gas_used": 365,
+      "id": "a8df2624a3c3cb53fc93b4c5726c1283",
+      "input": "0xda10610c039e2fb66102314ce7b64ce5ce3e5183bc94ad3829219dd400f2bf60e5a23d13be72b486d40388940014002c",
+      "output": "0x00000000000000000000000029219dd400f2bf60e5a23d13be72b486d4038894",
+      "parent_trace_id": "7f15dc88fe0bcfc32d78838288ec4abc",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0xed06734629e22277d395d8eb8b67cc75c27cb6a2",
+      "trace_address": [
+        1,
+        0
+      ],
+      "tx_id": "0x7c5d088b7154bb4b5b4afb717567b13fcb22d7892ba0acb10029d5e945f4302f",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "call",
+      "from_addr": "0x67803fe6d76409640efdc9b7abcd2c6c2e7cba48",
+      "gas_limit": 217912,
+      "gas_used": 27263,
+      "id": "790fe735df0b2fff5e2db8742ce77233",
+      "input": "0xa9059cbb00000000000000000000000098c1803ff7ab06224b0042c191e7ce45da3307d300000000000000000000000000000000000000000000000000000000e3a8cdd3",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "parent_trace_id": "9c70efbe6be52e60a28158942fbbf58e",
+      "pos_in_parent_trace": 3,
+      "self_storage_change": false,
+      "storage_change": true,
+      "subtraces": 1,
+      "to_addr": "0x29219dd400f2bf60e5a23d13be72b486d4038894",
+      "trace_address": [
+        3
+      ],
+      "tx_id": "0x7c5d088b7154bb4b5b4afb717567b13fcb22d7892ba0acb10029d5e945f4302f",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0x67803fe6d76409640efdc9b7abcd2c6c2e7cba48",
+      "gas_limit": 358946,
+      "gas_used": 3631,
+      "id": "05fcd528cb553cf7f69f8696fbdde9b5",
+      "input": "0x704037bd00000000000000000000000029219dd400f2bf60e5a23d13be72b486d4038894000000000000000000000000039e2fb66102314ce7b64ce5ce3e5183bc94ad380000000000000000000000000000000000000000000000000000000000000014",
+      "output": "0x000000000000000000000000000000000000000000000000000000000000001400000000000000000000000056b404073c990e828691af936bcfff710f6c97a100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000",
+      "parent_trace_id": "9c70efbe6be52e60a28158942fbbf58e",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x39d966c1bafe7d3f1f53da4845805e15f7d6ee43",
+      "trace_address": [
+        0
+      ],
+      "tx_id": "0x7c5d088b7154bb4b5b4afb717567b13fcb22d7892ba0acb10029d5e945f4302f",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "call",
+      "from_addr": "0x67803fe6d76409640efdc9b7abcd2c6c2e7cba48",
+      "gas_limit": 347938,
+      "gas_used": 129957,
+      "id": "d59a328c9e8f9087bf5c62d0a43089f6",
+      "input": "0xc9939f5e00000000000000000000000098c1803ff7ab06224b0042c191e7ce45da3307d300000000000000000000000067803fe6d76409640efdc9b7abcd2c6c2e7cba48000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000c0000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000007fc97a000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000011918f6aa70d6c606f0685",
+      "output": "0x00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000001000000000000000000000000e3a8cdd300000000000000000000000000000000",
+      "parent_trace_id": "9c70efbe6be52e60a28158942fbbf58e",
+      "pos_in_parent_trace": 2,
+      "self_storage_change": false,
+      "storage_change": true,
+      "subtraces": 1,
+      "to_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "trace_address": [
+        2
+      ],
+      "tx_id": "0x7c5d088b7154bb4b5b4afb717567b13fcb22d7892ba0acb10029d5e945f4302f",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0x67803fe6d76409640efdc9b7abcd2c6c2e7cba48",
+      "gas_limit": 352071,
+      "gas_used": 3053,
+      "id": "7f15dc88fe0bcfc32d78838288ec4abc",
+      "input": "0xda10610c",
+      "output": "0x00000000000000000000000029219dd400f2bf60e5a23d13be72b486d4038894",
+      "parent_trace_id": "9c70efbe6be52e60a28158942fbbf58e",
+      "pos_in_parent_trace": 1,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 1,
+      "to_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "trace_address": [
+        1
+      ],
+      "tx_id": "0x7c5d088b7154bb4b5b4afb717567b13fcb22d7892ba0acb10029d5e945f4302f",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "call",
+      "from_addr": "0x98c1803ff7ab06224b0042c191e7ce45da3307d3",
+      "gas_limit": 369140,
+[31m      "gas_used": 191012,[0m
+[31m[0m[32m      "gas_used": 175785,[0m
+[32m[0m      "id": "9c70efbe6be52e60a28158942fbbf58e",
+      "input": "0x81c2fdfb00000000000000000000000029219dd400f2bf60e5a23d13be72b486d4038894000000000000000000000000000000000000000000000000000000000000001400000000000000000000000000000000000000000000000000000000e286d98900000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000014000000000000000000000000098c1803ff7ab06224b0042c191e7ce45da3307d300000000000000000000000000000000000000000000000000000000677cfe49000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000007fc97a000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000011918f6aa70d6c606f0685",
+      "output": "0x00000000000000000000000000000000000000000000000000000000e3a8cdd30000000000000000000000000000000000000000000000000000000000000000",
+      "parent_trace_id": "",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": true,
+      "subtraces": 4,
+      "to_addr": "0x67803fe6d76409640efdc9b7abcd2c6c2e7cba48",
+      "trace_address": [],
+      "tx_id": "0x7c5d088b7154bb4b5b4afb717567b13fcb22d7892ba0acb10029d5e945f4302f",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0xd231bd753d6d4dc8b4371f1d1ca6b10cb20cd435",
+      "gas_limit": 315412,
+      "gas_used": 39770,
+      "id": "e8384464d5e1e5f617b50da5787d2204",
+      "input": "0xea9db9d300000000000000000000000067803fe6d76409640efdc9b7abcd2c6c2e7cba4800000000000000000000000098c1803ff7ab06224b0042c191e7ce45da3307d300000000000000000000000067803fe6d76409640efdc9b7abcd2c6c2e7cba4800000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000e0000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000007fc97a000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000011918f6aa70d6c606f068556b404073c990e828691af936bcfff710f6c97a18a3b1cd8d0decf649262e56ece6b339e59f350db0000000000000000000000000000000000000000003e",
+      "output": "0xea9db9d300000000000000000000000000000000000000000000000000000000",
+      "parent_trace_id": "2cb79b9ae5740d8570defdd2858db00b",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": true,
+      "storage_change": true,
+      "subtraces": 1,
+      "to_addr": "0x3a5a719e5609e828d8bbf7d5b422f8d416c08971",
+      "trace_address": [
+        2,
+        0,
+        0,
+        0
+      ],
+      "tx_id": "0x7c5d088b7154bb4b5b4afb717567b13fcb22d7892ba0acb10029d5e945f4302f",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd231bd753d6d4dc8b4371f1d1ca6b10cb20cd435",
+      "gas_limit": 306332,
+      "gas_used": 2880,
+      "id": "4fdcf29a900b37ca5b1a810a272174c7",
+      "input": "0x00fdd58e00000000000000000000000098c1803ff7ab06224b0042c191e7ce45da3307d300000000000000000000000000000000000000000000000000000000007fc97a",
+      "output": "0x00000000000000000000000000000000000000000011918f6aa70d6c606f0685",
+      "parent_trace_id": "e8384464d5e1e5f617b50da5787d2204",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 1,
+      "to_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "trace_address": [
+        2,
+        0,
+        0,
+        0,
+        0
+      ],
+      "tx_id": "0x7c5d088b7154bb4b5b4afb717567b13fcb22d7892ba0acb10029d5e945f4302f",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x29219dd400f2bf60e5a23d13be72b486d4038894",
+      "gas_limit": 4113616,
+      "gas_used": 2553,
+      "id": "4fa6d80a7072954542318c473ef354bc",
+      "input": "0x70a082310000000000000000000000005e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+      "output": "0x000000000000000000000000000000000000000000000000000000083234f346",
+      "parent_trace_id": "05c9efce462ff023089f091eb3e02310",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x229e64252e2901a424600e22c28a722404d92dcc",
+      "trace_address": [
+        3,
+        1,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x29219dd400f2bf60e5a23d13be72b486d4038894",
+      "gas_limit": 3888066,
+      "gas_used": 553,
+      "id": "c037f415f6c31a11a11d8e1d66cfdd2a",
+      "input": "0x70a082310000000000000000000000005e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+      "output": "0x00000000000000000000000000000000000000000000000000000008335e612e",
+      "parent_trace_id": "bac8dab1ae770dcebbb3e890cd825424",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x229e64252e2901a424600e22c28a722404d92dcc",
+      "trace_address": [
+        3,
+        3,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x29219dd400f2bf60e5a23d13be72b486d4038894",
+      "gas_limit": 3834615,
+      "gas_used": 9463,
+      "id": "d56ef0861d54ea34837e3d60f787c910",
+      "input": "0xa9059cbb0000000000000000000000000df9a8932b1ccacfcad3f1409431ebf8800f42e80000000000000000000000000000000000000000000000000000000000000c37",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "parent_trace_id": "ed397bc99c7d512274ca4813ae7e58e1",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": true,
+      "storage_change": true,
+      "subtraces": 0,
+      "to_addr": "0x229e64252e2901a424600e22c28a722404d92dcc",
+      "trace_address": [
+        3,
+        2,
+        3,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x29219dd400f2bf60e5a23d13be72b486d4038894",
+      "gas_limit": 3843023,
+      "gas_used": 7463,
+      "id": "4cdc42a2f7573ec0654a7d5e448880d4",
+      "input": "0xa9059cbb0000000000000000000000005e44978abf812de9db3d9abc8ed0ed9ff4d0b20c0000000000000000000000000000000000000000000000000000000001296de8",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "parent_trace_id": "125d67cfb0ba4efd1fe7189dddd656df",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": true,
+      "storage_change": true,
+      "subtraces": 0,
+      "to_addr": "0x229e64252e2901a424600e22c28a722404d92dcc",
+      "trace_address": [
+        3,
+        2,
+        2,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x29219dd400f2bf60e5a23d13be72b486d4038894",
+      "gas_limit": 3754112,
+      "gas_used": 33363,
+      "id": "b3c16fd9b2dd802b745c06ea2c6b0215",
+      "input": "0xa9059cbb000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b60000000000000000000000000000000000000000000000000000000001297a1f",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "parent_trace_id": "4c24c419a4839a1ac35ed1e89f757b0d",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": true,
+      "storage_change": true,
+      "subtraces": 0,
+      "to_addr": "0x229e64252e2901a424600e22c28a722404d92dcc",
+      "trace_address": [
+        3,
+        2,
+        1,
+        0,
+        2,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x50c42deacd8fc9773493ed674b675be577f2634b",
+      "gas_limit": 3936207,
+      "gas_used": 2586,
+      "id": "252a084f22acccc653dd7629263343ad",
+      "input": "0x70a082310000000000000000000000005c68742e8e483519e942237f2c8cf294f0759180",
+      "output": "0x0000000000000000000000000000000000000000000000006d40e686ade25ebc",
+      "parent_trace_id": "5703926f8cb2019e11cecdc2ad63fbf2",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0xffe007336904a5a2c8d6e3c685f2b1d132b864c8",
+      "trace_address": [
+        3,
+        2,
+        0,
+        1,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x50c42deacd8fc9773493ed674b675be577f2634b",
+      "gas_limit": 3924449,
+      "gas_used": 586,
+      "id": "5003ebedf2f3b2b2fbaf5f5797b35834",
+      "input": "0x70a082310000000000000000000000005c68742e8e483519e942237f2c8cf294f0759180",
+      "output": "0x0000000000000000000000000000000000000000000000006d53d2ad262573e5",
+      "parent_trace_id": "57e1f5440a9a0120f3e488cbee79d3cf",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0xffe007336904a5a2c8d6e3c685f2b1d132b864c8",
+      "trace_address": [
+        3,
+        2,
+        0,
+        3,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x50c42deacd8fc9773493ed674b675be577f2634b",
+      "gas_limit": 3870176,
+      "gas_used": 6093,
+      "id": "e18f0ba4735fa81e75ea192b120b017a",
+      "input": "0xa9059cbb0000000000000000000000005c68742e8e483519e942237f2c8cf294f07591800000000000000000000000000000000000000000000000000012ec2678431529",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "parent_trace_id": "e83f164c6f945fefb31b8cc46d21e2b3",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": true,
+      "storage_change": true,
+      "subtraces": 0,
+      "to_addr": "0xffe007336904a5a2c8d6e3c685f2b1d132b864c8",
+      "trace_address": [
+        3,
+        2,
+        0,
+        2,
+        0,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x50c42deacd8fc9773493ed674b675be577f2634b",
+      "gas_limit": 4152965,
+      "gas_used": 29993,
+      "id": "cc40203757db3ae62c83080d655917ef",
+      "input": "0xa9059cbb000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b60000000000000000000000000000000000000000000000000012ec2678431529",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "parent_trace_id": "51db6f767c46a6f2223775a9e5c5f54a",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": true,
+      "storage_change": true,
+      "subtraces": 0,
+      "to_addr": "0xffe007336904a5a2c8d6e3c685f2b1d132b864c8",
+      "trace_address": [
+        3,
+        0,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "gas_limit": 3907710,
+      "gas_used": 582,
+      "id": "da816db050cd78c880c311da39b04a0a",
+      "input": "0x70a0823100000000000000000000000056b404073c990e828691af936bcfff710f6c97a1",
+      "output": "0x000000000000000000000000000000000000000000000b61a4e11b9514221ab6",
+      "parent_trace_id": "c965d9a297a563c290720cdf930fe46e",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x039e2fb66102314ce7b64ce5ce3e5183bc94ad38",
+      "trace_address": [
+        3,
+        2,
+        1,
+        0,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "call",
+      "from_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "gas_limit": 3814360,
+      "gas_used": 34063,
+      "id": "4c24c419a4839a1ac35ed1e89f757b0d",
+      "input": "0xa9059cbb000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b60000000000000000000000000000000000000000000000000000000001297a1f",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "parent_trace_id": "c965d9a297a563c290720cdf930fe46e",
+      "pos_in_parent_trace": 3,
+      "self_storage_change": false,
+      "storage_change": true,
+      "subtraces": 1,
+      "to_addr": "0x29219dd400f2bf60e5a23d13be72b486d4038894",
+      "trace_address": [
+        3,
+        2,
+        1,
+        0,
+        2
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "call",
+      "from_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "gas_limit": 3903732,
+      "gas_used": 66636,
+      "id": "b7ac97e610396efda6389ce7be974f7f",
+      "input": "0xfeee3735000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b6000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b600000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000015cade06fe1d46a9b",
+      "output": "0xfeee373500000000000000000000000000000000000000000000000000000000",
+      "parent_trace_id": "c965d9a297a563c290720cdf930fe46e",
+      "pos_in_parent_trace": 1,
+      "self_storage_change": false,
+      "storage_change": true,
+      "subtraces": 1,
+      "to_addr": "0xd231bd753d6d4dc8b4371f1d1ca6b10cb20cd435",
+      "trace_address": [
+        3,
+        2,
+        1,
+        0,
+        1
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "gas_limit": 3703232,
+      "gas_used": 2646,
+      "id": "6eb62a173d01533714f93e70e213fb4a",
+      "input": "0x0abe968800000000000000000000000000000000000000000000000000000000007fc97c039e2fb66102314ce7b64ce5ce3e5183bc94ad3829219dd400f2bf60e5a23d13be72b486d40388940014002c",
+      "output": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010a3e3dd",
+      "parent_trace_id": "ae8ecd1e36ea066fc76540396d7f2a6b",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0xed06734629e22277d395d8eb8b67cc75c27cb6a2",
+      "trace_address": [
+        3,
+        2,
+        1,
+        0,
+        1,
+        0,
+        2,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "gas_limit": 3696329,
+      "gas_used": 646,
+      "id": "61be0e8a00038654ff43ae825055ff1d",
+      "input": "0x0abe968800000000000000000000000000000000000000000000000000000000007fc97d039e2fb66102314ce7b64ce5ce3e5183bc94ad3829219dd400f2bf60e5a23d13be72b486d40388940014002c",
+      "output": "0x00000000000000000000000000000000000000000000000106ba2023fdf7a0b0000000000000000000000000000000000000000000000000000000000fb53ced",
+      "parent_trace_id": "d83d54272cb3517b5da7282987c80257",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0xed06734629e22277d395d8eb8b67cc75c27cb6a2",
+      "trace_address": [
+        3,
+        2,
+        1,
+        0,
+        1,
+        0,
+        4,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "gas_limit": 3691305,
+      "gas_used": 2646,
+      "id": "dfb5b228eaf2b612ee400dba8b6c6d3c",
+      "input": "0x0abe968800000000000000000000000000000000000000000000000000000000007fc97e039e2fb66102314ce7b64ce5ce3e5183bc94ad3829219dd400f2bf60e5a23d13be72b486d40388940014002c",
+      "output": "0x0000000000000000000000000000000000000000000000137ff0886ebb142c4e0000000000000000000000000000000000000000000000000000000000000000",
+      "parent_trace_id": "faf2a205dfbeb267286def795602ff47",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0xed06734629e22277d395d8eb8b67cc75c27cb6a2",
+      "trace_address": [
+        3,
+        2,
+        1,
+        0,
+        1,
+        0,
+        6,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "gas_limit": 3705923,
+      "gas_used": 365,
+      "id": "d3b7d5b0b9788c4c29d04f38099c4589",
+      "input": "0x17f11ecc039e2fb66102314ce7b64ce5ce3e5183bc94ad3829219dd400f2bf60e5a23d13be72b486d40388940014002c",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000014",
+      "parent_trace_id": "48fbe0a3d546d80113487f2a4cde3437",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0xed06734629e22277d395d8eb8b67cc75c27cb6a2",
+      "trace_address": [
+        3,
+        2,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "gas_limit": 3981974,
+      "gas_used": 142019,
+      "id": "c965d9a297a563c290720cdf930fe46e",
+      "input": "0x53c059a00000000000000000000000000000000000000000000000000000000000000001000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b6039e2fb66102314ce7b64ce5ce3e5183bc94ad3829219dd400f2bf60e5a23d13be72b486d40388940014002c",
+      "output": "0x00000000000000000000000001297a1f00000000000000000000000000000000",
+      "parent_trace_id": "dfe1576347241d38d33f3fecf6c68baa",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": true,
+      "storage_change": true,
+      "subtraces": 3,
+      "to_addr": "0xed06734629e22277d395d8eb8b67cc75c27cb6a2",
+      "trace_address": [
+        3,
+        2,
+        1,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "gas_limit": 3699945,
+      "gas_used": 2538,
+      "id": "3463a666f5b3dc6b45c82c506f8eb884",
+      "input": "0xbd85b03900000000000000000000000000000000000000000000000000000000007fc97c039e2fb66102314ce7b64ce5ce3e5183bc94ad3829219dd400f2bf60e5a23d13be72b486d40388940014002c",
+      "output": "0x000000000000000000000000000000000000000000014d96a0762ab3b1e371b6",
+      "parent_trace_id": "014ba095122325c7eb57790a82d787dc",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0xed06734629e22277d395d8eb8b67cc75c27cb6a2",
+      "trace_address": [
+        3,
+        2,
+        1,
+        0,
+        1,
+        0,
+        3,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "gas_limit": 3694979,
+      "gas_used": 2538,
+      "id": "86b7ac5eb62ff51a4fe473f436a7de2e",
+      "input": "0xbd85b03900000000000000000000000000000000000000000000000000000000007fc97d039e2fb66102314ce7b64ce5ce3e5183bc94ad3829219dd400f2bf60e5a23d13be72b486d40388940014002c",
+      "output": "0x000000000000000000000000000000000000000000014fb9105fce73a136d179",
+      "parent_trace_id": "b249e3ffc174e8ccacf0d85d7b6f413d",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0xed06734629e22277d395d8eb8b67cc75c27cb6a2",
+      "trace_address": [
+        3,
+        2,
+        1,
+        0,
+        1,
+        0,
+        5,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "gas_limit": 3688019,
+      "gas_used": 2538,
+      "id": "ee9861653efa07f82dd8af0c89f91737",
+      "input": "0xbd85b03900000000000000000000000000000000000000000000000000000000007fc97e039e2fb66102314ce7b64ce5ce3e5183bc94ad3829219dd400f2bf60e5a23d13be72b486d40388940014002c",
+      "output": "0x00000000000000000000000000000000000000000001521fd8e27558700c278e",
+      "parent_trace_id": "563897f680d602e9544e50af6ddbbfd2",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0xed06734629e22277d395d8eb8b67cc75c27cb6a2",
+      "trace_address": [
+        3,
+        2,
+        1,
+        0,
+        1,
+        0,
+        7,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "gas_limit": 3710447,
+      "gas_used": 518,
+      "id": "47453535ab660026337a206ccc64f5ef",
+      "input": "0xdbe65edc039e2fb66102314ce7b64ce5ce3e5183bc94ad3829219dd400f2bf60e5a23d13be72b486d40388940014002c",
+      "output": "0x00000000000000000000000000000000000000000000000000000000007fc97d",
+      "parent_trace_id": "b6ff7311747ded91b2f9c275aa93d185",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0xed06734629e22277d395d8eb8b67cc75c27cb6a2",
+      "trace_address": [
+        3,
+        2,
+        1,
+        0,
+        1,
+        0,
+        0,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "gas_limit": 4267354,
+      "gas_used": 11646,
+      "id": "88f2a2c58ba7c71d9b3ce44108ed68cc",
+      "input": "0xe77366f80000000000000000000000000000000000000000000000015cade06fe1d46a9b0000000000000000000000000000000000000000000000000000000000000001039e2fb66102314ce7b64ce5ce3e5183bc94ad3829219dd400f2bf60e5a23d13be72b486d40388940014002c",
+      "output": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001297a1f00000000000000000000000000000000000000000000000000e594e041cd6e6c",
+      "parent_trace_id": "ae6a319f431fe174d6cdad7565e10561",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0xed06734629e22277d395d8eb8b67cc75c27cb6a2",
+      "trace_address": [
+        2,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "call",
+      "from_addr": "0x5c68742e8e483519e942237f2c8cf294f0759180",
+      "gas_limit": 4012538,
+      "gas_used": 12837,
+      "id": "c6ed1c58309845bc0d226c5eaea970bd",
+      "input": "0xa9059cbb00000000000000000000000056b404073c990e828691af936bcfff710f6c97a10000000000000000000000000000000000000000000000015cade06fe1d46a9b",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "parent_trace_id": "4b56b86ff6f24cd8b6615840b53188a4",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": true,
+      "storage_change": true,
+      "subtraces": 0,
+      "to_addr": "0x039e2fb66102314ce7b64ce5ce3e5183bc94ad38",
+      "trace_address": [
+        3,
+        2,
+        0,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0x5c68742e8e483519e942237f2c8cf294f0759180",
+      "gas_limit": 3999032,
+      "gas_used": 2970,
+      "id": "5703926f8cb2019e11cecdc2ad63fbf2",
+      "input": "0x70a082310000000000000000000000005c68742e8e483519e942237f2c8cf294f0759180",
+      "output": "0x0000000000000000000000000000000000000000000000006d40e686ade25ebc",
+      "parent_trace_id": "4b56b86ff6f24cd8b6615840b53188a4",
+      "pos_in_parent_trace": 1,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 1,
+      "to_addr": "0x50c42deacd8fc9773493ed674b675be577f2634b",
+      "trace_address": [
+        3,
+        2,
+        0,
+        1
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0x5c68742e8e483519e942237f2c8cf294f0759180",
+      "gas_limit": 3987087,
+      "gas_used": 970,
+      "id": "57e1f5440a9a0120f3e488cbee79d3cf",
+      "input": "0x70a082310000000000000000000000005c68742e8e483519e942237f2c8cf294f0759180",
+      "output": "0x0000000000000000000000000000000000000000000000006d53d2ad262573e5",
+      "parent_trace_id": "4b56b86ff6f24cd8b6615840b53188a4",
+      "pos_in_parent_trace": 3,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 1,
+      "to_addr": "0x50c42deacd8fc9773493ed674b675be577f2634b",
+      "trace_address": [
+        3,
+        2,
+        0,
+        3
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "call",
+      "from_addr": "0x5c68742e8e483519e942237f2c8cf294f0759180",
+      "gas_limit": 3995349,
+      "gas_used": 7751,
+      "id": "3e1d62b29ca12548578d2559704483b1",
+      "input": "0xfa461e33fffffffffffffffffffffffffffffffffffffffffffffffea3521f901e2b95650000000000000000000000000000000000000000000000000012ec26784315290000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000000002000000000000000000000000050c42deacd8fc9773493ed674b675be577f2634b",
+      "output": "0x",
+      "parent_trace_id": "4b56b86ff6f24cd8b6615840b53188a4",
+      "pos_in_parent_trace": 2,
+      "self_storage_change": false,
+      "storage_change": true,
+      "subtraces": 1,
+      "to_addr": "0xe414a5a72fa07ab0a0814922fd779730d43ad8b6",
+      "trace_address": [
+        3,
+        2,
+        0,
+        2
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0x5e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+      "gas_limit": 4186067,
+      "gas_used": 9750,
+      "id": "05c9efce462ff023089f091eb3e02310",
+      "input": "0x70a082310000000000000000000000005e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+      "output": "0x000000000000000000000000000000000000000000000000000000083234f346",
+      "parent_trace_id": "055032f2a21f39547f738c376701b1e8",
+      "pos_in_parent_trace": 1,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 1,
+      "to_addr": "0x29219dd400f2bf60e5a23d13be72b486d4038894",
+      "trace_address": [
+        3,
+        1
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0x5e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+      "gas_limit": 3950437,
+      "gas_used": 1250,
+      "id": "bac8dab1ae770dcebbb3e890cd825424",
+      "input": "0x70a082310000000000000000000000005e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+      "output": "0x00000000000000000000000000000000000000000000000000000008335e612e",
+      "parent_trace_id": "055032f2a21f39547f738c376701b1e8",
+      "pos_in_parent_trace": 3,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 1,
+      "to_addr": "0x29219dd400f2bf60e5a23d13be72b486d4038894",
+      "trace_address": [
+        3,
+        3
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "call",
+      "from_addr": "0x5e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+      "gas_limit": 4223734,
+      "gas_used": 34880,
+      "id": "51db6f767c46a6f2223775a9e5c5f54a",
+      "input": "0xa9059cbb000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b60000000000000000000000000000000000000000000000000012ec2678431529",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "parent_trace_id": "055032f2a21f39547f738c376701b1e8",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": true,
+      "subtraces": 1,
+      "to_addr": "0x50c42deacd8fc9773493ed674b675be577f2634b",
+      "trace_address": [
+        3,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "call",
+      "from_addr": "0x5e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+      "gas_limit": 4175537,
+      "gas_used": 228030,
+      "id": "925098a3511b3bf892643e87b787a1d4",
+      "input": "0xfa461e330000000000000000000000000000000000000000000000000000000001296de8ffffffffffffffffffffffffffffffffffffffffffffffffffed13d987bcead7000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000003a0000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b6000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000003200000000000000000000000000000000000000000000000000000000001296de800000000000000000000000000000000000000103fb6c79a946908896ce5972a00000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000003000000000000000000000000000000000000000000000000000000000000000e00000000000000000000000029219dd400f2bf60e5a23d13be72b486d40388940000000000000000000000005e44978abf812de9db3d9abc8ed0ed9ff4d0b20c000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e00000000000000000000000050c42deacd8fc9773493ed674b675be577f2634b0000000000000000000000005c68742e8e483519e942237f2c8cf294f07591800000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000039e2fb66102314ce7b64ce5ce3e5183bc94ad3800000000000000000000000056b404073c990e828691af936bcfff710f6c97a100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000000000000000000012ec26784315290000000000000000000000000000000000000000000000015cade06fe1d46a9b0000000000000000000000000000000000000000000000000000000001297a1f",
+      "output": "0x",
+      "parent_trace_id": "055032f2a21f39547f738c376701b1e8",
+      "pos_in_parent_trace": 2,
+      "self_storage_change": false,
+      "storage_change": true,
+      "subtraces": 4,
+      "to_addr": "0xe414a5a72fa07ab0a0814922fd779730d43ad8b6",
+      "trace_address": [
+        3,
+        2
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "delegatecall",
+      "from_addr": "0xd231bd753d6d4dc8b4371f1d1ca6b10cb20cd435",
+      "gas_limit": 3840094,
+      "gas_used": 63921,
+      "id": "4c61993244ff26ef120ef781f8c9258d",
+      "input": "0xfeee3735000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b6000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b600000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000015cade06fe1d46a9b56b404073c990e828691af936bcfff710f6c97a18a3b1cd8d0decf649262e56ece6b339e59f350db0000000000000000000000000000000000000000003e",
+      "output": "0xfeee373500000000000000000000000000000000000000000000000000000000",
+      "parent_trace_id": "b7ac97e610396efda6389ce7be974f7f",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": true,
+      "storage_change": true,
+      "subtraces": 8,
+      "to_addr": "0x3a5a719e5609e828d8bbf7d5b422f8d416c08971",
+      "trace_address": [
+        3,
+        2,
+        1,
+        0,
+        1,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd231bd753d6d4dc8b4371f1d1ca6b10cb20cd435",
+      "gas_limit": 3762177,
+      "gas_used": 2843,
+      "id": "ae8ecd1e36ea066fc76540396d7f2a6b",
+      "input": "0x0abe968800000000000000000000000000000000000000000000000000000000007fc97c",
+      "output": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010a3e3dd",
+      "parent_trace_id": "4c61993244ff26ef120ef781f8c9258d",
+      "pos_in_parent_trace": 2,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 1,
+      "to_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "trace_address": [
+        3,
+        2,
+        1,
+        0,
+        1,
+        0,
+        2
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd231bd753d6d4dc8b4371f1d1ca6b10cb20cd435",
+      "gas_limit": 3755164,
+      "gas_used": 843,
+      "id": "d83d54272cb3517b5da7282987c80257",
+      "input": "0x0abe968800000000000000000000000000000000000000000000000000000000007fc97d",
+      "output": "0x00000000000000000000000000000000000000000000000106ba2023fdf7a0b0000000000000000000000000000000000000000000000000000000000fb53ced",
+      "parent_trace_id": "4c61993244ff26ef120ef781f8c9258d",
+      "pos_in_parent_trace": 4,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 1,
+      "to_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "trace_address": [
+        3,
+        2,
+        1,
+        0,
+        1,
+        0,
+        4
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd231bd753d6d4dc8b4371f1d1ca6b10cb20cd435",
+      "gas_limit": 3750061,
+      "gas_used": 2843,
+      "id": "faf2a205dfbeb267286def795602ff47",
+      "input": "0x0abe968800000000000000000000000000000000000000000000000000000000007fc97e",
+      "output": "0x0000000000000000000000000000000000000000000000137ff0886ebb142c4e0000000000000000000000000000000000000000000000000000000000000000",
+      "parent_trace_id": "4c61993244ff26ef120ef781f8c9258d",
+      "pos_in_parent_trace": 6,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 1,
+      "to_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "trace_address": [
+        3,
+        2,
+        1,
+        0,
+        1,
+        0,
+        6
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd231bd753d6d4dc8b4371f1d1ca6b10cb20cd435",
+      "gas_limit": 3764905,
+      "gas_used": 553,
+      "id": "48fbe0a3d546d80113487f2a4cde3437",
+      "input": "0x17f11ecc",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000014",
+      "parent_trace_id": "4c61993244ff26ef120ef781f8c9258d",
+      "pos_in_parent_trace": 1,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 1,
+      "to_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "trace_address": [
+        3,
+        2,
+        1,
+        0,
+        1,
+        0,
+        1
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd231bd753d6d4dc8b4371f1d1ca6b10cb20cd435",
+      "gas_limit": 3758838,
+      "gas_used": 2732,
+      "id": "014ba095122325c7eb57790a82d787dc",
+      "input": "0xbd85b03900000000000000000000000000000000000000000000000000000000007fc97c",
+      "output": "0x000000000000000000000000000000000000000000014d96a0762ab3b1e371b6",
+      "parent_trace_id": "4c61993244ff26ef120ef781f8c9258d",
+      "pos_in_parent_trace": 3,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 1,
+      "to_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "trace_address": [
+        3,
+        2,
+        1,
+        0,
+        1,
+        0,
+        3
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd231bd753d6d4dc8b4371f1d1ca6b10cb20cd435",
+      "gas_limit": 3753793,
+      "gas_used": 2732,
+      "id": "b249e3ffc174e8ccacf0d85d7b6f413d",
+      "input": "0xbd85b03900000000000000000000000000000000000000000000000000000000007fc97d",
+      "output": "0x000000000000000000000000000000000000000000014fb9105fce73a136d179",
+      "parent_trace_id": "4c61993244ff26ef120ef781f8c9258d",
+      "pos_in_parent_trace": 5,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 1,
+      "to_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "trace_address": [
+        3,
+        2,
+        1,
+        0,
+        1,
+        0,
+        5
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd231bd753d6d4dc8b4371f1d1ca6b10cb20cd435",
+      "gas_limit": 3746722,
+      "gas_used": 2732,
+      "id": "563897f680d602e9544e50af6ddbbfd2",
+      "input": "0xbd85b03900000000000000000000000000000000000000000000000000000000007fc97e",
+      "output": "0x00000000000000000000000000000000000000000001521fd8e27558700c278e",
+      "parent_trace_id": "4c61993244ff26ef120ef781f8c9258d",
+      "pos_in_parent_trace": 7,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 1,
+      "to_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "trace_address": [
+        3,
+        2,
+        1,
+        0,
+        1,
+        0,
+        7
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd231bd753d6d4dc8b4371f1d1ca6b10cb20cd435",
+      "gas_limit": 3769500,
+      "gas_used": 706,
+      "id": "b6ff7311747ded91b2f9c275aa93d185",
+      "input": "0xdbe65edc",
+      "output": "0x00000000000000000000000000000000000000000000000000000000007fc97d",
+      "parent_trace_id": "4c61993244ff26ef120ef781f8c9258d",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 1,
+      "to_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "trace_address": [
+        3,
+        2,
+        1,
+        0,
+        1,
+        0,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4291872,
+      "gas_used": 479,
+      "id": "f05ab031d96c78ee23777f861cbb771a",
+      "input": "0x22afcccb0000000000000000000000000000000000000000000000000000000000000000",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "parent_trace_id": "a55c3939682223fe275f51ea43123526",
+      "pos_in_parent_trace": 5,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x3d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "trace_address": [
+        1,
+        5
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4319943,
+      "gas_used": 2479,
+      "id": "52b8cfc41730b9878d2fb2c690ef996b",
+      "input": "0x22afcccb0000000000000000000000000000000000000000000000000000000000000000",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "parent_trace_id": "1e8dcb4ebfc484516cbd21d836f3b488",
+      "pos_in_parent_trace": 5,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x3d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "trace_address": [
+        0,
+        5
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4285765,
+      "gas_used": 2428,
+      "id": "be7c6a97888ade7dbd2590c2bf8c685a",
+      "input": "0x1a686502",
+      "output": "0x0000000000000000000000000000000000000000000000e5080f9278ec28de90",
+      "parent_trace_id": "a55c3939682223fe275f51ea43123526",
+      "pos_in_parent_trace": 9,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5c68742e8e483519e942237f2c8cf294f0759180",
+      "trace_address": [
+        1,
+        9
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4290548,
+      "gas_used": 2696,
+      "id": "d2876a8041d1f3db930e5bf1a79590ff",
+      "input": "0x3850c7bd",
+      "output": "0x000000000000000000000000000000000000000003b9e97dd2d4743313bfb2b2fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeb58800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+      "parent_trace_id": "a55c3939682223fe275f51ea43123526",
+      "pos_in_parent_trace": 6,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5c68742e8e483519e942237f2c8cf294f0759180",
+      "trace_address": [
+        1,
+        6
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4282240,
+      "gas_used": 2525,
+      "id": "4666d5136eb9667991c826c8f18b7bff",
+      "input": "0x5339c296ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffde",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "parent_trace_id": "a55c3939682223fe275f51ea43123526",
+      "pos_in_parent_trace": 10,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5c68742e8e483519e942237f2c8cf294f0759180",
+      "trace_address": [
+        1,
+        10
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4294748,
+      "gas_used": 264,
+      "id": "722fdb82d980a7de7666dbad939bcca5",
+      "input": "0xc45a0155",
+      "output": "0x0000000000000000000000003d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "parent_trace_id": "a55c3939682223fe275f51ea43123526",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5c68742e8e483519e942237f2c8cf294f0759180",
+      "trace_address": [
+        1,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4287232,
+      "gas_used": 279,
+      "id": "482988ce6bc82c2c59b478f620c00423",
+      "input": "0xd0c93a7c",
+      "output": "0x000000000000000000000000000000000000000000000000000000000000000a",
+      "parent_trace_id": "a55c3939682223fe275f51ea43123526",
+      "pos_in_parent_trace": 7,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5c68742e8e483519e942237f2c8cf294f0759180",
+      "trace_address": [
+        1,
+        7
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4286439,
+      "gas_used": 251,
+      "id": "8f4b1561bf4b19a20708228c147d3f33",
+      "input": "0xddca3f43",
+      "output": "0x00000000000000000000000000000000000000000000000000000000000001f4",
+      "parent_trace_id": "a55c3939682223fe275f51ea43123526",
+      "pos_in_parent_trace": 8,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5c68742e8e483519e942237f2c8cf294f0759180",
+      "trace_address": [
+        1,
+        8
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4311878,
+      "gas_used": 2428,
+      "id": "1f6cde2e77b8e8a454288916231ceeb5",
+      "input": "0x1a686502",
+      "output": "0x000000000000000000000000000000000000000000000000000eab0a5d1a638a",
+      "parent_trace_id": "1e8dcb4ebfc484516cbd21d836f3b488",
+      "pos_in_parent_trace": 9,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+      "trace_address": [
+        0,
+        9
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4316650,
+      "gas_used": 2696,
+      "id": "de892658d8c3a0fd72239dc709fffc76",
+      "input": "0x3850c7bd",
+      "output": "0x0000000000000000000000000000000000004096ee99296daa53c9176eb9a8fa000000000000000000000000000000000000000000000000000000000002f6e200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+      "parent_trace_id": "1e8dcb4ebfc484516cbd21d836f3b488",
+      "pos_in_parent_trace": 6,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+      "trace_address": [
+        0,
+        6
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4308407,
+      "gas_used": 2525,
+      "id": "6be38809d5924b88bcb004a526070671",
+      "input": "0x5339c296000000000000000000000000000000000000000000000000000000000000004b",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "parent_trace_id": "1e8dcb4ebfc484516cbd21d836f3b488",
+      "pos_in_parent_trace": 10,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+      "trace_address": [
+        0,
+        10
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4325280,
+      "gas_used": 264,
+      "id": "f422cb6ba7277e775f4b716ffe420ee6",
+      "input": "0xc45a0155",
+      "output": "0x0000000000000000000000003d91b700252e0e3ee7805d12e048a988ab69c8ad",
+      "parent_trace_id": "1e8dcb4ebfc484516cbd21d836f3b488",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+      "trace_address": [
+        0,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4313345,
+      "gas_used": 279,
+      "id": "fede6f12f2dd8f075b8d33187bbabec9",
+      "input": "0xd0c93a7c",
+      "output": "0x000000000000000000000000000000000000000000000000000000000000000a",
+      "parent_trace_id": "1e8dcb4ebfc484516cbd21d836f3b488",
+      "pos_in_parent_trace": 7,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+      "trace_address": [
+        0,
+        7
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "gas_limit": 4312551,
+      "gas_used": 251,
+      "id": "b93877fcb0c35ce41386f7c866c1834f",
+      "input": "0xddca3f43",
+      "output": "0x00000000000000000000000000000000000000000000000000000000000001f4",
+      "parent_trace_id": "1e8dcb4ebfc484516cbd21d836f3b488",
+      "pos_in_parent_trace": 8,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 0,
+      "to_addr": "0x5e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+      "trace_address": [
+        0,
+        8
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "call",
+      "from_addr": "0xe414a5a72fa07ab0a0814922fd779730d43ad8b6",
+      "gas_limit": 3896140,
+      "gas_used": 10163,
+      "id": "ed397bc99c7d512274ca4813ae7e58e1",
+      "input": "0xa9059cbb0000000000000000000000000df9a8932b1ccacfcad3f1409431ebf8800f42e80000000000000000000000000000000000000000000000000000000000000c37",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "parent_trace_id": "925098a3511b3bf892643e87b787a1d4",
+      "pos_in_parent_trace": 3,
+      "self_storage_change": false,
+      "storage_change": true,
+      "subtraces": 1,
+      "to_addr": "0x29219dd400f2bf60e5a23d13be72b486d4038894",
+      "trace_address": [
+        3,
+        2,
+        3
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "call",
+      "from_addr": "0xe414a5a72fa07ab0a0814922fd779730d43ad8b6",
+      "gas_limit": 3904682,
+      "gas_used": 8163,
+      "id": "125d67cfb0ba4efd1fe7189dddd656df",
+      "input": "0xa9059cbb0000000000000000000000005e44978abf812de9db3d9abc8ed0ed9ff4d0b20c0000000000000000000000000000000000000000000000000000000001296de8",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "parent_trace_id": "925098a3511b3bf892643e87b787a1d4",
+      "pos_in_parent_trace": 2,
+      "self_storage_change": false,
+      "storage_change": true,
+      "subtraces": 1,
+      "to_addr": "0x29219dd400f2bf60e5a23d13be72b486d4038894",
+      "trace_address": [
+        3,
+        2,
+        2
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "call",
+      "from_addr": "0xe414a5a72fa07ab0a0814922fd779730d43ad8b6",
+      "gas_limit": 3931956,
+      "gas_used": 6480,
+      "id": "e83f164c6f945fefb31b8cc46d21e2b3",
+      "input": "0xa9059cbb0000000000000000000000005c68742e8e483519e942237f2c8cf294f07591800000000000000000000000000000000000000000000000000012ec2678431529",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "parent_trace_id": "3e1d62b29ca12548578d2559704483b1",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": true,
+      "subtraces": 1,
+      "to_addr": "0x50c42deacd8fc9773493ed674b675be577f2634b",
+      "trace_address": [
+        3,
+        2,
+        0,
+        2,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "call",
+      "from_addr": "0xe414a5a72fa07ab0a0814922fd779730d43ad8b6",
+      "gas_limit": 4045349,
+      "gas_used": 142219,
+      "id": "dfe1576347241d38d33f3fecf6c68baa",
+      "input": "0x53c059a00000000000000000000000000000000000000000000000000000000000000001000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b6",
+      "output": "0x00000000000000000000000001297a1f00000000000000000000000000000000",
+      "parent_trace_id": "925098a3511b3bf892643e87b787a1d4",
+      "pos_in_parent_trace": 1,
+      "self_storage_change": false,
+      "storage_change": true,
+      "subtraces": 1,
+      "to_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "trace_address": [
+        3,
+        2,
+        1
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xe414a5a72fa07ab0a0814922fd779730d43ad8b6",
+      "gas_limit": 4337759,
+      "gas_used": 14352,
+      "id": "ae6a319f431fe174d6cdad7565e10561",
+      "input": "0xe77366f80000000000000000000000000000000000000000000000015cade06fe1d46a9b0000000000000000000000000000000000000000000000000000000000000001",
+      "output": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001297a1f00000000000000000000000000000000000000000000000000e594e041cd6e6c",
+      "parent_trace_id": "e23383e8a7e58542e38c2c526814558e",
+      "pos_in_parent_trace": 2,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 1,
+      "to_addr": "0x56b404073c990e828691af936bcfff710f6c97a1",
+      "trace_address": [
+        2
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "call",
+      "from_addr": "0xe414a5a72fa07ab0a0814922fd779730d43ad8b6",
+      "gas_limit": 4105012,
+      "gas_used": 59312,
+      "id": "4b56b86ff6f24cd8b6615840b53188a4",
+      "input": "0x128acb0800000000000000000000000056b404073c990e828691af936bcfff710f6c97a100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000012ec2678431529000000000000000000000000fffd8963efd1fc6a506488495d951d5263988d2500000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000002000000000000000000000000050c42deacd8fc9773493ed674b675be577f2634b",
+      "output": "0xfffffffffffffffffffffffffffffffffffffffffffffffea3521f901e2b95650000000000000000000000000000000000000000000000000012ec2678431529",
+      "parent_trace_id": "925098a3511b3bf892643e87b787a1d4",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": true,
+      "storage_change": true,
+      "subtraces": 4,
+      "to_addr": "0x5c68742e8e483519e942237f2c8cf294f0759180",
+      "trace_address": [
+        3,
+        2,
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "call",
+      "from_addr": "0xe414a5a72fa07ab0a0814922fd779730d43ad8b6",
+      "gas_limit": 4320248,
+      "gas_used": 312061,
+      "id": "055032f2a21f39547f738c376701b1e8",
+      "input": "0x128acb08000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b600000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000001296de800000000000000000000000000000000000000000000000000000001000276a400000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000003a0000000000000000000000000e414a5a72fa07ab0a0814922fd779730d43ad8b6000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000003200000000000000000000000000000000000000000000000000000000001296de800000000000000000000000000000000000000103fb6c79a946908896ce5972a00000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000003000000000000000000000000000000000000000000000000000000000000000e00000000000000000000000029219dd400f2bf60e5a23d13be72b486d40388940000000000000000000000005e44978abf812de9db3d9abc8ed0ed9ff4d0b20c000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e00000000000000000000000050c42deacd8fc9773493ed674b675be577f2634b0000000000000000000000005c68742e8e483519e942237f2c8cf294f07591800000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000039e2fb66102314ce7b64ce5ce3e5183bc94ad3800000000000000000000000056b404073c990e828691af936bcfff710f6c97a100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000000000000000000012ec26784315290000000000000000000000000000000000000000000000015cade06fe1d46a9b0000000000000000000000000000000000000000000000000000000001297a1f",
+      "output": "0x0000000000000000000000000000000000000000000000000000000001296de8ffffffffffffffffffffffffffffffffffffffffffffffffffed13d987bcead7",
+      "parent_trace_id": "e23383e8a7e58542e38c2c526814558e",
+      "pos_in_parent_trace": 3,
+      "self_storage_change": true,
+      "storage_change": true,
+      "subtraces": 4,
+      "to_addr": "0x5e44978abf812de9db3d9abc8ed0ed9ff4d0b20c",
+      "trace_address": [
+        3
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xe414a5a72fa07ab0a0814922fd779730d43ad8b6",
+      "gas_limit": 4366017,
+      "gas_used": 25306,
+      "id": "a55c3939682223fe275f51ea43123526",
+      "input": "0xfba21b3d0000000000000000000000005c68742e8e483519e942237f2c8cf294f075918000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000012ec2678431529",
+      "output": "0x0000000000000000000000000000000000000000000000015cade06fe1d46a9b",
+      "parent_trace_id": "e23383e8a7e58542e38c2c526814558e",
+      "pos_in_parent_trace": 1,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 11,
+      "to_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "trace_address": [
+        1
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "staticcall",
+      "from_addr": "0xe414a5a72fa07ab0a0814922fd779730d43ad8b6",
+      "gas_limit": 4397024,
+      "gas_used": 30510,
+      "id": "1e8dcb4ebfc484516cbd21d836f3b488",
+      "input": "0xfba21b3d0000000000000000000000005e44978abf812de9db3d9abc8ed0ed9ff4d0b20c00000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000001296de8",
+      "output": "0x0000000000000000000000000000000000000000000000000012ec2678431529",
+      "parent_trace_id": "e23383e8a7e58542e38c2c526814558e",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": false,
+      "subtraces": 11,
+      "to_addr": "0xd47ec67ec57f08e32a94a50d40baa86c0a4b9969",
+      "trace_address": [
+        0
+      ],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    },
+    {
+      "call_type": "call",
+      "from_addr": "0xed38fe2d1f355629ef1c456316bad7575ddeaa54",
+      "gas_limit": 4477000,
+[31m      "gas_used": 788536,[0m
+[31m[0m[32m      "gas_used": 400485,[0m
+[32m[0m      "id": "e23383e8a7e58542e38c2c526814558e",
+      "input": "0x0000000000000000000001296de84c0040fedb1e6a51a42225b3965caa0b829219dd400f2bf60e5a23d13be72b486d40388945e44978abf812de9db3d9abc8ed0ed9ff4d0b20c90e14310b7ab363f25dcd24fb59d2d9d6f95dfc98d2d71a1d0ba3920d467a5088dfcb233ca53c1d646000c056b404073c990e828691af936bcfff710f6c97a1",
+      "output": "0x",
+      "parent_trace_id": "",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": false,
+      "storage_change": true,
+      "subtraces": 4,
+      "to_addr": "0xe414a5a72fa07ab0a0814922fd779730d43ad8b6",
+      "trace_address": [],
+      "tx_id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "type": "call",
+      "value": "0x0"
+    }
+  ],
+  "txs": [
+    {
+      "from_addr": "0xed38fe2d1f355629ef1c456316bad7575ddeaa54",
+      "gas_limit": 4500000,
+      "gas_price": 1110000000,
+      "gas_used": 788536,
+      "id": "0xaeec7f1582139d64912d1178e2b835485ef72fe7859b686906ae5989224dabca",
+      "idx": 0,
+      "input": "0x0000000000000000000001296de84c0040fedb1e6a51a42225b3965caa0b829219dd400f2bf60e5a23d13be72b486d40388945e44978abf812de9db3d9abc8ed0ed9ff4d0b20c90e14310b7ab363f25dcd24fb59d2d9d6f95dfc98d2d71a1d0ba3920d467a5088dfcb233ca53c1d646000c056b404073c990e828691af936bcfff710f6c97a1",
+      "max_fee_per_gas": 0,
+      "max_priority_fee_per_gas": 0,
+      "nonce": 4298,
+      "status": true,
+      "to_addr": "0xe414a5a72fa07ab0a0814922fd779730d43ad8b6",
+      "value": "0x0"
+    },
+    {
+      "from_addr": "0x98c1803ff7ab06224b0042c191e7ce45da3307d3",
+      "gas_limit": 392532,
+      "gas_price": 1110000000,
+      "gas_used": 191012,
+      "id": "0x7c5d088b7154bb4b5b4afb717567b13fcb22d7892ba0acb10029d5e945f4302f",
+      "idx": 1,
+      "input": "0x81c2fdfb00000000000000000000000029219dd400f2bf60e5a23d13be72b486d4038894000000000000000000000000000000000000000000000000000000000000001400000000000000000000000000000000000000000000000000000000e286d98900000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000014000000000000000000000000098c1803ff7ab06224b0042c191e7ce45da3307d300000000000000000000000000000000000000000000000000000000677cfe49000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000007fc97a000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000011918f6aa70d6c606f0685",
+      "max_fee_per_gas": 0,
+      "max_priority_fee_per_gas": 0,
+      "nonce": 283,
+      "status": true,
+      "to_addr": "0x67803fe6d76409640efdc9b7abcd2c6c2e7cba48",
+      "value": "0x0"
+    },
+    {
+      "from_addr": "0x1157f4b6fed3897680097e9f82120106f2fa58e6",
+      "gas_limit": 4500000,
+      "gas_price": 1110000000,
+      "gas_used": 547639,
+      "id": "0x043d09e7ea5f68cc48d6ba093fa5367b6c1b7d8ec4f0f19f1556e01f3a8e14dd",
+      "idx": 2,
+      "input": "0x0000000000000000000001296de64c0040fedb1e6a51a42225b3965caa0b829219dd400f2bf60e5a23d13be72b486d40388945e44978abf812de9db3d9abc8ed0ed9ff4d0b20c90e14310b7ab363f25dcd24fb59d2d9d6f95dfc98d2d71a1d0ba3920d467a5088dfcb233ca53c1d646000c056b404073c990e828691af936bcfff710f6c97a1",
+      "max_fee_per_gas": 0,
+      "max_priority_fee_per_gas": 0,
+      "nonce": 3998,
+      "status": true,
+      "to_addr": "0xe414a5a72fa07ab0a0814922fd779730d43ad8b6",
+      "value": "0x0"
+    }
+  ]
+}

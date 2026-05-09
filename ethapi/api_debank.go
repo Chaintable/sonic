@@ -3,6 +3,7 @@ package ethapi
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"sort"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/Chaintable/pipeline/util"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -24,6 +26,84 @@ import (
 
 type DebankAPI struct {
 	b Backend
+}
+
+type debankOutPut struct {
+	BlockFile      *debankBlockFile `json:"block_file"`
+	Header         *ptypes.Header   `json:"header"`
+	StateDiff      hexutil.Bytes    `json:"state_diff"`
+	ValidationHash int64            `json:"validation_hash"`
+}
+
+type debankBlockFile struct {
+	Block            ptypes.Block         `json:"block"`
+	Txs              []ptypes.Transaction `json:"txs"`
+	Events           []debankEvent        `json:"events"`
+	Traces           []ptypes.Trace       `json:"traces"`
+	ErrorEvents      []debankEvent        `json:"error_events"`
+	ErrorTraces      []ptypes.Trace       `json:"error_traces"`
+	StorageContracts []string             `json:"storage_contracts"`
+}
+
+type debankEvent struct {
+	ID            string        `json:"id"`
+	Address       string        `json:"contract_id"`
+	Selector      string        `json:"selector"`
+	Topics        []string      `json:"topics"`
+	Data          hexutil.Bytes `json:"data"`
+	ParentTraceID string        `json:"parent_trace_id"`
+	Position      int64         `json:"pos_in_parent_trace"`
+	LogIndex      int64         `json:"idx"`
+	TxID          *string       `json:"tx_id"`
+}
+
+func newDebankOutPut(out *ptypes.DebankOutPut) *debankOutPut {
+	if out == nil {
+		return nil
+	}
+	return &debankOutPut{
+		BlockFile:      newDebankBlockFile(out.BlockFile),
+		Header:         out.Header,
+		StateDiff:      out.StateDiff,
+		ValidationHash: out.ValidationHash,
+	}
+}
+
+func newDebankBlockFile(blockFile *ptypes.BlockFile) *debankBlockFile {
+	if blockFile == nil {
+		return nil
+	}
+	events := make([]debankEvent, 0, len(blockFile.Events))
+	for _, event := range blockFile.Events {
+		events = append(events, newDebankEvent(event))
+	}
+	errorEvents := make([]debankEvent, 0, len(blockFile.ErrorEvents))
+	for _, event := range blockFile.ErrorEvents {
+		errorEvents = append(errorEvents, newDebankEvent(event))
+	}
+	return &debankBlockFile{
+		Block:            blockFile.Block,
+		Txs:              blockFile.Txs,
+		Events:           events,
+		Traces:           blockFile.Traces,
+		ErrorEvents:      errorEvents,
+		ErrorTraces:      blockFile.ErrorTraces,
+		StorageContracts: blockFile.StorageContracts,
+	}
+}
+
+func newDebankEvent(event ptypes.Event) debankEvent {
+	return debankEvent{
+		ID:            event.ID,
+		Address:       event.Address,
+		Selector:      event.Selector,
+		Topics:        event.Topics,
+		Data:          event.Data,
+		ParentTraceID: event.ParentTraceID,
+		Position:      event.Position,
+		LogIndex:      event.LogIndex,
+		TxID:          nil,
+	}
 }
 
 func NewDebankAPI(b Backend) *DebankAPI {
@@ -63,7 +143,7 @@ func (api *DebankAPI) getBlockReceipts(ctx context.Context, blkNumber rpc.BlockN
 	return api.b.GetReceiptsByNumber(ctx, blkNumber)
 }
 
-func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*ptypes.DebankOutPut, error) {
+func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*debankOutPut, error) {
 	log.Info("trace DebankBlock number", "number", blockNrOrHash)
 	var block *evmcore.EvmBlock
 	var err error
@@ -151,12 +231,12 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 			stateDiffBytes = []byte{}
 		}
 
-		return &ptypes.DebankOutPut{
+		return newDebankOutPut(&ptypes.DebankOutPut{
 			BlockFile:      blockFile,
 			Header:         header,
 			StateDiff:      stateDiffBytes,
 			ValidationHash: blockFile.Validation().ValidationHash,
-		}, nil
+		}), nil
 	}
 	// Prepare base state
 	parent, err := api.b.BlockByNumber(ctx, rpc.BlockNumber(block.NumberU64()-1))
@@ -167,14 +247,14 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 		return nil, fmt.Errorf("parent block %d not found", block.NumberU64()-1)
 	}
 
-	pStateDB, _, err := api.b.StateAndHeaderByNumberOrHash(ctx, rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(parent.NumberU64())))
+	parentStateDB, _, err := api.b.StateAndHeaderByNumberOrHash(ctx, rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(parent.NumberU64())))
 	if err != nil {
 		return nil, err
 	}
-	if pStateDB == nil {
+	if parentStateDB == nil {
 		return nil, fmt.Errorf("state for parent block %d not found", parent.NumberU64())
 	}
-	defer pStateDB.Release()
+	defer parentStateDB.Release()
 
 	rules, err := api.b.GetNetworkRules(ctx, idx.Block(block.NumberU64()))
 	if err != nil {
@@ -186,15 +266,19 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	vmConfig := opera.GetVmConfig(*rules)
 	vmConfig.NoBaseFee = true
 
-	rpcTracer := ptracer.RPCTracer{}
-	vmConfig.Tracer = newDebankTraceHooks(&rpcTracer)
-
-	diffStateDB := newDebankStateDiffDB(pStateDB)
-	pStateDB = evmstore.WrapStateDbWithLogger(diffStateDB, vmConfig.Tracer)
-	pStateDB.BeginBlock(block.NumberU64())
-
 	blockIdx := idx.Block(block.NumberU64())
 	chainConfig := api.b.ChainConfig(blockIdx)
+
+	rpcTracer := ptracer.RPCTracer{}
+	traceGuard := newDebankTraceGuard(&rpcTracer, chainConfig)
+	vmConfig.Tracer = traceGuard.Hooks()
+
+	replayBaseStateDB := parentStateDB.Copy()
+	diffStateDB := newDebankStateDiffDB(replayBaseStateDB)
+	replayStateDB := evmstore.WrapStateDbWithLogger(diffStateDB, vmConfig.Tracer)
+	defer replayStateDB.Release()
+	replayStateDB.BeginBlock(block.NumberU64())
+
 	rpcTracer.OnBlockStart(evmBlock)
 
 	replayRules := *rules
@@ -209,14 +293,13 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 		chainConfig,
 		debankHeaderReader{ctx: ctx, b: api.b},
 		replayRules.Upgrades,
-	).Process(replayBlock, pStateDB, vmConfig, block.GasLimit, &usedGas, nil)
+	).Process(replayBlock, replayStateDB, vmConfig, block.GasLimit, &usedGas, nil)
 	if err := validateDebankReplayReceipts(block, processed, evmBlockHeader.ReceiptHash, evmBlockHeader.Bloom); err != nil {
 		return nil, err
 	}
 
-	diffStateDB.SetExpectedReplayRoot(block.Root)
-	pStateDB.EndBlock(block.NumberU64())
-	replayedRoot := pStateDB.GetStateHash()
+	replayStateDB.EndBlock(block.NumberU64())
+	replayedRoot := replayStateDB.GetStateHash()
 	if replayedRoot != block.Root {
 		return nil, fmt.Errorf("replayed state root mismatch for block %d: got %s, want %s (txs=%d processed=%d usedGas=%d blockGasUsed=%d)", block.NumberU64(), replayedRoot, block.Root, len(block.Transactions), len(processed), usedGas, block.GasUsed)
 	}
@@ -226,13 +309,14 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 
 	destructs, accounts, storages, codes := diffStateDB.StateUpdateMaps()
 	res := rpcTracer.GetOutPut(parent.Root, block.Root, destructs, accounts, storages, codes)
-	if err := validateDebankBlockFileTxs(block, res.BlockFile.Txs); err != nil {
+	traceGuard.AdjustBlockFile(res.BlockFile)
+	if err := validateDebankBlockFile(block, res.BlockFile); err != nil {
 		return nil, err
 	}
 	sort.Strings(res.BlockFile.StorageContracts)
 	res.ValidationHash = res.BlockFile.Validation().ValidationHash
 
-	return res, nil
+	return newDebankOutPut(res), nil
 }
 
 func validateDebankReplayReceipts(block *evmcore.EvmBlock, processed []evmcore.ProcessedTransaction, receiptHash common.Hash, bloom types.Bloom) error {
@@ -273,4 +357,84 @@ func validateDebankBlockFileTxs(block *evmcore.EvmBlock, txs []ptypes.Transactio
 		}
 	}
 	return nil
+}
+
+func validateDebankBlockFile(block *evmcore.EvmBlock, blockFile *ptypes.BlockFile) error {
+	if blockFile == nil {
+		return fmt.Errorf("block_file for block %d is nil", block.NumberU64())
+	}
+	if err := validateDebankBlockFileTxs(block, blockFile.Txs); err != nil {
+		return err
+	}
+	for i, event := range blockFile.Events {
+		if event.ID == "" {
+			return fmt.Errorf("block_file event %d id is empty for block %d", i, block.NumberU64())
+		}
+		if event.ParentTraceID == "" {
+			return fmt.Errorf("block_file event %d parent_trace_id is empty for block %d", i, block.NumberU64())
+		}
+	}
+	for i, event := range blockFile.ErrorEvents {
+		if event.ID == "" {
+			return fmt.Errorf("block_file error_event %d id is empty for block %d", i, block.NumberU64())
+		}
+		if event.ParentTraceID == "" {
+			return fmt.Errorf("block_file error_event %d parent_trace_id is empty for block %d", i, block.NumberU64())
+		}
+	}
+	txIDs := make(map[string]struct{}, len(blockFile.Txs))
+	for _, tx := range blockFile.Txs {
+		txIDs[tx.ID] = struct{}{}
+	}
+	for i, trace := range blockFile.Traces {
+		if trace.ID == "" {
+			return fmt.Errorf("block_file trace %d id is empty for block %d", i, block.NumberU64())
+		}
+		if _, ok := txIDs[trace.TxID]; !ok {
+			return fmt.Errorf("block_file trace %d tx_id mismatch for block %d: %s", i, block.NumberU64(), trace.TxID)
+		}
+	}
+	for i, trace := range blockFile.ErrorTraces {
+		if trace.ID == "" {
+			return fmt.Errorf("block_file error_trace %d id is empty for block %d", i, block.NumberU64())
+		}
+		if _, ok := txIDs[trace.TxID]; !ok {
+			return fmt.Errorf("block_file error_trace %d tx_id mismatch for block %d: %s", i, block.NumberU64(), trace.TxID)
+		}
+	}
+	return nil
+}
+
+func adjustTopTraceGasUsed(blockFile *ptypes.BlockFile, intrinsicGasByTx map[string]uint64) {
+	if blockFile == nil || len(intrinsicGasByTx) == 0 {
+		return
+	}
+	txGasUsed := make(map[string]*big.Int, len(blockFile.Txs))
+	for _, tx := range blockFile.Txs {
+		txGasUsed[tx.ID] = tx.GasUsed
+	}
+	adjustTracesTopGasUsed(blockFile.Traces, txGasUsed, intrinsicGasByTx)
+	adjustTracesTopGasUsed(blockFile.ErrorTraces, txGasUsed, intrinsicGasByTx)
+}
+
+func adjustTracesTopGasUsed(traces []ptypes.Trace, txGasUsed map[string]*big.Int, intrinsicGasByTx map[string]uint64) {
+	for i := range traces {
+		trace := &traces[i]
+		if trace.ParentTraceID != "" || trace.PosInParentTrace != 0 || len(trace.TraceAddress) != 0 {
+			continue
+		}
+		intrinsicGas, ok := intrinsicGasByTx[trace.TxID]
+		if !ok || intrinsicGas == 0 || trace.GasUsed == nil {
+			continue
+		}
+		txGas, ok := txGasUsed[trace.TxID]
+		if !ok || txGas == nil || trace.GasUsed.Cmp(txGas) != 0 {
+			continue
+		}
+		intrinsic := new(big.Int).SetUint64(intrinsicGas)
+		if trace.GasUsed.Cmp(intrinsic) < 0 {
+			continue
+		}
+		trace.GasUsed = new(big.Int).Sub(new(big.Int).Set(trace.GasUsed), intrinsic)
+	}
 }

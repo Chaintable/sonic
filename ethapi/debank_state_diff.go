@@ -4,21 +4,23 @@ import (
 	"math/big"
 
 	"github.com/0xsoniclabs/sonic/inter/state"
+	"github.com/0xsoniclabs/sonic/utils/signers/internaltx"
 	ptracer "github.com/Chaintable/pipeline/tracer"
+	ptypes "github.com/Chaintable/pipeline/types"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/holiman/uint256"
 )
 
 type debankStateDiffDB struct {
 	state.StateDB
-	changes          map[common.Address]*debankAccountChange
-	snapshots        []debankDiffSnapshot
-	expectedRoot     common.Hash
-	expectedRootUsed bool
+	changes   map[common.Address]*debankAccountChange
+	snapshots []debankDiffSnapshot
 }
 
 type debankAccountChange struct {
@@ -151,27 +153,6 @@ func (d *debankStateDiffDB) Copy() state.StateDB {
 	return newDebankStateDiffDB(d.StateDB.Copy())
 }
 
-func (d *debankStateDiffDB) SetExpectedReplayRoot(root common.Hash) {
-	d.expectedRoot = root
-}
-
-func (d *debankStateDiffDB) EndBlock(number uint64) {
-	if d.expectedRoot != (common.Hash{}) {
-		// RPC archive forks are not writable; after replay checks pass, expose
-		// the canonical commit target without mutating the archive database.
-		d.expectedRootUsed = true
-		return
-	}
-	d.StateDB.EndBlock(number)
-}
-
-func (d *debankStateDiffDB) GetStateHash() common.Hash {
-	if d.expectedRootUsed {
-		return d.expectedRoot
-	}
-	return d.StateDB.GetStateHash()
-}
-
 func (d *debankStateDiffDB) StateUpdateMaps() (map[common.Hash]struct{}, map[common.Hash][]byte, map[common.Hash]map[common.Hash][]byte, map[common.Hash][]byte) {
 	destructs := make(map[common.Hash]struct{})
 	accounts := make(map[common.Hash][]byte)
@@ -286,26 +267,48 @@ func debankAddressHash(addr common.Address) common.Hash {
 }
 
 type debankTraceGuard struct {
-	tracer       *ptracer.RPCTracer
-	txActive     bool
-	txHasTopCall bool
+	tracer           *ptracer.RPCTracer
+	chainConfig      *params.ChainConfig
+	txActive         bool
+	txHasTopCall     bool
+	currentTx        *types.Transaction
+	pendingLogs      []*types.Log
+	intrinsicGasByTx map[string]uint64
+	internalTxByID   map[string]struct{}
 }
 
-func newDebankTraceHooks(tracer *ptracer.RPCTracer) *tracing.Hooks {
-	guard := &debankTraceGuard{tracer: tracer}
+func newDebankTraceGuard(tracer *ptracer.RPCTracer, chainConfig *params.ChainConfig) *debankTraceGuard {
+	return &debankTraceGuard{
+		tracer:           tracer,
+		chainConfig:      chainConfig,
+		intrinsicGasByTx: make(map[string]uint64),
+		internalTxByID:   make(map[string]struct{}),
+	}
+}
+
+func (g *debankTraceGuard) Hooks() *tracing.Hooks {
 	return &tracing.Hooks{
-		OnTxStart: guard.OnTxStart,
-		OnTxEnd:   guard.OnTxEnd,
-		OnEnter:   guard.OnEnter,
-		OnExit:    guard.OnExit,
-		OnOpcode:  guard.OnOpcode,
-		OnLog:     guard.OnLog,
+		OnTxStart: g.OnTxStart,
+		OnTxEnd:   g.OnTxEnd,
+		OnEnter:   g.OnEnter,
+		OnExit:    g.OnExit,
+		OnOpcode:  g.OnOpcode,
+		OnLog:     g.OnLog,
 	}
 }
 
 func (g *debankTraceGuard) OnTxStart(env *tracing.VMContext, tx *types.Transaction, from common.Address) {
 	g.txActive = true
 	g.txHasTopCall = false
+	g.currentTx = tx
+	g.pendingLogs = g.pendingLogs[:0]
+	txID := tx.Hash().Hex()
+	if intrinsicGas, err := g.intrinsicGas(env, tx); err == nil {
+		g.intrinsicGasByTx[txID] = intrinsicGas
+	}
+	if internaltx.IsInternal(tx) {
+		g.internalTxByID[txID] = struct{}{}
+	}
 	g.tracer.OnTxStart(env, tx, from)
 }
 
@@ -313,11 +316,14 @@ func (g *debankTraceGuard) OnTxEnd(receipt *types.Receipt, err error) {
 	defer func() {
 		g.txActive = false
 		g.txHasTopCall = false
+		g.currentTx = nil
+		g.pendingLogs = g.pendingLogs[:0]
 	}()
 	if receipt == nil || err != nil || !g.txHasTopCall {
 		return
 	}
-	g.tracer.OnTxEnd(receipt, err)
+	g.flushPendingLogs()
+	g.tracer.OnTxEnd(g.receiptForPipeline(receipt), err)
 }
 
 func (g *debankTraceGuard) OnEnter(depth int, typ byte, from common.Address, to common.Address, input []byte, gas uint64, value *big.Int) {
@@ -326,6 +332,12 @@ func (g *debankTraceGuard) OnEnter(depth int, typ byte, from common.Address, to 
 	}
 	if depth == 0 {
 		g.txHasTopCall = true
+		g.tracer.OnEnter(depth, typ, from, to, input, gas, value)
+		g.flushPendingLogs()
+		return
+	}
+	if !g.txHasTopCall {
+		return
 	}
 	g.tracer.OnEnter(depth, typ, from, to, input, gas, value)
 }
@@ -348,5 +360,61 @@ func (g *debankTraceGuard) OnLog(log *types.Log) {
 	if !g.txActive {
 		return
 	}
+	if !g.txHasTopCall {
+		g.pendingLogs = append(g.pendingLogs, copyLog(log))
+		return
+	}
 	g.tracer.OnLog(log)
+}
+
+func (g *debankTraceGuard) AdjustBlockFile(blockFile *ptypes.BlockFile) {
+	adjustTopTraceGasUsed(blockFile, g.intrinsicGasByTx)
+}
+
+func (g *debankTraceGuard) flushPendingLogs() {
+	for _, log := range g.pendingLogs {
+		if log == nil {
+			continue
+		}
+		g.tracer.OnLog(log)
+	}
+	g.pendingLogs = g.pendingLogs[:0]
+}
+
+func (g *debankTraceGuard) receiptForPipeline(receipt *types.Receipt) *types.Receipt {
+	if g.currentTx == nil {
+		return receipt
+	}
+	if _, ok := g.internalTxByID[g.currentTx.Hash().Hex()]; !ok {
+		return receipt
+	}
+	cpy := *receipt
+	cpy.EffectiveGasPrice = new(big.Int)
+	return &cpy
+}
+
+func (g *debankTraceGuard) intrinsicGas(env *tracing.VMContext, tx *types.Transaction) (uint64, error) {
+	if g.chainConfig == nil || env == nil {
+		return 0, nil
+	}
+	rules := g.chainConfig.Rules(env.BlockNumber, env.Random != nil, env.Time)
+	return core.IntrinsicGas(
+		tx.Data(),
+		tx.AccessList(),
+		tx.SetCodeAuthorizations(),
+		tx.To() == nil,
+		rules.IsHomestead,
+		rules.IsIstanbul,
+		rules.IsShanghai,
+	)
+}
+
+func copyLog(log *types.Log) *types.Log {
+	if log == nil {
+		return nil
+	}
+	cpy := *log
+	cpy.Topics = append([]common.Hash(nil), log.Topics...)
+	cpy.Data = common.CopyBytes(log.Data)
+	return &cpy
 }

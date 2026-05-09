@@ -1,0 +1,43 @@
+{
+  "ChainName": "sonic",
+  "StartTime": "2026-05-09T10:11:52.30053+08:00",
+  "EndTime": "2026-05-09T10:12:11.110845+08:00",
+  "TotalChecks": 4,
+  "Passed": 3,
+  "Failed": 1,
+  "Warnings": 0,
+  "Results": [
+    {
+      "Category": "S3",
+      "CheckItem": "S3 Header verification",
+      "Status": "PASS",
+      "Message": "Header: 50/50 blocks verified (100% pass rate)",
+      "Details": null,
+      "Duration": 15371329875
+    },
+    {
+      "Category": "S3",
+      "CheckItem": "S3 Validation verification",
+      "Status": "PASS",
+      "Message": "Validation: 50/50 blocks verified (100% pass rate)",
+      "Details": null,
+      "Duration": 7691070291
+    },
+    {
+      "Category": "S3",
+      "CheckItem": "S3 Blockfile verification",
+      "Status": "FAIL",
+      "Message": "Blockfile: 0 passed, 5 failed - 0.0% pass rate. Failed blocks: [1 710525 1421050 2131575 2842100]",
+      "Details": null,
+      "Duration": 4330351458
+    },
+    {
+      "Category": "S3",
+      "CheckItem": "S3 StateDiff verification",
+      "Status": "PASS",
+      "Message": "StateDiff: 5/5 blocks verified (100% pass rate)",
+      "Details": null,
+      "Duration": 5763894541
+    }
+  ]
+}

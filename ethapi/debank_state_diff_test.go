@@ -86,13 +86,15 @@ func TestDebankStateDiffDeduplicatesNewCodesByHash(t *testing.T) {
 	require.Equal(t, code, codes[codeHash])
 }
 
-func TestDebankStateDiffUsesExpectedReplayRoot(t *testing.T) {
+func TestDebankStateDiffUsesWrappedStateHash(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	mockState := state.NewMockStateDB(ctrl)
 
 	root := common.HexToHash("0x20")
+	mockState.EXPECT().EndBlock(uint64(1))
+	mockState.EXPECT().GetStateHash().Return(root)
+
 	diffDB := newDebankStateDiffDB(mockState)
-	diffDB.SetExpectedReplayRoot(root)
 	diffDB.EndBlock(1)
 
 	require.Equal(t, root, diffDB.GetStateHash())

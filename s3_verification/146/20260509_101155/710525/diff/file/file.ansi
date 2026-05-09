@@ -1,0 +1,154 @@
+Block Number: 710525
+Block Hash: 0x436847a643afdbb9c43ef8ece2d58fff5b1da7ac38c26d25d24470503389a40c
+Chain ID: 146
+Content Type: file
+Timestamp: 2026-05-09T02:12:03Z
+
+Legend: S3 data(green), RPC data(red)
+
+{
+  "block": {
+    "base_fee_per_gas": 1000000000,
+    "gas_limit": 1000000000,
+    "gas_used": 78574,
+    "height": 710525,
+    "id": "0x436847a643afdbb9c43ef8ece2d58fff5b1da7ac38c26d25d24470503389a40c",
+    "miner": "0x0000000000000000000000000000000000000000",
+    "parent_id": "0x5d0659119f1b40460f1e3a91d531ea00f005bf9ad907a765ccbf3bcd3cde72c9",
+    "process_start_timestamp": 1778263518280,
+    "timestamp": 1734620569
+  },
+  "error_events": [],
+  "error_traces": [],
+  "events": [
+    {
+      "contract_id": "0x039e2fb66102314ce7b64ce5ce3e5183bc94ad38",
+      "data": "0x000000000000000000000000000000000000000000000045c431472164a84000",
+[31m      "id": "",[0m
+[31m      "idx": 1,[0m
+[31m      "parent_trace_id": "",[0m
+[31m[0m[32m      "id": "04277a329f8866cee724f9f4a30d459d",[0m
+[32m      "idx": 0,[0m
+[32m      "parent_trace_id": "eaeddc999e0f8760bf76dbfad380c0e6",[0m
+[32m[0m      "pos_in_parent_trace": 0,
+      "selector": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+      "topics": [
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "0x0000000000000000000000008509fe346377747dcce75ca0852db7eb7078246c"
+[31m      ][0m
+[31m[0m[32m      ],[0m
+[32m      "tx_id": null[0m
+[32m[0m    },
+    {
+      "contract_id": "0x039e2fb66102314ce7b64ce5ce3e5183bc94ad38",
+      "data": "0x000000000000000000000000000000000000000000000045c431472164a84000",
+[31m      "id": "",[0m
+[31m      "idx": 2,[0m
+[31m      "parent_trace_id": "",[0m
+[31m      "pos_in_parent_trace": 0,[0m
+[31m[0m[32m      "id": "699799ad2b3b49532b46452693544132",[0m
+[32m      "idx": 0,[0m
+[32m      "parent_trace_id": "eaeddc999e0f8760bf76dbfad380c0e6",[0m
+[32m      "pos_in_parent_trace": 1,[0m
+[32m[0m      "selector": "0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c",
+      "topics": [
+        "0x0000000000000000000000008509fe346377747dcce75ca0852db7eb7078246c"
+[31m      ][0m
+[31m[0m[32m      ],[0m
+[32m      "tx_id": null[0m
+[32m[0m    },
+    {
+      "contract_id": "0x63a522f6e7d5b96f7aebb74d2648545e9e14078d",
+      "data": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "id": "f03b449560a508e0e4ac2274fb0bf190",
+      "idx": 0,
+      "parent_trace_id": "0395fb398e58c9e4daab5e0dd70ba318",
+      "pos_in_parent_trace": 0,
+      "selector": "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925",
+      "topics": [
+        "0x000000000000000000000000ab6bea047c0c019c5e5aec6d2cf07db143856037",
+        "0x000000000000000000000000ba12222222228d8ba445958a75a0704d566bf2c8"
+[31m      ][0m
+[31m[0m[32m      ],[0m
+[32m      "tx_id": null[0m
+[32m[0m    }
+  ],
+  "storage_contracts": [
+    "0x039e2fb66102314ce7b64ce5ce3e5183bc94ad38",
+    "0x63a522f6e7d5b96f7aebb74d2648545e9e14078d"
+  ],
+  "traces": [
+    {
+      "call_type": "call",
+      "from_addr": "0x8509fe346377747dcce75ca0852db7eb7078246c",
+      "gas_limit": 31134,
+[31m      "gas_used": 52198,[0m
+[31m[0m[32m      "gas_used": 31134,[0m
+[32m[0m      "id": "eaeddc999e0f8760bf76dbfad380c0e6",
+      "input": "0xd0e30db0",
+      "output": "0x",
+      "parent_trace_id": "",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": true,
+      "storage_change": true,
+      "subtraces": 0,
+      "to_addr": "0x039e2fb66102314ce7b64ce5ce3e5183bc94ad38",
+      "trace_address": [],
+      "tx_id": "0xa00263b844ae20f73ef3b45f96e9a88e2cbf4ddb3a62beb9df4f4e7cee014db7",
+      "type": "call",
+      "value": "0x45c431472164a84000"
+    },
+    {
+      "call_type": "call",
+      "from_addr": "0xab6bea047c0c019c5e5aec6d2cf07db143856037",
+      "gas_limit": 22978,
+[31m      "gas_used": 26376,[0m
+[31m[0m[32m      "gas_used": 8132,[0m
+[32m[0m      "id": "0395fb398e58c9e4daab5e0dd70ba318",
+      "input": "0x095ea7b3000000000000000000000000ba12222222228d8ba445958a75a0704d566bf2c80000000000000000000000000000000000000000000000000000000000000000",
+      "output": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "parent_trace_id": "",
+      "pos_in_parent_trace": 0,
+      "self_storage_change": true,
+      "storage_change": true,
+      "subtraces": 0,
+      "to_addr": "0x63a522f6e7d5b96f7aebb74d2648545e9e14078d",
+      "trace_address": [],
+      "tx_id": "0xbdc044b4a88121225ed66a37d4eca94f6f6a1a89328414c2f475ffe9415038a3",
+      "type": "call",
+      "value": "0x0"
+    }
+  ],
+  "txs": [
+    {
+      "from_addr": "0xab6bea047c0c019c5e5aec6d2cf07db143856037",
+      "gas_limit": 44538,
+      "gas_price": 1110000000,
+      "gas_used": 26376,
+      "id": "0xbdc044b4a88121225ed66a37d4eca94f6f6a1a89328414c2f475ffe9415038a3",
+      "idx": 0,
+      "input": "0x095ea7b3000000000000000000000000ba12222222228d8ba445958a75a0704d566bf2c80000000000000000000000000000000000000000000000000000000000000000",
+      "max_fee_per_gas": 0,
+      "max_priority_fee_per_gas": 0,
+      "nonce": 7,
+      "status": true,
+      "to_addr": "0x63a522f6e7d5b96f7aebb74d2648545e9e14078d",
+      "value": "0x0"
+    },
+    {
+      "from_addr": "0x8509fe346377747dcce75ca0852db7eb7078246c",
+      "gas_limit": 52198,
+      "gas_price": 1100000000,
+      "gas_used": 52198,
+      "id": "0xa00263b844ae20f73ef3b45f96e9a88e2cbf4ddb3a62beb9df4f4e7cee014db7",
+      "idx": 1,
+      "input": "0xd0e30db0",
+      "max_fee_per_gas": 1100000000,
+      "max_priority_fee_per_gas": 1100000000,
+      "nonce": 0,
+      "status": true,
+      "to_addr": "0x039e2fb66102314ce7b64ce5ce3e5183bc94ad38",
+      "value": "0x45c431472164a84000"
+    }
+  ]
+}
