@@ -99,3 +99,55 @@ func TestDebankStateDiffUsesWrappedStateHash(t *testing.T) {
 
 	require.Equal(t, root, diffDB.GetStateHash())
 }
+
+func TestDebankStateDiffUsesCanonicalPostStateValues(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	replayState := state.NewMockStateDB(ctrl)
+	postState := state.NewMockStateDB(ctrl)
+
+	addr := common.HexToAddress("0x1234")
+	slot := common.HexToHash("0x01")
+	origValue := common.HexToHash("0x02")
+	postValue := common.HexToHash("0x03")
+	postCode := []byte{0x60, 0x01}
+	origCodeHash := types.EmptyCodeHash
+	postCodeHash := crypto.Keccak256Hash(postCode)
+	origBalance := uint256.NewInt(100)
+	postBalance := uint256.NewInt(80)
+
+	postState.EXPECT().Exist(addr).Return(true).AnyTimes()
+	postState.EXPECT().GetNonce(addr).Return(uint64(3)).AnyTimes()
+	postState.EXPECT().GetCodeHash(addr).Return(postCodeHash).AnyTimes()
+	postState.EXPECT().GetBalance(addr).DoAndReturn(func(common.Address) *uint256.Int {
+		return new(uint256.Int).Set(postBalance)
+	}).AnyTimes()
+	postState.EXPECT().GetCode(addr).Return(postCode).AnyTimes()
+	postState.EXPECT().GetState(addr, slot).Return(postValue).AnyTimes()
+
+	diffDB := &debankStateDiffDB{
+		StateDB: replayState,
+		changes: map[common.Address]*debankAccountChange{
+			addr: {
+				origExist:    true,
+				origBalance:  *origBalance,
+				origNonce:    1,
+				origCodeHash: origCodeHash,
+				codeTouched:  true,
+				storage: map[common.Hash]common.Hash{
+					slot: origValue,
+				},
+			},
+		},
+	}
+
+	_, accounts, storages, codes := diffDB.stateUpdateMapsFromPostState(postState)
+	account, err := types.FullAccount(accounts[debankAddressHash(addr)])
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), account.Nonce)
+	require.Equal(t, 0, account.Balance.Cmp(postBalance))
+	require.Equal(t, postCodeHash, common.BytesToHash(account.CodeHash))
+	require.Equal(t, postCode, codes[postCodeHash])
+	_, content, _, err := rlp.Split(storages[debankAddressHash(addr)][crypto.Keccak256Hash(slot[:])])
+	require.NoError(t, err)
+	require.Equal(t, postValue.Bytes(), content)
+}

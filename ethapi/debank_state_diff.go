@@ -224,6 +224,79 @@ func (d *debankStateDiffDB) storageUpdateMap(addr common.Address, change *debank
 	return storage
 }
 
+func (d *debankStateDiffDB) stateUpdateMapsFromPostState(postState state.StateDB) (map[common.Hash]struct{}, map[common.Hash][]byte, map[common.Hash]map[common.Hash][]byte, map[common.Hash][]byte) {
+	destructs := make(map[common.Hash]struct{})
+	accounts := make(map[common.Hash][]byte)
+	storages := make(map[common.Hash]map[common.Hash][]byte)
+	codes := make(map[common.Hash][]byte)
+
+	for addr, change := range d.changes {
+		addrHash := debankAddressHash(addr)
+		if !postState.Exist(addr) {
+			if change.origExist || change.deleted || d.StateDB.HasSelfDestructed(addr) {
+				destructs[addrHash] = struct{}{}
+			}
+			continue
+		}
+		if d.accountNeedsMetadataFromPostState(addr, change, postState) {
+			accounts[addrHash] = debankSlimAccountRLP(
+				postState.GetNonce(addr),
+				postState.GetBalance(addr),
+				postState.GetCodeHash(addr),
+			)
+		}
+		if change.codeTouched || change.origCodeHash != postState.GetCodeHash(addr) {
+			code := postState.GetCode(addr)
+			if len(code) > 0 {
+				codes[postState.GetCodeHash(addr)] = common.CopyBytes(code)
+			}
+		}
+		storage := d.storageUpdateMapFromPostState(addr, change, postState)
+		if len(storage) > 0 {
+			storages[addrHash] = storage
+		}
+	}
+	return destructs, accounts, storages, codes
+}
+
+func (d *debankStateDiffDB) accountNeedsMetadataFromPostState(addr common.Address, change *debankAccountChange, postState state.StateDB) bool {
+	if change.origExist != postState.Exist(addr) {
+		return true
+	}
+	if change.origNonce != postState.GetNonce(addr) {
+		return true
+	}
+	if change.origCodeHash != postState.GetCodeHash(addr) {
+		return true
+	}
+	if change.origBalance.Cmp(postState.GetBalance(addr)) != 0 {
+		return true
+	}
+	return d.hasStorageUpdateFromPostState(addr, change, postState)
+}
+
+func (d *debankStateDiffDB) hasStorageUpdateFromPostState(addr common.Address, change *debankAccountChange, postState state.StateDB) bool {
+	for key, original := range change.storage {
+		if postState.GetState(addr, key) == original {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func (d *debankStateDiffDB) storageUpdateMapFromPostState(addr common.Address, change *debankAccountChange, postState state.StateDB) map[common.Hash][]byte {
+	storage := make(map[common.Hash][]byte)
+	for key, original := range change.storage {
+		value := postState.GetState(addr, key)
+		if value == original {
+			continue
+		}
+		storage[crypto.Keccak256Hash(key[:])] = debankStorageRLP(value)
+	}
+	return storage
+}
+
 func debankSlimAccountRLP(nonce uint64, balance *uint256.Int, codeHash common.Hash) []byte {
 	account := types.StateAccount{
 		Nonce:    nonce,
