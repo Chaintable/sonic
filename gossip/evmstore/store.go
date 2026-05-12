@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	carmen "github.com/0xsoniclabs/carmen/go/state"
 	"github.com/0xsoniclabs/sonic/logger"
@@ -60,6 +61,9 @@ type Store struct {
 	parameters  carmen.Parameters
 	carmenState carmen.State
 	liveStateDb carmen.StateDB
+
+	stateUpdateHookMu sync.RWMutex
+	stateUpdateHook   StateUpdateHook
 }
 
 // NewStore creates store over key-value db.
@@ -94,6 +98,7 @@ func (s *Store) Open() error {
 	if err != nil {
 		return fmt.Errorf("failed to create carmen state; %s", err)
 	}
+	s.carmenState = newCarmenStateUpdateRecorder(s.carmenState, s.getStateUpdateHook)
 	s.liveStateDb = carmen.CreateCustomStateDBUsing(s.carmenState, s.cfg.Cache.StateDbCapacity)
 	return nil
 }

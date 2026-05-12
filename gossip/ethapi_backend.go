@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/0xsoniclabs/carmen/go/database/mpt"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 
 	"github.com/Fantom-foundation/lachesis-base/hash"
@@ -367,6 +368,10 @@ func (b *EthAPIBackend) GetReceiptsByNumber(ctx context.Context, number rpc.Bloc
 		block.Transactions,
 	)
 	return receipts, nil
+}
+
+func (b *EthAPIBackend) ArchiveStateDiffByNumber(ctx context.Context, number uint64) (mpt.Diff, error) {
+	return b.svc.store.EvmStore().ArchiveStateDiffByNumber(number)
 }
 
 // GetReceipts retrieves the receipts for all transactions in a given block.

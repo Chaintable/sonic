@@ -1,8 +1,10 @@
 package ethapi
 
 import (
+	"fmt"
 	"math/big"
 
+	"github.com/0xsoniclabs/carmen/go/database/mpt"
 	"github.com/0xsoniclabs/sonic/inter/state"
 	"github.com/0xsoniclabs/sonic/utils/signers/internaltx"
 	ptracer "github.com/Chaintable/pipeline/tracer"
@@ -295,6 +297,80 @@ func (d *debankStateDiffDB) storageUpdateMapFromPostState(addr common.Address, c
 		storage[crypto.Keccak256Hash(key[:])] = debankStorageRLP(value)
 	}
 	return storage
+}
+
+func stateUpdateMapsFromCarmenDiff(diff mpt.Diff, postState state.StateDB) (map[common.Hash]struct{}, map[common.Hash][]byte, map[common.Hash]map[common.Hash][]byte, map[common.Hash][]byte, error) {
+	destructs := make(map[common.Hash]struct{})
+	accounts := make(map[common.Hash][]byte)
+	storages := make(map[common.Hash]map[common.Hash][]byte)
+	codes := make(map[common.Hash][]byte)
+
+	for carmenAddr, accountDiff := range diff {
+		if accountDiff == nil || accountDiff.Empty() {
+			continue
+		}
+		addr := common.Address(carmenAddr)
+		addrHash := debankAddressHash(addr)
+		exists := postState.Exist(addr)
+
+		if accountDiff.Reset {
+			destructs[addrHash] = struct{}{}
+		}
+
+		if carmenDiffNeedsFinalAccount(accountDiff) {
+			if exists {
+				accounts[addrHash] = debankSlimAccountRLP(
+					postState.GetNonce(addr),
+					postState.GetBalance(addr),
+					postState.GetCodeHash(addr),
+				)
+			} else {
+				destructs[addrHash] = struct{}{}
+			}
+		}
+
+		if accountDiff.Code != nil && exists {
+			wantCodeHash := common.Hash(*accountDiff.Code)
+			gotCodeHash := postState.GetCodeHash(addr)
+			code := postState.GetCode(addr)
+			if len(code) == 0 {
+				if wantCodeHash != (common.Hash{}) && gotCodeHash != wantCodeHash {
+					return nil, nil, nil, nil, fmt.Errorf("canonical Carmen diff code hash mismatch for %s: diff has %s, post-state has %s", addr, wantCodeHash, gotCodeHash)
+				}
+				continue
+			}
+			if gotCodeHash != wantCodeHash {
+				return nil, nil, nil, nil, fmt.Errorf("canonical Carmen diff code hash mismatch for %s: diff has %s, post-state has %s", addr, wantCodeHash, gotCodeHash)
+			}
+			if len(code) > 0 {
+				if hash := crypto.Keccak256Hash(code); hash != gotCodeHash {
+					return nil, nil, nil, nil, fmt.Errorf("canonical post-state code bytes mismatch for %s: hash(code)=%s, codeHash=%s", addr, hash, gotCodeHash)
+				}
+				codes[gotCodeHash] = common.CopyBytes(code)
+			}
+		}
+
+		if len(accountDiff.Storage) > 0 {
+			storage := make(map[common.Hash][]byte, len(accountDiff.Storage))
+			for key, value := range accountDiff.Storage {
+				storage[crypto.Keccak256Hash(key[:])] = debankStorageRLP(common.Hash(value))
+			}
+			storages[addrHash] = storage
+		}
+	}
+	return destructs, accounts, storages, codes, nil
+}
+
+func carmenDiffNeedsFinalAccount(diff *mpt.AccountDiff) bool {
+	return diff.Balance != nil || diff.Nonce != nil || diff.Code != nil || len(diff.Storage) > 0
+}
+
+func debankStateUpdateMapSizes(destructs map[common.Hash]struct{}, accounts map[common.Hash][]byte, storages map[common.Hash]map[common.Hash][]byte, codes map[common.Hash][]byte) (int, int, int, int) {
+	slots := 0
+	for _, storage := range storages {
+		slots += len(storage)
+	}
+	return len(destructs), len(accounts), slots, len(codes)
 }
 
 func debankSlimAccountRLP(nonce uint64, balance *uint256.Int, codeHash common.Hash) []byte {

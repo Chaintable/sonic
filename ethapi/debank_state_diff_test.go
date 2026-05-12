@@ -3,6 +3,9 @@ package ethapi
 import (
 	"testing"
 
+	cc "github.com/0xsoniclabs/carmen/go/common"
+	"github.com/0xsoniclabs/carmen/go/common/amount"
+	"github.com/0xsoniclabs/carmen/go/database/mpt"
 	"github.com/0xsoniclabs/sonic/inter/state"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/tracing"
@@ -150,4 +153,107 @@ func TestDebankStateDiffUsesCanonicalPostStateValues(t *testing.T) {
 	_, content, _, err := rlp.Split(storages[debankAddressHash(addr)][crypto.Keccak256Hash(slot[:])])
 	require.NoError(t, err)
 	require.Equal(t, postValue.Bytes(), content)
+}
+
+func TestDebankStateDiffUsesCanonicalCarmenDiff(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	postState := state.NewMockStateDB(ctrl)
+
+	addr := common.HexToAddress("0x1234")
+	slot := common.HexToHash("0x01")
+	value := common.HexToHash("0x02")
+	code := []byte{0x60, 0x01}
+	codeHash := crypto.Keccak256Hash(code)
+	balance := uint256.NewInt(80)
+
+	carmenBalance := amount.NewFromUint256(balance)
+	carmenNonce := cc.ToNonce(3)
+	carmenCodeHash := cc.Hash(codeHash)
+	diff := mpt.Diff{
+		cc.Address(addr): {
+			Balance: &carmenBalance,
+			Nonce:   &carmenNonce,
+			Code:    &carmenCodeHash,
+			Storage: map[cc.Key]cc.Value{
+				cc.Key(slot): cc.Value(value),
+			},
+		},
+	}
+
+	postState.EXPECT().Exist(addr).Return(true).AnyTimes()
+	postState.EXPECT().GetNonce(addr).Return(uint64(3)).AnyTimes()
+	postState.EXPECT().GetBalance(addr).DoAndReturn(func(common.Address) *uint256.Int {
+		return new(uint256.Int).Set(balance)
+	}).AnyTimes()
+	postState.EXPECT().GetCodeHash(addr).Return(codeHash).AnyTimes()
+	postState.EXPECT().GetCode(addr).Return(code).AnyTimes()
+
+	destructs, accounts, storages, codes, err := stateUpdateMapsFromCarmenDiff(diff, postState)
+	require.NoError(t, err)
+	require.Empty(t, destructs)
+	account, err := types.FullAccount(accounts[debankAddressHash(addr)])
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), account.Nonce)
+	require.Equal(t, 0, account.Balance.Cmp(balance))
+	require.Equal(t, codeHash, common.BytesToHash(account.CodeHash))
+	require.Equal(t, code, codes[codeHash])
+	_, content, _, err := rlp.Split(storages[debankAddressHash(addr)][crypto.Keccak256Hash(slot[:])])
+	require.NoError(t, err)
+	require.Equal(t, value.Bytes(), content)
+}
+
+func TestDebankStateDiffUsesCarmenResetAndFinalUpdates(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	postState := state.NewMockStateDB(ctrl)
+
+	addr := common.HexToAddress("0x1234")
+	slot := common.HexToHash("0x01")
+	balance := uint256.NewInt(1)
+	carmenBalance := amount.NewFromUint256(balance)
+	diff := mpt.Diff{
+		cc.Address(addr): {
+			Reset:   true,
+			Balance: &carmenBalance,
+			Storage: map[cc.Key]cc.Value{
+				cc.Key(slot): {},
+			},
+		},
+	}
+
+	postState.EXPECT().Exist(addr).Return(true).AnyTimes()
+	postState.EXPECT().GetNonce(addr).Return(uint64(0)).AnyTimes()
+	postState.EXPECT().GetBalance(addr).DoAndReturn(func(common.Address) *uint256.Int {
+		return new(uint256.Int).Set(balance)
+	}).AnyTimes()
+	postState.EXPECT().GetCodeHash(addr).Return(types.EmptyCodeHash).AnyTimes()
+
+	destructs, accounts, storages, _, err := stateUpdateMapsFromCarmenDiff(diff, postState)
+	require.NoError(t, err)
+	require.Contains(t, destructs, debankAddressHash(addr))
+	require.Contains(t, accounts, debankAddressHash(addr))
+	_, content, _, err := rlp.Split(storages[debankAddressHash(addr)][crypto.Keccak256Hash(slot[:])])
+	require.NoError(t, err)
+	require.Equal(t, common.Hash{}.Bytes(), content)
+}
+
+func TestDebankStateDiffFailsWhenCarmenCodeHashDoesNotMatchPostState(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	postState := state.NewMockStateDB(ctrl)
+
+	addr := common.HexToAddress("0x1234")
+	diffCodeHash := cc.Hash(common.HexToHash("0x01"))
+	diff := mpt.Diff{
+		cc.Address(addr): {
+			Code: &diffCodeHash,
+		},
+	}
+
+	postState.EXPECT().Exist(addr).Return(true).AnyTimes()
+	postState.EXPECT().GetNonce(addr).Return(uint64(0)).AnyTimes()
+	postState.EXPECT().GetBalance(addr).Return(uint256.NewInt(0)).AnyTimes()
+	postState.EXPECT().GetCodeHash(addr).Return(common.HexToHash("0x02")).AnyTimes()
+	postState.EXPECT().GetCode(addr).Return([]byte{0x60}).AnyTimes()
+
+	_, _, _, _, err := stateUpdateMapsFromCarmenDiff(diff, postState)
+	require.ErrorContains(t, err, "code hash mismatch")
 }

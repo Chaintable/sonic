@@ -301,14 +301,7 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	replayStateDB.EndBlock(block.NumberU64())
 	replayedRoot := replayStateDB.GetStateHash()
 	if replayedRoot != block.Root {
-		if replayedRoot != parent.Root || parent.Root == block.Root {
-			return nil, fmt.Errorf("replayed state root mismatch for block %d: got %s, want %s (txs=%d processed=%d usedGas=%d blockGasUsed=%d)", block.NumberU64(), replayedRoot, block.Root, len(block.Transactions), len(processed), usedGas, block.GasUsed)
-		}
-		if len(diffStateDB.changes) == 0 {
-			log.Debug("Debank replay has no account-level diff for block-boundary state root change", "block", block.NumberU64(), "replayedRoot", replayedRoot, "blockRoot", block.Root)
-		} else {
-			log.Debug("Using canonical Debank post-state values because archive replay cannot commit final root", "block", block.NumberU64(), "replayedRoot", replayedRoot, "blockRoot", block.Root, "changedAccounts", len(diffStateDB.changes))
-		}
+		log.Debug("Debank replay state root mismatch; using canonical Carmen archive diff for write-set", "block", block.NumberU64(), "replayedRoot", replayedRoot, "blockRoot", block.Root, "changedAccounts", len(diffStateDB.changes))
 	}
 	if usedGas != block.GasUsed {
 		return nil, fmt.Errorf("replayed gas used mismatch for block %d: got %d, want %d (txs=%d processed=%d)", block.NumberU64(), usedGas, block.GasUsed, len(block.Transactions), len(processed))
@@ -323,7 +316,20 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	}
 	defer postState.Release()
 
-	destructs, accounts, storages, codes := diffStateDB.stateUpdateMapsFromPostState(postState)
+	archiveDiff, err := api.b.ArchiveStateDiffByNumber(ctx, block.NumberU64())
+	if err != nil {
+		return nil, fmt.Errorf("failed to read canonical Carmen archive diff for block %d: %w", block.NumberU64(), err)
+	}
+	destructs, accounts, storages, codes, err := stateUpdateMapsFromCarmenDiff(archiveDiff, postState)
+	if err != nil {
+		return nil, err
+	}
+	destructCount, accountCount, slotCount, codeCount := debankStateUpdateMapSizes(destructs, accounts, storages, codes)
+	if destructCount == 0 && accountCount == 0 && slotCount == 0 && codeCount == 0 && parent.Root != block.Root {
+		return nil, fmt.Errorf("canonical Carmen archive diff is empty for block %d but state root changed from %s to %s", block.NumberU64(), parent.Root, block.Root)
+	}
+	log.Debug("Using canonical Carmen archive diff for Debank state update", "block", block.NumberU64(), "changedAccounts", len(archiveDiff), "destructs", destructCount, "accounts", accountCount, "slots", slotCount, "codes", codeCount, "replayedRoot", replayedRoot, "canonicalRoot", block.Root)
+
 	res := rpcTracer.GetOutPut(parent.Root, block.Root, destructs, accounts, storages, codes)
 	traceGuard.AdjustBlockFile(res.BlockFile)
 	if err := validateDebankBlockFile(block, res.BlockFile); err != nil {
