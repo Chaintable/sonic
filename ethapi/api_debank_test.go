@@ -1,154 +1,263 @@
 package ethapi
 
 import (
+	"encoding/json"
 	"math/big"
-	"strings"
 	"testing"
 
 	"github.com/0xsoniclabs/sonic/evmcore"
+	ptracer "github.com/Chaintable/pipeline/tracer"
 	ptypes "github.com/Chaintable/pipeline/types"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/trie"
 	"github.com/stretchr/testify/require"
 )
 
-func TestNormalizeDebankBlockFileForRPC(t *testing.T) {
-	to := common.HexToAddress("0x1000000000000000000000000000000000000001")
-	logAddr := common.HexToAddress("0x2000000000000000000000000000000000000002")
-	revertedAddr := common.HexToAddress("0x3000000000000000000000000000000000000003")
-	revertedChildAddr := common.HexToAddress("0x4000000000000000000000000000000000000004")
-	topic0 := common.HexToHash("0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef")
-	topic1 := common.HexToHash("0x0000000000000000000000005000000000000000000000000000000000000005")
-	tx := types.NewTx(&types.LegacyTx{
-		Nonce:    7,
-		To:       &to,
-		Gas:      100_000,
-		GasPrice: big.NewInt(7),
-		Data:     []byte{0x01},
-	})
-	txID := tx.Hash().Hex()
-	rootID := "root-trace"
-	childID := "child-trace"
-	errorRootID := "error-root"
-	errorChildID := "error-child"
-
-	blockFile := &ptypes.BlockFile{
-		Txs: []ptypes.Transaction{{
-			ID:               txID,
-			GasPrice:         big.NewInt(1),
-			GasUsed:          big.NewInt(1),
-			Status:           false,
-			TransactionIndex: 0,
-		}},
-		Traces: []ptypes.Trace{
-			{
-				ID:                rootID,
-				TxID:              txID,
-				GasUsed:           big.NewInt(70_000),
-				CallType:          "call",
-				To:                strings.ToLower(to.Hex()),
-				SelfStorageChange: true,
-			},
-			{
-				ID:               childID,
-				TxID:             txID,
-				ParentTraceID:    rootID,
-				GasUsed:          big.NewInt(12),
-				CallType:         "call",
-				To:               strings.ToLower(logAddr.Hex()),
-				TraceAddress:     []int64{0},
-				PosInParentTrace: 0,
-			},
-		},
-		ErrorTraces: []ptypes.Trace{
-			{
-				ID:                errorRootID,
-				TxID:              txID,
-				GasUsed:           big.NewInt(99),
-				Output:            hexutil.Bytes{0x12},
-				Error:             "execution reverted",
-				CallType:          "call",
-				To:                strings.ToLower(revertedAddr.Hex()),
-				SelfStorageChange: true,
-				StorageChange:     true,
-			},
-			{
-				ID:                errorChildID,
-				TxID:              txID,
-				ParentTraceID:     errorRootID,
-				GasUsed:           big.NewInt(11),
-				CallType:          "call",
-				To:                strings.ToLower(revertedChildAddr.Hex()),
-				TraceAddress:      []int64{0},
-				SelfStorageChange: true,
-				StorageChange:     true,
-			},
-		},
-		Events: []ptypes.Event{{
-			ID:            "event-id",
-			Address:       strings.ToLower(logAddr.Hex()),
-			Selector:      topic0.Hex(),
-			Topics:        []string{topic1.Hex()},
-			Data:          hexutil.Bytes{0xaa},
-			ParentTraceID: childID,
-			Position:      3,
-			LogIndex:      0,
-		}},
-		ErrorEvents: []ptypes.Event{{
-			ID:            "reverted-event",
-			Address:       strings.ToLower(revertedAddr.Hex()),
-			Selector:      topic0.Hex(),
-			Data:          hexutil.Bytes{0xbb},
-			ParentTraceID: errorRootID,
-		}},
-	}
-
+func TestValidateDebankReplayReceiptsRejectsReceiptRootMismatch(t *testing.T) {
+	tx := types.NewTx(&types.LegacyTx{Nonce: 1, Gas: 21_000, GasPrice: big.NewInt(1)})
 	receipt := &types.Receipt{
 		TxHash:            tx.Hash(),
 		Status:            types.ReceiptStatusSuccessful,
-		GasUsed:           90_000,
-		EffectiveGasPrice: big.NewInt(42),
-		TransactionIndex:  2,
+		GasUsed:           21_000,
+		CumulativeGasUsed: 21_000,
+	}
+	block := &evmcore.EvmBlock{
+		EvmHeader: evmcore.EvmHeader{Number: big.NewInt(7)},
+		Transactions: types.Transactions{
+			tx,
+		},
+	}
+
+	err := validateDebankReplayReceipts(block, []evmcore.ProcessedTransaction{{
+		Transaction: tx,
+		Receipt:     receipt,
+	}}, common.HexToHash("0x01"), types.Bloom{})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "replayed receipt root mismatch")
+}
+
+func TestValidateDebankReplayReceiptsRejectsBloomMismatch(t *testing.T) {
+	tx := types.NewTx(&types.LegacyTx{Nonce: 1, Gas: 21_000, GasPrice: big.NewInt(1)})
+	receipt := &types.Receipt{
+		TxHash:            tx.Hash(),
+		Status:            types.ReceiptStatusSuccessful,
+		GasUsed:           21_000,
+		CumulativeGasUsed: 21_000,
 		Logs: []*types.Log{{
-			Address: logAddr,
-			Topics:  []common.Hash{topic0, topic1},
-			Data:    []byte{0xaa},
-			Index:   5,
+			Address: common.HexToAddress("0x1001"),
+			Topics:  []common.Hash{common.HexToHash("0x01")},
+		}},
+	}
+	receipt.Bloom = types.CreateBloom(receipt)
+	block := &evmcore.EvmBlock{
+		EvmHeader: evmcore.EvmHeader{Number: big.NewInt(7)},
+		Transactions: types.Transactions{
+			tx,
+		},
+	}
+	receiptHash := types.DeriveSha(types.Receipts{receipt}, trie.NewStackTrie(nil))
+
+	err := validateDebankReplayReceipts(block, []evmcore.ProcessedTransaction{{
+		Transaction: tx,
+		Receipt:     receipt,
+	}}, receiptHash, types.Bloom{})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "replayed logs bloom mismatch")
+}
+
+func TestValidateDebankBlockFileTxsRejectsIDMismatch(t *testing.T) {
+	tx := types.NewTx(&types.LegacyTx{Nonce: 1, Gas: 21_000, GasPrice: big.NewInt(1)})
+	block := &evmcore.EvmBlock{
+		EvmHeader: evmcore.EvmHeader{Number: big.NewInt(7)},
+		Transactions: types.Transactions{
+			tx,
+		},
+	}
+
+	err := validateDebankBlockFileTxs(block, []ptypes.Transaction{{ID: common.HexToHash("0x01").Hex()}})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "block_file tx 0 id mismatch")
+}
+
+func TestValidateDebankBlockFileRejectsEmptyEventMetadata(t *testing.T) {
+	tx := types.NewTx(&types.LegacyTx{Nonce: 1, Gas: 21_000, GasPrice: big.NewInt(1)})
+	block := &evmcore.EvmBlock{
+		EvmHeader: evmcore.EvmHeader{Number: big.NewInt(7)},
+		Transactions: types.Transactions{
+			tx,
+		},
+	}
+	blockFile := &ptypes.BlockFile{
+		Txs: []ptypes.Transaction{{ID: tx.Hash().Hex()}},
+		Events: []ptypes.Event{{
+			ID: "",
 		}},
 	}
 
-	normalizeDebankBlockFileForRPC(&evmcore.EvmBlock{Transactions: types.Transactions{tx}}, types.Receipts{receipt}, blockFile)
+	err := validateDebankBlockFile(block, blockFile)
 
-	require.Len(t, blockFile.Txs, 1)
-	require.Equal(t, "42", blockFile.Txs[0].GasPrice.String())
-	require.Equal(t, "90000", blockFile.Txs[0].GasUsed.String())
-	require.True(t, blockFile.Txs[0].Status)
-	require.EqualValues(t, 2, blockFile.Txs[0].TransactionIndex)
-
-	rootTrace := requireDebankTrace(t, blockFile.Traces, rootID)
-	require.Equal(t, "90000", rootTrace.GasUsed.String())
-	requireDebankTrace(t, blockFile.Traces, errorChildID)
-	require.Len(t, blockFile.ErrorTraces, 1)
-	require.Equal(t, errorRootID, blockFile.ErrorTraces[0].ID)
-	require.Nil(t, blockFile.ErrorTraces[0].GasUsed)
-	require.Empty(t, blockFile.ErrorTraces[0].Output)
-	require.False(t, blockFile.ErrorTraces[0].SelfStorageChange)
-	require.False(t, blockFile.ErrorTraces[0].StorageChange)
-
-	require.Len(t, blockFile.Events, 1)
-	require.EqualValues(t, 5, blockFile.Events[0].LogIndex)
-	require.Empty(t, blockFile.ErrorEvents)
-	require.Equal(t, []string{strings.ToLower(to.Hex()), strings.ToLower(revertedChildAddr.Hex())}, blockFile.StorageContracts)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "event 0 id is empty")
 }
 
-func requireDebankTrace(t *testing.T, traces []ptypes.Trace, id string) ptypes.Trace {
-	t.Helper()
-	for _, trace := range traces {
-		if trace.ID == id {
-			return trace
-		}
+func TestDebankTraceGuardZeroesInternalTxEffectiveGasPrice(t *testing.T) {
+	rpcTracer, guard := newTestDebankRPCTracer(t)
+	hooks := guard.Hooks()
+	to := common.HexToAddress("0x1001")
+	tx := types.NewTx(&types.LegacyTx{
+		To:       &to,
+		Gas:      100_000,
+		GasPrice: big.NewInt(0),
+		V:        big.NewInt(0),
+		R:        big.NewInt(0),
+		S:        big.NewInt(1),
+	})
+
+	hooks.OnTxStart(testVMContext(), tx, common.Address{})
+	hooks.OnEnter(0, byte(vm.CALL), common.Address{}, to, nil, 79_000, big.NewInt(0))
+	hooks.OnExit(0, nil, 1, nil, false)
+	hooks.OnTxEnd(&types.Receipt{
+		TxHash:            tx.Hash(),
+		Status:            types.ReceiptStatusSuccessful,
+		GasUsed:           21_001,
+		CumulativeGasUsed: 21_001,
+		EffectiveGasPrice: big.NewInt(10),
+	}, nil)
+
+	out := rpcTracer.GetOutPut(common.Hash{}, common.Hash{}, nil, nil, nil, nil)
+
+	require.Len(t, out.BlockFile.Txs, 1)
+	require.Zero(t, out.BlockFile.Txs[0].GasPrice.Sign())
+}
+
+func TestDebankTraceGuardKeepsRegularTxEffectiveGasPrice(t *testing.T) {
+	rpcTracer, guard := newTestDebankRPCTracer(t)
+	hooks := guard.Hooks()
+	to := common.HexToAddress("0x1001")
+	tx := types.NewTx(&types.LegacyTx{
+		To:       &to,
+		Gas:      100_000,
+		GasPrice: big.NewInt(1),
+		V:        big.NewInt(27),
+		R:        big.NewInt(1),
+		S:        big.NewInt(1),
+	})
+
+	hooks.OnTxStart(testVMContext(), tx, common.Address{})
+	hooks.OnEnter(0, byte(vm.CALL), common.Address{}, to, nil, 79_000, big.NewInt(0))
+	hooks.OnExit(0, nil, 1, nil, false)
+	hooks.OnTxEnd(&types.Receipt{
+		TxHash:            tx.Hash(),
+		Status:            types.ReceiptStatusSuccessful,
+		GasUsed:           21_001,
+		CumulativeGasUsed: 21_001,
+		EffectiveGasPrice: big.NewInt(7),
+	}, nil)
+
+	out := rpcTracer.GetOutPut(common.Hash{}, common.Hash{}, nil, nil, nil, nil)
+
+	require.Len(t, out.BlockFile.Txs, 1)
+	require.Equal(t, int64(7), out.BlockFile.Txs[0].GasPrice.Int64())
+}
+
+func TestDebankTraceGuardBuffersLogsUntilTopCall(t *testing.T) {
+	rpcTracer, guard := newTestDebankRPCTracer(t)
+	hooks := guard.Hooks()
+	to := common.HexToAddress("0x1001")
+	tx := types.NewTx(&types.LegacyTx{
+		To:       &to,
+		Gas:      100_000,
+		GasPrice: big.NewInt(1),
+		V:        big.NewInt(27),
+		R:        big.NewInt(1),
+		S:        big.NewInt(1),
+	})
+
+	hooks.OnTxStart(testVMContext(), tx, common.Address{})
+	hooks.OnLog(&types.Log{
+		Address: to,
+		Topics:  []common.Hash{common.HexToHash("0xabc")},
+		Data:    []byte{0x01},
+	})
+	hooks.OnEnter(0, byte(vm.CALL), common.Address{}, to, nil, 79_000, big.NewInt(0))
+	hooks.OnExit(0, nil, 1, nil, false)
+	hooks.OnTxEnd(&types.Receipt{
+		TxHash:            tx.Hash(),
+		Status:            types.ReceiptStatusSuccessful,
+		GasUsed:           21_001,
+		CumulativeGasUsed: 21_001,
+		EffectiveGasPrice: big.NewInt(7),
+	}, nil)
+
+	out := rpcTracer.GetOutPut(common.Hash{}, common.Hash{}, nil, nil, nil, nil)
+
+	require.Len(t, out.BlockFile.Events, 1)
+	require.NotEmpty(t, out.BlockFile.Events[0].ID)
+	require.NotEmpty(t, out.BlockFile.Events[0].ParentTraceID)
+}
+
+func TestAdjustTopTraceGasUsedSubtractsIntrinsicGas(t *testing.T) {
+	blockFile := &ptypes.BlockFile{
+		Txs: []ptypes.Transaction{{
+			ID:      "0xtx",
+			GasUsed: big.NewInt(21_010),
+		}},
+		Traces: []ptypes.Trace{{
+			ID:               "trace",
+			TxID:             "0xtx",
+			GasUsed:          big.NewInt(21_010),
+			ParentTraceID:    "",
+			PosInParentTrace: 0,
+			TraceAddress:     []int64{},
+		}},
 	}
-	require.Failf(t, "trace not found", "missing trace %s", id)
-	return ptypes.Trace{}
+
+	adjustTopTraceGasUsed(blockFile, map[string]uint64{"0xtx": 21_000})
+
+	require.Equal(t, int64(10), blockFile.Traces[0].GasUsed.Int64())
+}
+
+func TestDebankOutputEventsMarshalTxIDNull(t *testing.T) {
+	out := newDebankOutPut(&ptypes.DebankOutPut{
+		BlockFile: &ptypes.BlockFile{
+			Events: []ptypes.Event{{
+				ID:            "event",
+				ParentTraceID: "trace",
+			}},
+		},
+	})
+
+	encoded, err := json.Marshal(out)
+
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), `"tx_id":null`)
+}
+
+func newTestDebankRPCTracer(t *testing.T) (*ptracer.RPCTracer, *debankTraceGuard) {
+	t.Helper()
+	rpcTracer := &ptracer.RPCTracer{}
+	header := &types.Header{
+		Number:   big.NewInt(1),
+		GasLimit: 1_000_000,
+		BaseFee:  big.NewInt(10),
+		Time:     1,
+	}
+	rpcTracer.OnBlockStart(types.NewBlockWithHeader(header))
+	guard := newDebankTraceGuard(rpcTracer, params.AllEthashProtocolChanges)
+	return rpcTracer, guard
+}
+
+func testVMContext() *tracing.VMContext {
+	return &tracing.VMContext{
+		BlockNumber: big.NewInt(1),
+		Time:        1,
+		BaseFee:     big.NewInt(10),
+	}
 }

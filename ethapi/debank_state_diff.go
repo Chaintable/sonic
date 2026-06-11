@@ -1,17 +1,21 @@
 package ethapi
 
 import (
+	"fmt"
 	"math/big"
-	"sort"
-	"strings"
 
+	"github.com/0xsoniclabs/carmen/go/database/mpt"
 	"github.com/0xsoniclabs/sonic/inter/state"
+	"github.com/0xsoniclabs/sonic/utils/signers/internaltx"
 	ptracer "github.com/Chaintable/pipeline/tracer"
 	ptypes "github.com/Chaintable/pipeline/types"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/holiman/uint256"
 )
 
@@ -151,79 +155,37 @@ func (d *debankStateDiffDB) Copy() state.StateDB {
 	return newDebankStateDiffDB(d.StateDB.Copy())
 }
 
-func (d *debankStateDiffDB) BuildStateDiff(originRoot, root common.Hash) *ptypes.BlockStorageDiff {
-	diff := &ptypes.BlockStorageDiff{
-		Hash:       root,
-		ParentHash: originRoot,
-	}
-	if diff.Hash == (common.Hash{}) {
-		diff.Hash = types.EmptyRootHash
-	}
-	if diff.ParentHash == (common.Hash{}) {
-		diff.ParentHash = types.EmptyRootHash
-	}
+func (d *debankStateDiffDB) StateUpdateMaps() (map[common.Hash]struct{}, map[common.Hash][]byte, map[common.Hash]map[common.Hash][]byte, map[common.Hash][]byte) {
+	destructs := make(map[common.Hash]struct{})
+	accounts := make(map[common.Hash][]byte)
+	storages := make(map[common.Hash]map[common.Hash][]byte)
+	codes := make(map[common.Hash][]byte)
 
-	addrs := make([]common.Address, 0, len(d.changes))
-	for addr := range d.changes {
-		addrs = append(addrs, addr)
-	}
-	sort.Slice(addrs, func(i, j int) bool {
-		return strings.Compare(addrs[i].Hex(), addrs[j].Hex()) < 0
-	})
-
-	seenCodeHashes := make(map[common.Hash]struct{})
-	for _, addr := range addrs {
-		change := d.changes[addr]
+	for addr, change := range d.changes {
 		addrHash := debankAddressHash(addr)
 		if change.deleted || d.StateDB.HasSelfDestructed(addr) {
-			diff.DeletedAccounts = append(diff.DeletedAccounts, addrHash)
+			destructs[addrHash] = struct{}{}
 			continue
 		}
 		if d.accountNeedsMetadata(addr, change) {
-			diff.NewAccounts = append(diff.NewAccounts, ptypes.NewAccount{
-				Address:  addrHash,
-				Balance:  new(uint256.Int).Set(d.StateDB.GetBalance(addr)),
-				Nonce:    d.StateDB.GetNonce(addr),
-				CodeHash: d.StateDB.GetCodeHash(addr),
-			})
+			accounts[addrHash] = debankSlimAccountRLP(
+				d.StateDB.GetNonce(addr),
+				d.StateDB.GetBalance(addr),
+				d.StateDB.GetCodeHash(addr),
+			)
 		}
 		if change.codeTouched {
 			code := d.StateDB.GetCode(addr)
 			if len(code) > 0 {
-				codeHash := d.StateDB.GetCodeHash(addr)
-				if _, ok := seenCodeHashes[codeHash]; !ok {
-					seenCodeHashes[codeHash] = struct{}{}
-					diff.NewCodes = append(diff.NewCodes, ptypes.NewCode{
-						CodeHash: codeHash,
-						Code:     common.CopyBytes(code),
-					})
-				}
+				codes[d.StateDB.GetCodeHash(addr)] = common.CopyBytes(code)
 			}
 		}
-		if values := d.storageValues(addr, change); len(values) > 0 {
-			diff.StorageDiff = append(diff.StorageDiff, ptypes.AccountStorageDiff{
-				Address: addrHash,
-				Values:  values,
-			})
+		storage := d.storageUpdateMap(addr, change)
+		if len(storage) > 0 {
+			storages[addrHash] = storage
 		}
 	}
-	return diff
-}
-
-func (d *debankStateDiffDB) StorageContractAddresses() []string {
-	seen := make(map[string]struct{})
-	for addr, change := range d.changes {
-		if len(d.storageValues(addr, change)) == 0 {
-			continue
-		}
-		seen[strings.ToLower(addr.Hex())] = struct{}{}
-	}
-	addrs := make([]string, 0, len(seen))
-	for addr := range seen {
-		addrs = append(addrs, addr)
-	}
-	sort.Strings(addrs)
-	return addrs
+	return destructs, accounts, storages, codes
 }
 
 func (d *debankStateDiffDB) accountNeedsMetadata(addr common.Address, change *debankAccountChange) bool {
@@ -239,29 +201,194 @@ func (d *debankStateDiffDB) accountNeedsMetadata(addr common.Address, change *de
 	if change.origBalance.Cmp(d.StateDB.GetBalance(addr)) != 0 {
 		return true
 	}
-	return len(d.storageValues(addr, change)) > 0
+	return d.hasStorageUpdate(addr, change)
 }
 
-func (d *debankStateDiffDB) storageValues(addr common.Address, change *debankAccountChange) []ptypes.IndexValuePair {
-	keys := make([]common.Hash, 0, len(change.storage))
+func (d *debankStateDiffDB) hasStorageUpdate(addr common.Address, change *debankAccountChange) bool {
 	for key, original := range change.storage {
 		if d.StateDB.GetState(addr, key) == original {
 			continue
 		}
-		keys = append(keys, key)
+		return true
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		return strings.Compare(keys[i].Hex(), keys[j].Hex()) < 0
-	})
-	values := make([]ptypes.IndexValuePair, 0, len(keys))
-	for _, key := range keys {
+	return false
+}
+
+func (d *debankStateDiffDB) storageUpdateMap(addr common.Address, change *debankAccountChange) map[common.Hash][]byte {
+	storage := make(map[common.Hash][]byte)
+	for key, original := range change.storage {
 		value := d.StateDB.GetState(addr, key)
-		values = append(values, ptypes.IndexValuePair{
-			Index: crypto.Keccak256Hash(key[:]),
-			Value: uint256.NewInt(0).SetBytes(value.Bytes()),
-		})
+		if value == original {
+			continue
+		}
+		storage[crypto.Keccak256Hash(key[:])] = debankStorageRLP(value)
 	}
-	return values
+	return storage
+}
+
+func (d *debankStateDiffDB) stateUpdateMapsFromPostState(postState state.StateDB) (map[common.Hash]struct{}, map[common.Hash][]byte, map[common.Hash]map[common.Hash][]byte, map[common.Hash][]byte) {
+	destructs := make(map[common.Hash]struct{})
+	accounts := make(map[common.Hash][]byte)
+	storages := make(map[common.Hash]map[common.Hash][]byte)
+	codes := make(map[common.Hash][]byte)
+
+	for addr, change := range d.changes {
+		addrHash := debankAddressHash(addr)
+		if !postState.Exist(addr) {
+			if change.origExist || change.deleted || d.StateDB.HasSelfDestructed(addr) {
+				destructs[addrHash] = struct{}{}
+			}
+			continue
+		}
+		if d.accountNeedsMetadataFromPostState(addr, change, postState) {
+			accounts[addrHash] = debankSlimAccountRLP(
+				postState.GetNonce(addr),
+				postState.GetBalance(addr),
+				postState.GetCodeHash(addr),
+			)
+		}
+		if change.codeTouched || change.origCodeHash != postState.GetCodeHash(addr) {
+			code := postState.GetCode(addr)
+			if len(code) > 0 {
+				codes[postState.GetCodeHash(addr)] = common.CopyBytes(code)
+			}
+		}
+		storage := d.storageUpdateMapFromPostState(addr, change, postState)
+		if len(storage) > 0 {
+			storages[addrHash] = storage
+		}
+	}
+	return destructs, accounts, storages, codes
+}
+
+func (d *debankStateDiffDB) accountNeedsMetadataFromPostState(addr common.Address, change *debankAccountChange, postState state.StateDB) bool {
+	if change.origExist != postState.Exist(addr) {
+		return true
+	}
+	if change.origNonce != postState.GetNonce(addr) {
+		return true
+	}
+	if change.origCodeHash != postState.GetCodeHash(addr) {
+		return true
+	}
+	if change.origBalance.Cmp(postState.GetBalance(addr)) != 0 {
+		return true
+	}
+	return d.hasStorageUpdateFromPostState(addr, change, postState)
+}
+
+func (d *debankStateDiffDB) hasStorageUpdateFromPostState(addr common.Address, change *debankAccountChange, postState state.StateDB) bool {
+	for key, original := range change.storage {
+		if postState.GetState(addr, key) == original {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func (d *debankStateDiffDB) storageUpdateMapFromPostState(addr common.Address, change *debankAccountChange, postState state.StateDB) map[common.Hash][]byte {
+	storage := make(map[common.Hash][]byte)
+	for key, original := range change.storage {
+		value := postState.GetState(addr, key)
+		if value == original {
+			continue
+		}
+		storage[crypto.Keccak256Hash(key[:])] = debankStorageRLP(value)
+	}
+	return storage
+}
+
+func stateUpdateMapsFromCarmenDiff(diff mpt.Diff, postState state.StateDB) (map[common.Hash]struct{}, map[common.Hash][]byte, map[common.Hash]map[common.Hash][]byte, map[common.Hash][]byte, error) {
+	destructs := make(map[common.Hash]struct{})
+	accounts := make(map[common.Hash][]byte)
+	storages := make(map[common.Hash]map[common.Hash][]byte)
+	codes := make(map[common.Hash][]byte)
+
+	for carmenAddr, accountDiff := range diff {
+		if accountDiff == nil || accountDiff.Empty() {
+			continue
+		}
+		addr := common.Address(carmenAddr)
+		addrHash := debankAddressHash(addr)
+		exists := postState.Exist(addr)
+
+		if accountDiff.Reset {
+			destructs[addrHash] = struct{}{}
+		}
+
+		if carmenDiffNeedsFinalAccount(accountDiff) {
+			if exists {
+				accounts[addrHash] = debankSlimAccountRLP(
+					postState.GetNonce(addr),
+					postState.GetBalance(addr),
+					postState.GetCodeHash(addr),
+				)
+			} else {
+				destructs[addrHash] = struct{}{}
+			}
+		}
+
+		if accountDiff.Code != nil && exists {
+			wantCodeHash := common.Hash(*accountDiff.Code)
+			gotCodeHash := postState.GetCodeHash(addr)
+			code := postState.GetCode(addr)
+			if len(code) == 0 {
+				if wantCodeHash != (common.Hash{}) && gotCodeHash != wantCodeHash {
+					return nil, nil, nil, nil, fmt.Errorf("canonical Carmen diff code hash mismatch for %s: diff has %s, post-state has %s", addr, wantCodeHash, gotCodeHash)
+				}
+				continue
+			}
+			if gotCodeHash != wantCodeHash {
+				return nil, nil, nil, nil, fmt.Errorf("canonical Carmen diff code hash mismatch for %s: diff has %s, post-state has %s", addr, wantCodeHash, gotCodeHash)
+			}
+			if len(code) > 0 {
+				if hash := crypto.Keccak256Hash(code); hash != gotCodeHash {
+					return nil, nil, nil, nil, fmt.Errorf("canonical post-state code bytes mismatch for %s: hash(code)=%s, codeHash=%s", addr, hash, gotCodeHash)
+				}
+				codes[gotCodeHash] = common.CopyBytes(code)
+			}
+		}
+
+		if len(accountDiff.Storage) > 0 {
+			storage := make(map[common.Hash][]byte, len(accountDiff.Storage))
+			for key, value := range accountDiff.Storage {
+				storage[crypto.Keccak256Hash(key[:])] = debankStorageRLP(common.Hash(value))
+			}
+			storages[addrHash] = storage
+		}
+	}
+	return destructs, accounts, storages, codes, nil
+}
+
+func carmenDiffNeedsFinalAccount(diff *mpt.AccountDiff) bool {
+	return diff.Balance != nil || diff.Nonce != nil || diff.Code != nil || len(diff.Storage) > 0
+}
+
+func debankStateUpdateMapSizes(destructs map[common.Hash]struct{}, accounts map[common.Hash][]byte, storages map[common.Hash]map[common.Hash][]byte, codes map[common.Hash][]byte) (int, int, int, int) {
+	slots := 0
+	for _, storage := range storages {
+		slots += len(storage)
+	}
+	return len(destructs), len(accounts), slots, len(codes)
+}
+
+func debankSlimAccountRLP(nonce uint64, balance *uint256.Int, codeHash common.Hash) []byte {
+	account := types.StateAccount{
+		Nonce:    nonce,
+		Balance:  new(uint256.Int).Set(balance),
+		Root:     types.EmptyRootHash,
+		CodeHash: codeHash.Bytes(),
+	}
+	return types.SlimAccountRLP(account)
+}
+
+func debankStorageRLP(value common.Hash) []byte {
+	encoded, err := rlp.EncodeToBytes(value.Bytes())
+	if err != nil {
+		panic(err)
+	}
+	return encoded
 }
 
 func cloneDebankChanges(src map[common.Address]*debankAccountChange) map[common.Address]*debankAccountChange {
@@ -289,26 +416,48 @@ func debankAddressHash(addr common.Address) common.Hash {
 }
 
 type debankTraceGuard struct {
-	tracer       *ptracer.RPCTracer
-	txActive     bool
-	txHasTopCall bool
+	tracer           *ptracer.RPCTracer
+	chainConfig      *params.ChainConfig
+	txActive         bool
+	txHasTopCall     bool
+	currentTx        *types.Transaction
+	pendingLogs      []*types.Log
+	intrinsicGasByTx map[string]uint64
+	internalTxByID   map[string]struct{}
 }
 
-func newDebankTraceHooks(tracer *ptracer.RPCTracer) *tracing.Hooks {
-	guard := &debankTraceGuard{tracer: tracer}
+func newDebankTraceGuard(tracer *ptracer.RPCTracer, chainConfig *params.ChainConfig) *debankTraceGuard {
+	return &debankTraceGuard{
+		tracer:           tracer,
+		chainConfig:      chainConfig,
+		intrinsicGasByTx: make(map[string]uint64),
+		internalTxByID:   make(map[string]struct{}),
+	}
+}
+
+func (g *debankTraceGuard) Hooks() *tracing.Hooks {
 	return &tracing.Hooks{
-		OnTxStart: guard.OnTxStart,
-		OnTxEnd:   guard.OnTxEnd,
-		OnEnter:   guard.OnEnter,
-		OnExit:    guard.OnExit,
-		OnOpcode:  guard.OnOpcode,
-		OnLog:     guard.OnLog,
+		OnTxStart: g.OnTxStart,
+		OnTxEnd:   g.OnTxEnd,
+		OnEnter:   g.OnEnter,
+		OnExit:    g.OnExit,
+		OnOpcode:  g.OnOpcode,
+		OnLog:     g.OnLog,
 	}
 }
 
 func (g *debankTraceGuard) OnTxStart(env *tracing.VMContext, tx *types.Transaction, from common.Address) {
 	g.txActive = true
 	g.txHasTopCall = false
+	g.currentTx = tx
+	g.pendingLogs = g.pendingLogs[:0]
+	txID := tx.Hash().Hex()
+	if intrinsicGas, err := g.intrinsicGas(env, tx); err == nil {
+		g.intrinsicGasByTx[txID] = intrinsicGas
+	}
+	if internaltx.IsInternal(tx) {
+		g.internalTxByID[txID] = struct{}{}
+	}
 	g.tracer.OnTxStart(env, tx, from)
 }
 
@@ -316,11 +465,14 @@ func (g *debankTraceGuard) OnTxEnd(receipt *types.Receipt, err error) {
 	defer func() {
 		g.txActive = false
 		g.txHasTopCall = false
+		g.currentTx = nil
+		g.pendingLogs = g.pendingLogs[:0]
 	}()
 	if receipt == nil || err != nil || !g.txHasTopCall {
 		return
 	}
-	g.tracer.OnTxEnd(receipt, err)
+	g.flushPendingLogs()
+	g.tracer.OnTxEnd(g.receiptForPipeline(receipt), err)
 }
 
 func (g *debankTraceGuard) OnEnter(depth int, typ byte, from common.Address, to common.Address, input []byte, gas uint64, value *big.Int) {
@@ -329,6 +481,12 @@ func (g *debankTraceGuard) OnEnter(depth int, typ byte, from common.Address, to 
 	}
 	if depth == 0 {
 		g.txHasTopCall = true
+		g.tracer.OnEnter(depth, typ, from, to, input, gas, value)
+		g.flushPendingLogs()
+		return
+	}
+	if !g.txHasTopCall {
+		return
 	}
 	g.tracer.OnEnter(depth, typ, from, to, input, gas, value)
 }
@@ -351,5 +509,61 @@ func (g *debankTraceGuard) OnLog(log *types.Log) {
 	if !g.txActive {
 		return
 	}
+	if !g.txHasTopCall {
+		g.pendingLogs = append(g.pendingLogs, copyLog(log))
+		return
+	}
 	g.tracer.OnLog(log)
+}
+
+func (g *debankTraceGuard) AdjustBlockFile(blockFile *ptypes.BlockFile) {
+	adjustTopTraceGasUsed(blockFile, g.intrinsicGasByTx)
+}
+
+func (g *debankTraceGuard) flushPendingLogs() {
+	for _, log := range g.pendingLogs {
+		if log == nil {
+			continue
+		}
+		g.tracer.OnLog(log)
+	}
+	g.pendingLogs = g.pendingLogs[:0]
+}
+
+func (g *debankTraceGuard) receiptForPipeline(receipt *types.Receipt) *types.Receipt {
+	if g.currentTx == nil {
+		return receipt
+	}
+	if _, ok := g.internalTxByID[g.currentTx.Hash().Hex()]; !ok {
+		return receipt
+	}
+	cpy := *receipt
+	cpy.EffectiveGasPrice = new(big.Int)
+	return &cpy
+}
+
+func (g *debankTraceGuard) intrinsicGas(env *tracing.VMContext, tx *types.Transaction) (uint64, error) {
+	if g.chainConfig == nil || env == nil {
+		return 0, nil
+	}
+	rules := g.chainConfig.Rules(env.BlockNumber, env.Random != nil, env.Time)
+	return core.IntrinsicGas(
+		tx.Data(),
+		tx.AccessList(),
+		tx.SetCodeAuthorizations(),
+		tx.To() == nil,
+		rules.IsHomestead,
+		rules.IsIstanbul,
+		rules.IsShanghai,
+	)
+}
+
+func copyLog(log *types.Log) *types.Log {
+	if log == nil {
+		return nil
+	}
+	cpy := *log
+	cpy.Topics = append([]common.Hash(nil), log.Topics...)
+	cpy.Data = common.CopyBytes(log.Data)
+	return &cpy
 }

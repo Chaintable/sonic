@@ -16,6 +16,7 @@ import (
 	reflect "reflect"
 	time "time"
 
+	mpt "github.com/0xsoniclabs/carmen/go/database/mpt"
 	evmcore "github.com/0xsoniclabs/sonic/evmcore"
 	inter "github.com/0xsoniclabs/sonic/inter"
 	iblockproc "github.com/0xsoniclabs/sonic/inter/iblockproc"
@@ -71,6 +72,21 @@ func (m *MockBackend) AccountManager() *accounts.Manager {
 func (mr *MockBackendMockRecorder) AccountManager() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AccountManager", reflect.TypeOf((*MockBackend)(nil).AccountManager))
+}
+
+// ArchiveStateDiffByNumber mocks base method.
+func (m *MockBackend) ArchiveStateDiffByNumber(ctx context.Context, number uint64) (mpt.Diff, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ArchiveStateDiffByNumber", ctx, number)
+	ret0, _ := ret[0].(mpt.Diff)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ArchiveStateDiffByNumber indicates an expected call of ArchiveStateDiffByNumber.
+func (mr *MockBackendMockRecorder) ArchiveStateDiffByNumber(ctx, number any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ArchiveStateDiffByNumber", reflect.TypeOf((*MockBackend)(nil).ArchiveStateDiffByNumber), ctx, number)
 }
 
 // BlockByHash mocks base method.
