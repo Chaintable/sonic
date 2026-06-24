@@ -1,4 +1,4 @@
-name: "Release artifacts"
+name: release
 
 on:
   release:
@@ -8,95 +8,114 @@ on:
 
 env:
   REGISTRY: public.ecr.aws/b2h7a5c4/chaintable
-  IMAGE: sonic-writer
+  IMAGE_NAME: sonic-writer
   DOCKERFILE: Dockerfile
-  AWS_REGION: us-east-1
 
 jobs:
-  build-and-package:
+  build:
+    name: build-${{ matrix.arch }}
     strategy:
+      fail-fast: false
       matrix:
-        arch: [amd64, arm64]
-    runs-on: [self-hosted, "${{ matrix.arch }}"]
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       id-token: write
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: false
 
-      - uses: tibdex/github-app-token@v1
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate app token
         id: generate-token
+        uses: actions/create-github-app-token@v1
         with:
-          app_id: ${{ secrets.RELEASE_MANAGER_APP_ID }}
-          private_key: ${{ secrets.RELEASE_MANAGER_APP_SECRET }}
+          app-id: ${{ secrets.RELEASE_MANAGER_APP_ID }}
+          private-key: ${{ secrets.RELEASE_MANAGER_APP_SECRET }}
+          owner: ${{ github.repository_owner }}
 
-      - name: Set env
-        run: |
-          echo "REVISION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
+      - name: Set revision
+        run: echo "REVISION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
 
-      - name: Configure AWS Credentials
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: us-east-1
 
-      - name: Login to Amazon ECR
-        id: login-ecr
+      - name: Login to Public ECR
         uses: aws-actions/amazon-ecr-login@v2
         with:
           registry-type: public
 
-      - name: Build image and push to ECR
-        uses:  docker/build-push-action@v5
+      - name: Build & Push
+        uses: docker/build-push-action@v6
         with:
-          file: ${{ env.DOCKERFILE }}
           context: .
+          file: ${{ env.DOCKERFILE }}
+          platforms: ${{ matrix.platform }}
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ matrix.arch }}-${{ env.REVISION }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.REVISION }}-${{ matrix.arch }}
           build-args: ACCESS_TOKEN=${{ steps.generate-token.outputs.token }}
+          cache-from: type=gha,scope=build-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=build-${{ matrix.arch }}
           provenance: false
+          sbom: false
 
-      - name: Lark Notification
-        continue-on-error: true
-        run: |
-          notiv3 "Blockchain client sonic image pushed 🎉" ${REGISTRY}/${IMAGE}:${{ matrix.arch }}-${REVISION}
-
-  merge-docker-manifest:
-    runs-on: [self-hosted, general]
-    needs: build-and-package
+  manifest:
+    name: merge-manifest
+    needs: build
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Set env
-        run: |
-          echo "REVISION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
+      - name: Set revision
+        run: echo "REVISION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
 
-      - name: Configure AWS Credentials
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: us-east-1
 
-      - name: Login to Amazon ECR
-        id: login-ecr
+      - name: Login to Public ECR
         uses: aws-actions/amazon-ecr-login@v2
         with:
           registry-type: public
 
-      - name: Merge manifest
+      # release（非 prerelease）才打 latest；tag push / workflow_dispatch 只打 revision
+      - name: Create and push multi-arch manifest
         run: |
-          docker buildx imagetools create --tag ${REGISTRY}/${IMAGE}:${REVISION} --tag ${REGISTRY}/${IMAGE}:latest ${REGISTRY}/${IMAGE}:amd64-${REVISION} ${REGISTRY}/${IMAGE}:arm64-${REVISION}
-
-      # - name: Lark Notification
-      #   continue-on-error: true
-      #   run: |
-      #     notiv3 "Blockchain client sonic image released 🎉" ${REGISTRY}/${IMAGE}:${REVISION}
+          TAGS="-t ${REGISTRY}/${IMAGE_NAME}:${REVISION}"
+          if [[ "${{ github.event_name }}" == "release" && "${{ github.event.release.prerelease }}" != "true" ]]; then
+            TAGS="$TAGS -t ${REGISTRY}/${IMAGE_NAME}:latest"
+          fi
+          docker buildx imagetools create $TAGS \
+            ${REGISTRY}/${IMAGE_NAME}:${REVISION}-amd64 \
+            ${REGISTRY}/${IMAGE_NAME}:${REVISION}-arm64
