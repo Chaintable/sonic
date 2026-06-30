@@ -82,10 +82,10 @@ func (l *LoggingStateDB) SetState(addr common.Address, slot common.Hash, value c
 }
 
 func (l *LoggingStateDB) AddLog(log *types.Log) {
+	l.StateDB.AddLog(log)
 	if l.logger.OnLog != nil {
 		l.logger.OnLog(log)
 	}
-	l.StateDB.AddLog(log)
 }
 
 func (l *LoggingStateDB) SelfDestruct(addr common.Address) uint256.Int {

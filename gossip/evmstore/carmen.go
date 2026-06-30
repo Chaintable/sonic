@@ -73,6 +73,9 @@ func (c *CarmenStateDB) AddLog(log *types.Log) {
 		carmenLog.Topics = append(carmenLog.Topics, cc.Hash(topic))
 	}
 	c.db.AddLog(&carmenLog)
+	log.TxHash = c.txHash
+	log.TxIndex = uint(c.txIndex)
+	log.Index = carmenLog.Index
 }
 
 func (c *CarmenStateDB) GetLogs(txHash common.Hash, blockHash common.Hash) []*types.Log {
