@@ -7,10 +7,6 @@
 
 FROM golang:1.24 AS builder
 
-ARG ACCESS_TOKEN=""
-
-RUN if [ -n "$ACCESS_TOKEN" ]; then git config --global url."https://x-access-token:${ACCESS_TOKEN}@github.com".insteadOf "https://github.com"; fi
-
 RUN apt-get update && apt-get install -y git musl-dev make
 
 WORKDIR /go/Sonic
