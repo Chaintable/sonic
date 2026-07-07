@@ -1,114 +1,117 @@
 # Contributing
 
-When contributing to this repository, please first discuss the change you wish to make via issue,
-email, or any other method with the owners of this repository before making a change. 
+Thanks for your interest in contributing.
 
-Please note we have a code of conduct, please follow it in all your interactions with the project.
+This repository is a **fork**: upstream [0xsoniclabs/sonic](https://github.com/0xsoniclabs/sonic)
+plus the [Chaintable pipeline](https://github.com/Chaintable/pipeline) tracer. It
+runs write node(s) that produce block data for the Chaintable data pipeline, for
+the chain(s) listed in this repository's CI configuration and README. It is not
+a general-purpose fork of 0xsoniclabs/sonic.
 
-## Contribution Guidelines
+**First, determine where your change belongs:**
 
-1. Ensure any install or build dependencies are removed before the end of the layer when doing a 
-   build.
-2. Update the README.md with details of changes to the interface, this includes new environment 
-   variables, exposed ports, useful file locations and container parameters.
-3. Increase the version numbers in any examples files and the README.md to the new version that this
-   Pull Request would represent. The versioning scheme we use is [SemVer](http://semver.org/).
-4. You may merge the Pull Request in once you have the sign-off of two other developers, or if you 
-   do not have permission to do that, you may request the second reviewer to merge it for you.
+- **Chain client changes** (consensus, p2p, EVM, RPC, txpool) — contribute
+  **upstream**, following their contributing process. We cannot accept
+  chain-core changes in this fork: they would diverge from upstream and be lost
+  or cause conflicts at the next upstream merge. If an upstream fix matters to
+  this fork, open an issue here linking the upstream PR/commit and we will pull
+  it in with the next sync.
 
-## Code of Conduct
+- **Pipeline layer changes** — the pipeline tracer and its block-data output,
+  the Dockerfile, published images, CI workflows, or docs about running this
+  write node — contribute **here**, following the process below.
 
-### Our Pledge
+---
 
-In the interest of fostering an open and welcoming environment, we as
-contributors and maintainers pledge to making participation in our project and
-our community a harassment-free experience for everyone, regardless of age, body
-size, disability, ethnicity, gender identity and expression, level of experience,
-nationality, personal appearance, race, religion, or sexual identity and
-orientation.
+## Our Process (contributions to the Chaintable pipeline layer)
 
-### Our Standards
+### Getting Started
 
-Examples of behavior that contributes to creating a positive environment
-include:
+Requirements:
 
-* Using welcoming and inclusive language
-* Being respectful of differing viewpoints and experiences
-* Gracefully accepting constructive criticism
-* Focusing on what is best for the community
-* Showing empathy towards other community members
+* Go (version per `go.mod`)
 
-Examples of unacceptable behavior by participants include:
+### Development Workflow
 
-* The use of sexualized language or imagery and unwelcome sexual attention or
-advances
-* Trolling, insulting/derogatory comments, and personal or political attacks
-* Public or private harassment
-* Publishing others' private information, such as a physical or electronic
-  address, without explicit permission
-* Other conduct which could reasonably be considered inappropriate in a
-  professional setting
+1. Fork the repository
+2. Create a branch from `main`
+3. Make changes, focused on the pipeline layer
+4. Run local checks
+5. Open a PR
 
-### Our Responsibilities
+Keep PRs small and focused.
 
-Project maintainers are responsible for clarifying the standards of acceptable
-behavior and are expected to take appropriate and fair corrective action in
-response to any instances of unacceptable behavior.
+### Local Checks (must pass)
 
-Project maintainers have the right and responsibility to remove, edit, or
-reject comments, commits, code, wiki edits, issues, and other contributions
-that are not aligned to this Code of Conduct, or to ban temporarily or
-permanently any contributor for other behaviors that they deem inappropriate,
-threatening, offensive, or harmful.
+```bash
+make all
+make test
+```
 
-### Scope
+### Code Guidelines
 
-This Code of Conduct applies both within project spaces and in public spaces
-when an individual is representing the project or its community. Examples of
-representing a project or community include using an official project e-mail
-address, posting via an official social media account, or acting as an appointed
-representative at an online or offline event. Representation of a project may be
-further defined and clarified by project maintainers.
+* Keep the diff minimal — prefer hooks over invasive edits to client code
+* Match the existing code style and conventions (`gofmt`)
+* Prefer simple and explicit logic
+* Do not change chain-core behavior (see the top of this document)
 
-### Enforcement
+### Testing
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported by contacting the project team at [INSERT EMAIL ADDRESS]. All
-complaints will be reviewed and investigated and will result in a response that
-is deemed necessary and appropriate to the circumstances. The project team is
-obligated to maintain confidentiality with regard to the reporter of an incident.
-Further details of specific enforcement policies may be posted separately.
+Changes to the pipeline layer must include tests where practical. At minimum,
+describe how you verified the emitted data: chain, block range, and what you
+compared it against.
 
-Project maintainers who do not follow or enforce the Code of Conduct in good
-faith may face temporary or permanent repercussions as determined by other
-members of the project's leadership.
+### Pull Requests
 
-### Attribution
+Before submitting:
 
-This Code of Conduct is adapted from the [Contributor Covenant][homepage], version 1.4,
-available at [http://contributor-covenant.org/version/1/4][version]
+* Local checks pass
+* Tests added or updated
+* Behavior changes clearly explained
 
-[homepage]: http://contributor-covenant.org
-[version]: http://contributor-covenant.org/version/1/4/
+PRs should include:
 
-## Quality standards
+* Summary
+* Motivation
+* Testing details
+* Compatibility impact
 
-To be accepted, the PR should adhere to these quality standards (https://goreportcard.com/report/github.com/ **github_user** / **github_repo**):
+Note on CI: it builds the Docker images for this repository, and the image
+publishing steps need repository credentials, which GitHub does not provide to
+pull requests from forks — those steps failing on a fork PR is expected. A
+maintainer will build and verify your change on an internal branch.
 
-- Code functions as documented and expected
-- Generally useful to the wider community of Go programmers
-- Thoroughly documented (README, godoc comments, etc.) in english language, so everyone is able to understand the project's intention and how it works
-- Tests, where practical. If the library/program is testable, then coverage should be >= 80% for non-data-related packages and >=90% for data related packages. **Notice**: the tests will be reviewed too. 
+### Commit Guidelines
 
-## Maintainers
+* Use clear, descriptive messages
 
-To make sure every PR is checked, we have [team maintainers](MAINTAINERS). Every PR MUST be reviewed by at least two maintainers before it can get merged.
+Example:
 
-The maintainers will review your PR and notify you and tag it in case any
-information is still missing. They will wait 8 days for your interaction, after
-that the PR will be closed.
+```
+tracer: fix state-diff ordering for reorged blocks
+```
 
+### Releases
 
-## Reporting issues
+* Release tags follow `v<base-version>-ct.N` (`ct` = Chaintable; e.g.
+  `v2.1.6-ct.7`); a GitHub Release publishes the versioned images
 
-Please open an issue if you would like to discuss anything that could be improved or have suggestions.
+### Reporting Issues
+
+Please include:
+
+* Image tag or commit
+* Chain and block height
+* Reproduction steps
+* Expected vs actual behavior
+
+### Security
+
+Do not disclose vulnerabilities publicly.
+
+See [SECURITY.md](./SECURITY.md) for reporting instructions.
+
+### License
+
+By contributing, you agree that your contributions are licensed under the same
+terms as this repository — see [COPYING.LESSER](./COPYING.LESSER) (LGPL-3.0).
