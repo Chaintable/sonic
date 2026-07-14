@@ -240,6 +240,19 @@ func TestDebankOutputEventsMarshalTxIDNull(t *testing.T) {
 	require.Contains(t, string(encoded), `"tx_id":null`)
 }
 
+func TestDebankGenesisStateDiffIncludesFullAllocation(t *testing.T) {
+	diff := ptracer.GenesisAllocToStateDiff(evmcore.GenesisAlloc)
+
+	require.Len(t, diff.NewAccounts, 22)
+	require.Len(t, diff.NewCodes, 8)
+
+	storageSlots := 0
+	for _, account := range diff.StorageDiff {
+		storageSlots += len(account.Values)
+	}
+	require.Equal(t, 6, storageSlots)
+}
+
 func newTestDebankRPCTracer(t *testing.T) (*ptracer.RPCTracer, *debankTraceGuard) {
 	t.Helper()
 	rpcTracer := &ptracer.RPCTracer{}
