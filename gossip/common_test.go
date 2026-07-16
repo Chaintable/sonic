@@ -211,7 +211,7 @@ func newTestEnvWithUpgrades(
 		signer := valkeystore.NewSignerAuthority(keyStore, pubkey)
 		world := env.EmitterWorld(signer)
 		world.External = testEmitterWorldExternal{world.External, env}
-		em := emitter.NewEmitter(cfg, world, store.AsBaseFeeSource(), nil)
+		em := emitter.NewEmitter(cfg, world, store.AsBaseFeeSource(), nil, nil)
 		env.RegisterEmitter(em)
 		env.pubkeys = append(env.pubkeys, pubkey)
 		em.Start()
@@ -238,8 +238,8 @@ func newInMemoryStoreWithGenesisData(
 
 	genStore := makefakegenesis.FakeGenesisStoreWithRulesAndStart(
 		numValidators,
-		utils.ToFtm(genesisBalance),
-		utils.ToFtm(genesisStake),
+		utils.ToFtmU256(genesisBalance),
+		utils.ToFtmU256(genesisStake),
 		rules,
 		firstEpoch,
 		2,
@@ -390,7 +390,7 @@ func (env *testEnv) Payer(n idx.ValidatorID, amounts ...*big.Int) *bind.Transact
 	for _, amount := range amounts {
 		t.Value.Add(t.Value, amount)
 	}
-	t.GasLimit = env.GetEvmStateReader().MaxGasLimit()
+	t.GasLimit = env.GetEvmStateReader().CurrentMaxGasLimit()
 	t.GasPrice = new(big.Int).SetUint64(1e12)
 
 	return t
@@ -408,7 +408,7 @@ func (env *testEnv) ReadOnly() *bind.CallOpts {
 }
 
 func (env *testEnv) State() state.StateDB {
-	statedb, err := env.store.evm.GetTxPoolStateDB()
+	statedb, err := env.store.evm.GetCurrentStateDb()
 	if err != nil {
 		panic(err)
 	}
@@ -445,7 +445,7 @@ func (env *testEnv) CallContract(ctx context.Context, call ethereum.CallMsg, blo
 		return nil, errBlockNumberUnsupported
 	}
 
-	h := env.GetEvmStateReader().GetHeader(common.Hash{}, uint64(env.store.GetLatestBlockIndex()))
+	h := env.GetEvmStateReader().Header(common.Hash{}, uint64(env.store.GetLatestBlockIndex()))
 	block := &evmcore.EvmBlock{
 		EvmHeader: *h,
 	}
@@ -461,7 +461,7 @@ func (env *testEnv) HeaderByNumber(ctx context.Context, number *big.Int) (*types
 	} else {
 		num64 = number.Uint64()
 	}
-	return env.GetEvmStateReader().GetHeader(common.Hash{}, num64).EthHeader(), nil
+	return env.GetEvmStateReader().Header(common.Hash{}, num64).EthHeader(), nil
 }
 
 // callContract implements common code between normal and pending contract calls.
@@ -497,7 +497,7 @@ func (env *testEnv) callContract(
 	context := evmcore.NewEVMBlockContext(block.Header(), env.GetEvmStateReader(), nil)
 	vmConfig := opera.GetVmConfig(env.store.GetRules())
 	vmenv := vm.NewEVM(context, state, env.store.GetEvmChainConfig(idx.Block(block.Number.Uint64())), vmConfig)
-	gaspool := new(core.GasPool).AddGas(math.MaxUint64)
+	gaspool := core.NewGasPool(math.MaxUint64)
 	res, err := core.ApplyMessage(vmenv, msg, gaspool)
 	if err != nil {
 		return nil, 0, false, err

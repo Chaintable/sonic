@@ -17,6 +17,8 @@
 package topicsdb
 
 import (
+	"bytes"
+
 	"github.com/Fantom-foundation/lachesis-base/kvdb"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -28,8 +30,6 @@ type (
 		topicsCount uint8
 		result      *types.Log
 		err         error
-
-		matched int
 	}
 )
 
@@ -74,4 +74,8 @@ func (rec *logrec) fetch(
 	r.Data = buf[offset:]
 
 	rec.result = r
+}
+
+func logRecLess(a, b logrec) bool {
+	return bytes.Compare(a.ID[:], b.ID[:]) < 0
 }

@@ -17,12 +17,15 @@
 package evmmodule
 
 import (
-	"fmt"
 	"math"
 	"math/big"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/evmcore/core_types"
+	"github.com/0xsoniclabs/sonic/inter"
 	"github.com/0xsoniclabs/sonic/inter/iblockproc"
 	"github.com/0xsoniclabs/sonic/inter/state"
 	"github.com/0xsoniclabs/sonic/opera"
@@ -87,6 +90,7 @@ func TestEvm_IgnoresGasPriceOfInternalTransactions(t *testing.T) {
 			LondonBlock: big.NewInt(0),
 		},
 		common.Hash{},
+		nil,
 	)
 
 	// This inner transaction has a gas price of 0, which is less than the MinGasPrice
@@ -95,7 +99,8 @@ func TestEvm_IgnoresGasPriceOfInternalTransactions(t *testing.T) {
 	nonce := uint64(15)
 	inner := types.NewTransaction(nonce, targetAddress, common.Big0, 1e10, common.Big0, nil)
 
-	processed := processor.Execute([]*types.Transaction{inner}, math.MaxUint64)
+	summary := processor.Execute([]*types.Transaction{inner}, math.MaxUint64, math.MaxUint64)
+	processed := summary.ProcessedTransactions
 
 	if len(processed) != 1 {
 		t.Fatalf("Expected 1 processed transaction, got %d", len(processed))
@@ -108,7 +113,7 @@ func TestEvm_IgnoresGasPriceOfInternalTransactions(t *testing.T) {
 	}
 }
 
-func TestOperaEVMProcessor_Execute_ProducesContinuousTxIndexesInLogsAndReceipts(t *testing.T) {
+func TestOperaEVMProcessor_Execute_ProducesContinuousTxIndexesInReceipts(t *testing.T) {
 	require := require.New(t)
 	ctrl := gomock.NewController(t)
 	stateDb := state.NewMockStateDB(ctrl)
@@ -140,24 +145,16 @@ func TestOperaEVMProcessor_Execute_ProducesContinuousTxIndexesInLogsAndReceipts(
 			return currentTxIndex
 		},
 	)
-	stateDb.EXPECT().GetLogs(any, any).AnyTimes().DoAndReturn(
-		func(_, _ common.Hash) []*types.Log {
-			return []*types.Log{{
-				TxIndex: uint(currentTxIndex),
-			}}
-		},
-	)
+	stateDb.EXPECT().GetLogs(any, any).AnyTimes().Return([]*types.Log{{}})
 
 	// Logs should be reported in consecutive order, one per transaction.
 	const N = 5
-	for i := range N * 3 {
-		logConsumer.EXPECT().OnNewLog(LogWithTxIndex(uint(i)))
-	}
+	logConsumer.EXPECT().OnNewLog(gomock.Any()).Times(N * 3)
 
 	evmModule := New()
 	processor := evmModule.Start(
 		iblockproc.BlockCtx{}, stateDb, nil, logConsumer.OnNewLog,
-		opera.Rules{}, &params.ChainConfig{}, common.Hash{},
+		opera.Rules{}, &params.ChainConfig{}, common.Hash{}, nil,
 	)
 
 	key, err := crypto.GenerateKey()
@@ -173,7 +170,8 @@ func TestOperaEVMProcessor_Execute_ProducesContinuousTxIndexesInLogsAndReceipts(
 	// transactions and some have just one.
 	txIndex := uint(0)
 	for range N {
-		processed := processor.Execute(types.Transactions{tx, tx}, math.MaxUint64)
+		summary := processor.Execute([]*types.Transaction{tx, tx}, math.MaxUint64, math.MaxUint64)
+		processed := summary.ProcessedTransactions
 		require.Len(processed, 2)
 		require.NotNil(processed[0].Receipt)
 		require.NotNil(processed[1].Receipt)
@@ -182,7 +180,8 @@ func TestOperaEVMProcessor_Execute_ProducesContinuousTxIndexesInLogsAndReceipts(
 		require.Equal(txIndex, processed[1].Receipt.TransactionIndex)
 		txIndex++
 
-		processed = processor.Execute(types.Transactions{tx}, math.MaxUint64)
+		summary = processor.Execute([]*types.Transaction{tx}, math.MaxUint64, math.MaxUint64)
+		processed = summary.ProcessedTransactions
 		require.Len(processed, 1)
 		require.NotNil(processed[0].Receipt)
 		require.Equal(txIndex, processed[0].Receipt.TransactionIndex)
@@ -197,17 +196,33 @@ func TestOperaEVMProcessor_Execute_StateProcessorIntroducesTransactions_Produces
 	stateProcessor := NewMock_stateProcessor(ctrl)
 
 	any := gomock.Any()
-	factory.EXPECT().NewStateProcessor(any, any, any).Return(stateProcessor).AnyTimes()
+	factory.EXPECT().NewStateProcessorForHeadState(any, any, any, any).Return(stateProcessor).AnyTimes()
+
+	summary1 := evmcore.ProcessSummary{
+		ProcessedTransactions: []evmcore.ProcessedTransaction{
+			{Receipt: &types.Receipt{TransactionIndex: 0}},
+			{Receipt: &types.Receipt{TransactionIndex: 1}},
+			{Receipt: &types.Receipt{TransactionIndex: 2}},
+			{Receipt: &types.Receipt{TransactionIndex: 3}},
+			{Receipt: &types.Receipt{TransactionIndex: 4}},
+		},
+	}
+
+	summary2 := evmcore.ProcessSummary{
+		ProcessedTransactions: []evmcore.ProcessedTransaction{
+			{Receipt: &types.Receipt{TransactionIndex: 5}},
+			{Receipt: &types.Receipt{TransactionIndex: 6}},
+			{Receipt: &types.Receipt{TransactionIndex: 7}},
+		},
+	}
 
 	stateProcessor.EXPECT().Process(
-		any, any, any, any, any, any,
-	).Return([]evmcore.ProcessedTransaction{
-		{Receipt: &types.Receipt{TransactionIndex: 0}},
-		{Receipt: &types.Receipt{TransactionIndex: 1}},
-		{Receipt: &types.Receipt{TransactionIndex: 2}},
-		{Receipt: &types.Receipt{TransactionIndex: 3}},
-		{Receipt: &types.Receipt{TransactionIndex: 4}},
-	}).Times(2)
+		any, any, any, any, any, 0, any, any,
+	).Return(summary1)
+
+	stateProcessor.EXPECT().Process(
+		any, any, any, any, any, 5, any, any,
+	).Return(summary2)
 
 	processor := &OperaEVMProcessor{
 		processorFactory: factory,
@@ -218,17 +233,150 @@ func TestOperaEVMProcessor_Execute_StateProcessorIntroducesTransactions_Produces
 	})
 
 	// The first patch should index transactions as they are executed.
-	processed := processor.Execute([]*types.Transaction{tx, tx}, math.MaxUint64)
-	require.Len(processed, 5)
-	for i, p := range processed {
+	result := processor.Execute([]*types.Transaction{tx}, math.MaxUint64, math.MaxUint64)
+	require.Equal(summary1, result)
+	for i, p := range result.ProcessedTransactions {
 		require.Equal(uint(i), p.Receipt.TransactionIndex)
 	}
 
 	// the next batch should be offset by the first patch
-	processor.Execute([]*types.Transaction{tx, tx}, math.MaxUint64)
-	require.Len(processed, 5)
-	for i, p := range processed {
-		require.Equal(uint(i+5), p.Receipt.TransactionIndex)
+	result = processor.Execute([]*types.Transaction{tx}, math.MaxUint64, math.MaxUint64)
+	require.Equal(summary2, result)
+	for i, p := range result.ProcessedTransactions {
+		require.Equal(uint(i+len(summary1.ProcessedTransactions)), p.Receipt.TransactionIndex)
+	}
+}
+
+func TestOperaEVMProcessor_Execute_StateProcessorProducesTransactionsAndBundles_ReturnsFullProcessSummary(t *testing.T) {
+	require := require.New(t)
+	ctrl := gomock.NewController(t)
+	factory := NewMock_stateProcessorFactory(ctrl)
+	stateProcessor := NewMock_stateProcessor(ctrl)
+
+	any := gomock.Any()
+	factory.EXPECT().NewStateProcessorForHeadState(any, any, any, any).Return(stateProcessor).AnyTimes()
+
+	summary := evmcore.ProcessSummary{
+		ProcessedTransactions: []evmcore.ProcessedTransaction{
+			{Receipt: &types.Receipt{GasUsed: 1}},
+			{Receipt: &types.Receipt{GasUsed: 2}},
+		},
+	}
+
+	stateProcessor.EXPECT().Process(any, any, any, any, any, any, any, any).Return(summary)
+	processor := &OperaEVMProcessor{
+		processorFactory: factory,
+	}
+
+	tx := types.NewTx(&types.LegacyTx{})
+
+	// The result of the processor should be returned without modifications.
+	result := processor.Execute([]*types.Transaction{tx}, math.MaxUint64, math.MaxUint64)
+	require.Equal(summary, result)
+}
+
+func TestOperaEVMProcessor_Execute_UsesNumberOfAcceptedTransactionsAsTransactionIndexOffsetInProcessorCall(t *testing.T) {
+	tests := map[string][]evmcore.ProcessedTransaction{
+		"nil":   nil,
+		"empty": {},
+		"one with receipt": {
+			{Transaction: &types.Transaction{}, Receipt: &types.Receipt{}},
+		},
+		"one without receipt": {
+			{Transaction: &types.Transaction{}},
+		},
+		"mix with and without receipts": {
+			{Transaction: &types.Transaction{}, Receipt: &types.Receipt{}},
+			{Transaction: &types.Transaction{}},
+			{Transaction: &types.Transaction{}},
+			{Transaction: &types.Transaction{}, Receipt: &types.Receipt{}},
+		},
+	}
+
+	for name, processedTransactions := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			factory := NewMock_stateProcessorFactory(ctrl)
+			stateProcessor := NewMock_stateProcessor(ctrl)
+
+			any := gomock.Any()
+			factory.EXPECT().NewStateProcessorForHeadState(any, any, any, any).Return(stateProcessor)
+
+			numPreAccepted := 0
+			for _, cur := range processedTransactions {
+				if cur.Receipt != nil {
+					numPreAccepted++
+				}
+			}
+
+			stateProcessor.EXPECT().
+				Process(any, any, any, any, any, numPreAccepted, any, any).
+				Return(evmcore.ProcessSummary{
+					ProcessedTransactions: []evmcore.ProcessedTransaction{
+						{Receipt: &types.Receipt{TransactionIndex: uint(numPreAccepted)}},
+						{Receipt: &types.Receipt{TransactionIndex: uint(numPreAccepted) + 1}},
+					},
+				})
+
+			processor := &OperaEVMProcessor{
+				processorFactory: factory,
+				processedTxs:     processedTransactions,
+			}
+
+			summary := processor.Execute(nil, 0, 0)
+
+			require.Len(t, summary.ProcessedTransactions, 2)
+			for i, cur := range summary.ProcessedTransactions {
+				got := cur.Receipt.TransactionIndex
+				want := numPreAccepted + i
+				require.EqualValues(t, want, got)
+			}
+		})
+	}
+}
+
+func TestOperaEVMProcessor_Execute_UsesNumberOfTransactionsWithReceiptsAsTransactionOffsetInEvmProcessor(t *testing.T) {
+	tests := map[string][]evmcore.ProcessedTransaction{
+		"nil":   nil,
+		"empty": {},
+		"one with receipt": {
+			{Transaction: &types.Transaction{}, Receipt: &types.Receipt{}},
+		},
+		"one without receipt": {
+			{Transaction: &types.Transaction{}},
+		},
+		"mix with and without receipts": {
+			{Transaction: &types.Transaction{}, Receipt: &types.Receipt{}},
+			{Transaction: &types.Transaction{}},
+			{Transaction: &types.Transaction{}},
+			{Transaction: &types.Transaction{}, Receipt: &types.Receipt{}},
+		},
+	}
+
+	for name, processedTransactions := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			factory := NewMock_stateProcessorFactory(ctrl)
+			stateProcessor := NewMock_stateProcessor(ctrl)
+
+			any := gomock.Any()
+			factory.EXPECT().NewStateProcessorForHeadState(any, any, any, any).Return(stateProcessor)
+
+			wantedOffset := 0
+			for _, cur := range processedTransactions {
+				if cur.Receipt != nil {
+					wantedOffset++
+				}
+			}
+			stateProcessor.EXPECT().Process(any, any, any, any, any, wantedOffset, any, any)
+
+			processor := &OperaEVMProcessor{
+				processorFactory: factory,
+				processedTxs:     processedTransactions,
+			}
+
+			processor.Execute(nil, 0, 0)
+		})
 	}
 }
 
@@ -263,7 +411,7 @@ func TestOperaEVMProcessor_Finalize_ReportsAggregatedNumberOfSkippedTransactions
 	evmModule := New()
 	processor := evmModule.Start(
 		iblockproc.BlockCtx{}, stateDb, nil, logConsumer.OnNewLog,
-		opera.Rules{}, &params.ChainConfig{}, common.Hash{},
+		opera.Rules{}, &params.ChainConfig{}, common.Hash{}, nil,
 	)
 
 	key, err := crypto.GenerateKey()
@@ -284,7 +432,7 @@ func TestOperaEVMProcessor_Finalize_ReportsAggregatedNumberOfSkippedTransactions
 		To: &common.Address{}, Nonce: 1, Gas: 21_0000,
 	})
 
-	processed := processor.Execute(types.Transactions{validTx}, math.MaxUint64)
+	processed := processor.Execute(types.Transactions{validTx}, math.MaxUint64, math.MaxUint64).ProcessedTransactions
 	require.Len(processed, 1)
 	require.Equal(validTx, processed[0].Transaction)
 	require.NotNil(processed[0].Receipt)
@@ -292,7 +440,7 @@ func TestOperaEVMProcessor_Finalize_ReportsAggregatedNumberOfSkippedTransactions
 	_, numSkipped, _ := processor.Finalize()
 	require.Equal(0, numSkipped)
 
-	processed = processor.Execute(types.Transactions{skippedTx}, math.MaxUint64)
+	processed = processor.Execute(types.Transactions{skippedTx}, math.MaxUint64, math.MaxUint64).ProcessedTransactions
 	require.Len(processed, 1)
 	require.Equal(skippedTx, processed[0].Transaction)
 	require.Nil(processed[0].Receipt)
@@ -300,7 +448,7 @@ func TestOperaEVMProcessor_Finalize_ReportsAggregatedNumberOfSkippedTransactions
 	_, numSkipped, _ = processor.Finalize()
 	require.Equal(1, numSkipped)
 
-	processed = processor.Execute(types.Transactions{skippedTx, validTx, skippedTx}, math.MaxUint64)
+	processed = processor.Execute(types.Transactions{skippedTx, validTx, skippedTx}, math.MaxUint64, math.MaxUint64).ProcessedTransactions
 	require.Len(processed, 3)
 	require.Equal(skippedTx, processed[0].Transaction)
 	require.Nil(processed[0].Receipt)
@@ -313,37 +461,115 @@ func TestOperaEVMProcessor_Finalize_ReportsAggregatedNumberOfSkippedTransactions
 	require.Equal(3, numSkipped)
 }
 
+func TestOperaEVMProcessor_Finalize_DoesNotBlockOnSyncChannel_WhenBlockIsOlderThanOneHour(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		stateDb := state.NewMockStateDB(ctrl)
+
+		stateDb.EXPECT().BeginBlock(gomock.Any())
+		stateDb.EXPECT().GetStateHash()
+		// EndBlock should return a channel,but this should be ignored for
+		// blocks older than one hour.
+		stateDb.EXPECT().EndBlock(gomock.Any()).Return(make(<-chan error))
+
+		evmModule := New()
+		blockTime := time.Now().Add(-1*time.Hour - time.Second)
+		processor := evmModule.Start(
+			iblockproc.BlockCtx{
+				Time: inter.FromUnix(blockTime.Unix()),
+			},
+			stateDb, nil, nil, opera.Rules{}, &params.ChainConfig{}, common.Hash{},
+			nil,
+		)
+
+		finalizeDone := false
+		go func() {
+			_, _, _ = processor.Finalize()
+			finalizeDone = true
+		}()
+
+		synctest.Wait()
+		require.True(t, finalizeDone, "Finalize did not finish for blocks older than one hour")
+	})
+}
+
+func TestOperaEVMProcessor_Finalize_DoesNotBlockOnSyncChannel_WhenSyncChannelIsNil(t *testing.T) {
+	// Underlying db implementations may not implement the possibility to wait on
+	// an async finalize operation. The client must work correctly in these cases.
+
+	synctest.Test(t, func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		stateDb := state.NewMockStateDB(ctrl)
+
+		stateDb.EXPECT().BeginBlock(gomock.Any())
+		stateDb.EXPECT().GetStateHash()
+		// If the sync channel is nil, Finalize should not block even for recent blocks.
+		stateDb.EXPECT().EndBlock(gomock.Any()).Return(nil)
+		evmModule := New()
+		blockTime := time.Now().Add(-1*time.Hour + time.Second)
+		processor := evmModule.Start(
+			iblockproc.BlockCtx{
+				Time: inter.FromUnix(blockTime.Unix()),
+			},
+			stateDb, nil, nil, opera.Rules{}, &params.ChainConfig{}, common.Hash{},
+			nil,
+		)
+
+		finalizeDone := false
+		go func() {
+			_, _, _ = processor.Finalize()
+			finalizeDone = true
+		}()
+
+		synctest.Wait()
+		require.True(t, finalizeDone, "Finalize did not finish when sync channel was nil")
+	})
+}
+
+func TestOperaEVMProcessor_Finalize_BlockOnSyncChannel_WhenBlockIsYoungerThanOneHour(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+
+		ctrl := gomock.NewController(t)
+		stateDb := state.NewMockStateDB(ctrl)
+
+		stateDb.EXPECT().BeginBlock(gomock.Any())
+		stateDb.EXPECT().GetStateHash()
+
+		syncChannel := make(chan error)
+		stateDb.EXPECT().EndBlock(gomock.Any()).Return(syncChannel)
+
+		evmModule := New()
+		blockTime := time.Now().Add(-1*time.Hour + time.Second)
+		processor := evmModule.Start(
+			iblockproc.BlockCtx{
+				Time: inter.FromUnix(blockTime.Unix()),
+			},
+			stateDb, nil, nil, opera.Rules{}, &params.ChainConfig{}, common.Hash{},
+			nil,
+		)
+
+		finalizeDone := false
+		go func() {
+			_, _, _ = processor.Finalize()
+			finalizeDone = true
+		}()
+
+		synctest.Wait()
+		require.False(t, finalizeDone, "Finalize finished before sync channel was closed")
+
+		close(syncChannel)
+
+		synctest.Wait()
+		require.True(t, finalizeDone, "Finalize did not finish after sync channel was closed")
+	})
+}
+
 // onNewLog is a helper interface to allow mocking the onNewLog function
 // passed to the EVM processor.
 type _onNewLog interface {
-	OnNewLog(*types.Log)
+	OnNewLog(*core_types.Log)
 }
 
 // Added to avoid unused warning of onNewLog interface which is only used for
 // generating the mock.
 var _ _onNewLog = (*Mock_onNewLog)(nil)
-
-// LogWithTxIndex creates a gomock matcher that matches a log message with the
-// given transaction index.
-func LogWithTxIndex(id any) gomock.Matcher {
-	if matcher, ok := id.(gomock.Matcher); ok {
-		return logWithTxIndex{txIndex: matcher}
-	}
-	return LogWithTxIndex(gomock.Eq(id))
-}
-
-type logWithTxIndex struct {
-	txIndex gomock.Matcher
-}
-
-func (i logWithTxIndex) Matches(arg any) bool {
-	log, ok := arg.(*types.Log)
-	if !ok || log == nil {
-		return false
-	}
-	return i.txIndex.Matches(log.TxIndex)
-}
-
-func (i logWithTxIndex) String() string {
-	return fmt.Sprintf("Log with TxIndex: %s", i.txIndex.String())
-}

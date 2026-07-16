@@ -143,9 +143,10 @@ func TestWorldAdapter_GetEvmChainConfig_ForwardsCallToGetRulesAndGetUpgradeHeigh
 
 	world.EXPECT().GetRules().Return(rules)
 	world.EXPECT().GetUpgradeHeights().Return(updateHeights)
+	world.EXPECT().GetLatestBlock().Return(&inter.Block{})
 
 	adapter := worldAdapter{world}
-	got := adapter.GetEvmChainConfig(idx.Block(1))
+	got := adapter.GetCurrentChainConfig()
 	want := opera.CreateTransientEvmChainConfig(rules.NetworkID, updateHeights, 1)
 	require.Equal(want, got)
 }
@@ -382,7 +383,7 @@ func TestMakeProposal_ValidArguments_CreatesValidProposal(t *testing.T) {
 			GasLimit:    rules.Blocks.MaxBlockGas,
 			MixHash:     someRandao,
 			BaseFee:     *uint256.NewInt(100),
-			BlobBaseFee: *uint256.NewInt(0),
+			BlobBaseFee: *evmcore.GetBlobBaseFee(),
 		},
 		nil,
 		scheduler.Limits{
@@ -656,7 +657,7 @@ func TestMakeProposal_SchedulerIsRunWithCorrectBaseFee(t *testing.T) {
 			MixHash:     randaoMix,
 			Coinbase:    evmcore.GetCoinbase(),
 			BaseFee:     *uint256.MustFromBig(expectedBaseFee),
-			BlobBaseFee: evmcore.GetBlobBaseFee(),
+			BlobBaseFee: *evmcore.GetBlobBaseFee(),
 		},
 		gomock.Any(),
 		gomock.Any(),

@@ -44,7 +44,7 @@ func TestGenesisBuilder_ExecuteGenesisTxs_ExecutesTransactionsAccordingToUpgrade
 	key, err := crypto.GenerateKey()
 	require.NoError(t, err)
 	address := crypto.PubkeyToAddress(key.PublicKey)
-	builder.AddBalance(address, big.NewInt(1e18))
+	builder.AddBalance(address, uint256.NewInt(1e18))
 
 	finalizeBlockZero(t, builder, rules)
 
@@ -81,14 +81,17 @@ func finalizeBlockZero(t *testing.T, builder *GenesisBuilder, rules opera.Rules)
 				AdvanceEpochs:         0,
 			},
 			EpochState: iblockproc.EpochState{
-				Epoch:             1,
-				EpochStart:        genesisTime + 1,
-				PrevEpochStart:    genesisTime,
-				EpochStateRoot:    hash.Hash{0x43},
-				Validators:        pos.NewBuilder().Build(),
-				ValidatorStates:   make([]iblockproc.ValidatorEpochState, 0),
-				ValidatorProfiles: make(map[idx.ValidatorID]drivertype.Validator),
-				Rules:             rules,
+				Epoch:                          1,
+				EpochStart:                     genesisTime + 1,
+				PrevEpochStart:                 genesisTime,
+				EpochStateRoot:                 hash.Hash{0x43},
+				Validators:                     pos.NewBuilder().Build(),
+				ValidatorStates:                make([]iblockproc.ValidatorEpochState, 0),
+				ValidatorProfiles:              make(map[idx.ValidatorID]drivertype.Validator),
+				Rules:                          rules,
+				EpochEndBlockHash:              hash.Hash{0x44},
+				EpochEndExecutionPlanChainHash: hash.Hash{0x45},
+				EpochSealingTxHashes:           []hash.Hash{{0x46}, {0x47}},
 			},
 		},
 		Idx: 1,

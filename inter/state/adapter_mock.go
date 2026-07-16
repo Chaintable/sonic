@@ -13,13 +13,13 @@ import (
 	reflect "reflect"
 
 	witness "github.com/0xsoniclabs/carmen/go/common/witness"
+	bundle "github.com/0xsoniclabs/sonic/gossip/blockproc/bundle"
 	common "github.com/ethereum/go-ethereum/common"
 	state "github.com/ethereum/go-ethereum/core/state"
 	stateless "github.com/ethereum/go-ethereum/core/stateless"
 	tracing "github.com/ethereum/go-ethereum/core/tracing"
 	types "github.com/ethereum/go-ethereum/core/types"
 	params "github.com/ethereum/go-ethereum/params"
-	utils "github.com/ethereum/go-ethereum/trie/utils"
 	uint256 "github.com/holiman/uint256"
 	gomock "go.uber.org/mock/gomock"
 )
@@ -112,6 +112,18 @@ func (mr *MockStateDBMockRecorder) AddPreimage(arg0, arg1 any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddPreimage", reflect.TypeOf((*MockStateDB)(nil).AddPreimage), arg0, arg1)
 }
 
+// AddProcessedBundle mocks base method.
+func (m *MockStateDB) AddProcessedBundle(execPlanHash common.Hash, positionInBlock bundle.PositionInBlock) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "AddProcessedBundle", execPlanHash, positionInBlock)
+}
+
+// AddProcessedBundle indicates an expected call of AddProcessedBundle.
+func (mr *MockStateDBMockRecorder) AddProcessedBundle(execPlanHash, positionInBlock any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddProcessedBundle", reflect.TypeOf((*MockStateDB)(nil).AddProcessedBundle), execPlanHash, positionInBlock)
+}
+
 // AddRefund mocks base method.
 func (m *MockStateDB) AddRefund(arg0 uint64) {
 	m.ctrl.T.Helper()
@@ -200,6 +212,18 @@ func (mr *MockStateDBMockRecorder) CreateContract(arg0 any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateContract", reflect.TypeOf((*MockStateDB)(nil).CreateContract), arg0)
 }
 
+// EmitLogsForBurnAccounts mocks base method.
+func (m *MockStateDB) EmitLogsForBurnAccounts() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "EmitLogsForBurnAccounts")
+}
+
+// EmitLogsForBurnAccounts indicates an expected call of EmitLogsForBurnAccounts.
+func (mr *MockStateDBMockRecorder) EmitLogsForBurnAccounts() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EmitLogsForBurnAccounts", reflect.TypeOf((*MockStateDB)(nil).EmitLogsForBurnAccounts))
+}
+
 // Empty mocks base method.
 func (m *MockStateDB) Empty(arg0 common.Address) bool {
 	m.ctrl.T.Helper()
@@ -215,9 +239,11 @@ func (mr *MockStateDBMockRecorder) Empty(arg0 any) *gomock.Call {
 }
 
 // EndBlock mocks base method.
-func (m *MockStateDB) EndBlock(number uint64) {
+func (m *MockStateDB) EndBlock(number uint64) <-chan error {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "EndBlock", number)
+	ret := m.ctrl.Call(m, "EndBlock", number)
+	ret0, _ := ret[0].(<-chan error)
+	return ret0
 }
 
 // EndBlock indicates an expected call of EndBlock.
@@ -462,6 +488,20 @@ func (mr *MockStateDBMockRecorder) GetTransientState(addr, key any) *gomock.Call
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTransientState", reflect.TypeOf((*MockStateDB)(nil).GetTransientState), addr, key)
 }
 
+// HasBundleRecentlyBeenProcessed mocks base method.
+func (m *MockStateDB) HasBundleRecentlyBeenProcessed(execPlanHash common.Hash) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "HasBundleRecentlyBeenProcessed", execPlanHash)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// HasBundleRecentlyBeenProcessed indicates an expected call of HasBundleRecentlyBeenProcessed.
+func (mr *MockStateDBMockRecorder) HasBundleRecentlyBeenProcessed(execPlanHash any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasBundleRecentlyBeenProcessed", reflect.TypeOf((*MockStateDB)(nil).HasBundleRecentlyBeenProcessed), execPlanHash)
+}
+
 // HasSelfDestructed mocks base method.
 func (m *MockStateDB) HasSelfDestructed(arg0 common.Address) bool {
 	m.ctrl.T.Helper()
@@ -476,18 +516,32 @@ func (mr *MockStateDBMockRecorder) HasSelfDestructed(arg0 any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasSelfDestructed", reflect.TypeOf((*MockStateDB)(nil).HasSelfDestructed), arg0)
 }
 
-// PointCache mocks base method.
-func (m *MockStateDB) PointCache() *utils.PointCache {
+// InterTxSnapshot mocks base method.
+func (m *MockStateDB) InterTxSnapshot() int {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "PointCache")
-	ret0, _ := ret[0].(*utils.PointCache)
+	ret := m.ctrl.Call(m, "InterTxSnapshot")
+	ret0, _ := ret[0].(int)
 	return ret0
 }
 
-// PointCache indicates an expected call of PointCache.
-func (mr *MockStateDBMockRecorder) PointCache() *gomock.Call {
+// InterTxSnapshot indicates an expected call of InterTxSnapshot.
+func (mr *MockStateDBMockRecorder) InterTxSnapshot() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PointCache", reflect.TypeOf((*MockStateDB)(nil).PointCache))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InterTxSnapshot", reflect.TypeOf((*MockStateDB)(nil).InterTxSnapshot))
+}
+
+// IsNewContract mocks base method.
+func (m *MockStateDB) IsNewContract(addr common.Address) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsNewContract", addr)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsNewContract indicates an expected call of IsNewContract.
+func (mr *MockStateDBMockRecorder) IsNewContract(addr any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsNewContract", reflect.TypeOf((*MockStateDB)(nil).IsNewContract), addr)
 }
 
 // Prepare mocks base method.
@@ -514,6 +568,18 @@ func (mr *MockStateDBMockRecorder) Release() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Release", reflect.TypeOf((*MockStateDB)(nil).Release))
 }
 
+// RevertToInterTxSnapshot mocks base method.
+func (m *MockStateDB) RevertToInterTxSnapshot(id int) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "RevertToInterTxSnapshot", id)
+}
+
+// RevertToInterTxSnapshot indicates an expected call of RevertToInterTxSnapshot.
+func (mr *MockStateDBMockRecorder) RevertToInterTxSnapshot(id any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RevertToInterTxSnapshot", reflect.TypeOf((*MockStateDB)(nil).RevertToInterTxSnapshot), id)
+}
+
 // RevertToSnapshot mocks base method.
 func (m *MockStateDB) RevertToSnapshot(arg0 int) {
 	m.ctrl.T.Helper()
@@ -527,32 +593,15 @@ func (mr *MockStateDBMockRecorder) RevertToSnapshot(arg0 any) *gomock.Call {
 }
 
 // SelfDestruct mocks base method.
-func (m *MockStateDB) SelfDestruct(arg0 common.Address) uint256.Int {
+func (m *MockStateDB) SelfDestruct(arg0 common.Address) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SelfDestruct", arg0)
-	ret0, _ := ret[0].(uint256.Int)
-	return ret0
+	m.ctrl.Call(m, "SelfDestruct", arg0)
 }
 
 // SelfDestruct indicates an expected call of SelfDestruct.
 func (mr *MockStateDBMockRecorder) SelfDestruct(arg0 any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SelfDestruct", reflect.TypeOf((*MockStateDB)(nil).SelfDestruct), arg0)
-}
-
-// SelfDestruct6780 mocks base method.
-func (m *MockStateDB) SelfDestruct6780(arg0 common.Address) (uint256.Int, bool) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SelfDestruct6780", arg0)
-	ret0, _ := ret[0].(uint256.Int)
-	ret1, _ := ret[1].(bool)
-	return ret0, ret1
-}
-
-// SelfDestruct6780 indicates an expected call of SelfDestruct6780.
-func (mr *MockStateDBMockRecorder) SelfDestruct6780(arg0 any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SelfDestruct6780", reflect.TypeOf((*MockStateDB)(nil).SelfDestruct6780), arg0)
 }
 
 // SetBalance mocks base method.

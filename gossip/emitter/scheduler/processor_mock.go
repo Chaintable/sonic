@@ -15,7 +15,6 @@ import (
 	evmcore "github.com/0xsoniclabs/sonic/evmcore"
 	state "github.com/0xsoniclabs/sonic/inter/state"
 	opera "github.com/0xsoniclabs/sonic/opera"
-	idx "github.com/Fantom-foundation/lachesis-base/inter/idx"
 	common "github.com/ethereum/go-ethereum/common"
 	types "github.com/ethereum/go-ethereum/core/types"
 	params "github.com/ethereum/go-ethereum/params"
@@ -135,6 +134,20 @@ func (m *MockChain) EXPECT() *MockChainMockRecorder {
 	return m.recorder
 }
 
+// GetCurrentChainConfig mocks base method.
+func (m *MockChain) GetCurrentChainConfig() *params.ChainConfig {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCurrentChainConfig")
+	ret0, _ := ret[0].(*params.ChainConfig)
+	return ret0
+}
+
+// GetCurrentChainConfig indicates an expected call of GetCurrentChainConfig.
+func (mr *MockChainMockRecorder) GetCurrentChainConfig() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCurrentChainConfig", reflect.TypeOf((*MockChain)(nil).GetCurrentChainConfig))
+}
+
 // GetCurrentNetworkRules mocks base method.
 func (m *MockChain) GetCurrentNetworkRules() opera.Rules {
 	m.ctrl.T.Helper()
@@ -149,32 +162,18 @@ func (mr *MockChainMockRecorder) GetCurrentNetworkRules() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCurrentNetworkRules", reflect.TypeOf((*MockChain)(nil).GetCurrentNetworkRules))
 }
 
-// GetEvmChainConfig mocks base method.
-func (m *MockChain) GetEvmChainConfig(blockHeight idx.Block) *params.ChainConfig {
+// Header mocks base method.
+func (m *MockChain) Header(hash common.Hash, number uint64) *evmcore.EvmHeader {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetEvmChainConfig", blockHeight)
-	ret0, _ := ret[0].(*params.ChainConfig)
-	return ret0
-}
-
-// GetEvmChainConfig indicates an expected call of GetEvmChainConfig.
-func (mr *MockChainMockRecorder) GetEvmChainConfig(blockHeight any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetEvmChainConfig", reflect.TypeOf((*MockChain)(nil).GetEvmChainConfig), blockHeight)
-}
-
-// GetHeader mocks base method.
-func (m *MockChain) GetHeader(arg0 common.Hash, arg1 uint64) *evmcore.EvmHeader {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetHeader", arg0, arg1)
+	ret := m.ctrl.Call(m, "Header", hash, number)
 	ret0, _ := ret[0].(*evmcore.EvmHeader)
 	return ret0
 }
 
-// GetHeader indicates an expected call of GetHeader.
-func (mr *MockChainMockRecorder) GetHeader(arg0, arg1 any) *gomock.Call {
+// Header indicates an expected call of Header.
+func (mr *MockChainMockRecorder) Header(hash, number any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHeader", reflect.TypeOf((*MockChain)(nil).GetHeader), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Header", reflect.TypeOf((*MockChain)(nil).Header), hash, number)
 }
 
 // StateDB mocks base method.
@@ -216,10 +215,10 @@ func (m *MockevmProcessorRunner) EXPECT() *MockevmProcessorRunnerMockRecorder {
 }
 
 // Run mocks base method.
-func (m *MockevmProcessorRunner) Run(index int, tx *types.Transaction) []evmcore.ProcessedTransaction {
+func (m *MockevmProcessorRunner) Run(index int, tx *types.Transaction) evmcore.ProcessSummary {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Run", index, tx)
-	ret0, _ := ret[0].([]evmcore.ProcessedTransaction)
+	ret0, _ := ret[0].(evmcore.ProcessSummary)
 	return ret0
 }
 

@@ -196,11 +196,12 @@ func (w worldAdapter) GetCurrentNetworkRules() opera.Rules {
 	return w.GetRules()
 }
 
-func (w worldAdapter) GetEvmChainConfig(blockHeight idx.Block) *params.ChainConfig {
+func (w worldAdapter) GetCurrentChainConfig() *params.ChainConfig {
+	blockNumber := w.GetLatestBlock().Number
 	return opera.CreateTransientEvmChainConfig(
 		w.GetRules().NetworkID,
 		w.GetUpgradeHeights(),
-		blockHeight,
+		idx.Block(blockNumber),
 	)
 }
 
@@ -276,7 +277,7 @@ func makeProposal(
 			MixHash:     randaoMix,
 			Coinbase:    evmcore.GetCoinbase(),
 			BaseFee:     *baseFee256,
-			BlobBaseFee: evmcore.GetBlobBaseFee(),
+			BlobBaseFee: *evmcore.GetBlobBaseFee(),
 		},
 		candidates,
 		scheduler.Limits{

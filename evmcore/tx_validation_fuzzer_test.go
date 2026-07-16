@@ -253,17 +253,19 @@ func FuzzValidateTransaction(f *testing.F) {
 		stateExpectCalls(state)
 
 		chain := NewMockStateReader(ctrl)
-		chain.EXPECT().GetCurrentBaseFee().Return(big.NewInt(int64(baseFee))).AnyTimes()
-		chain.EXPECT().MaxGasLimit().Return(maxGas).AnyTimes()
+		chain.EXPECT().CurrentBaseFee().Return(big.NewInt(int64(baseFee))).AnyTimes()
+		chain.EXPECT().CurrentMaxGasLimit().Return(maxGas).AnyTimes()
 
 		opt, netRules := getTestTransactionsOptionFromRevision(revision, int64(minTip))
 
 		signer := types.LatestSignerForChainID(chainId)
 
-		subsidiesChecker := NewMocksubsidiesChecker(ctrl)
-
 		// Validate the transaction
-		validateErr := validateTx(signedTx, opt, netRules, chain, state, subsidiesChecker, signer)
+		validateErr := validateTx(
+			signedTx, opt, netRules, chain, state,
+			acceptAnySponsorshipRequest,
+			acceptAnyBundleTransaction(ctrl),
+			signer)
 
 		// create evm to check validateTx is consistent with processor.
 		evm := makeTestEvm(blockNum, int64(baseFee), uint64(baseFee), state, revision, chainId)
@@ -271,10 +273,10 @@ func FuzzValidateTransaction(f *testing.F) {
 		msg, err := core.TransactionToMessage(signedTx, signer, evm.Context.BaseFee)
 		require.NoError(t, err)
 
-		gp := new(core.GasPool).AddGas(maxGas)
+		gp := core.NewGasPool(maxGas)
 		var usedGas uint64
 		_, _, processorError := applyTransaction(msg, gp, state, big.NewInt(blockNum),
-			signedTx, &usedGas, evm, nil)
+			signedTx, &usedGas, evm)
 
 		// validateTx should not reject transactions that the processor would accept
 		if processorError != nil && validateErr == nil {
@@ -479,7 +481,7 @@ func makeTestEvm(blockNum, basefee int64, evmGasPrice uint64, state vm.StateDB, 
 			Random:      &random,
 			Time:        blockTime,
 
-			Transfer:    vm.TransferFunc(func(sd vm.StateDB, a1, a2 common.Address, i *uint256.Int) {}),
+			Transfer:    vm.TransferFunc(func(sd vm.StateDB, a1, a2 common.Address, i *uint256.Int, _ *params.Rules) {}),
 			CanTransfer: vm.CanTransferFunc(func(sd vm.StateDB, a1 common.Address, i *uint256.Int) bool { return true }),
 			GetHash:     func(i uint64) common.Hash { return common.Hash{} },
 		},
@@ -487,7 +489,7 @@ func makeTestEvm(blockNum, basefee int64, evmGasPrice uint64, state vm.StateDB, 
 		chainConfig,
 		vm.Config{},
 	)
-	evm.GasPrice = big.NewInt(int64(evmGasPrice))
+	evm.GasPrice = uint256.NewInt(evmGasPrice)
 	return evm
 }
 

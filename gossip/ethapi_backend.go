@@ -39,8 +39,9 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/pkg/errors"
 
-	"github.com/0xsoniclabs/sonic/ethapi"
+	"github.com/0xsoniclabs/sonic/api/ethapi"
 	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/bundle"
 	"github.com/0xsoniclabs/sonic/gossip/evmstore"
 	"github.com/0xsoniclabs/sonic/gossip/gasprice/gaspricelimits"
 	"github.com/0xsoniclabs/sonic/inter"
@@ -53,11 +54,13 @@ import (
 	"github.com/0xsoniclabs/sonic/utils/result"
 )
 
+//go:generate mockgen -source=ethapi_backend.go -destination=ethapi_backend_mock.go -package=gossip
+
 // EthAPIBackend implements ethapi.Backend.
 type EthAPIBackend struct {
 	extRPCEnabled       bool
 	svc                 *Service
-	state               *EvmStateReader
+	state               StateReader
 	signer              types.Signer
 	allowUnprotectedTxs bool
 }
@@ -95,6 +98,10 @@ func (b *EthAPIBackend) ChainConfig(blockHeight idx.Block) *params.ChainConfig {
 
 func (b *EthAPIBackend) CurrentBlock() *evmcore.EvmBlock {
 	return b.state.CurrentBlock()
+}
+
+func (b *EthAPIBackend) GetGenesisID() common.Hash {
+	return (common.Hash)(b.svc.store.GetGenesisID())
 }
 
 // HistoryPruningCutoff returns the block height at which pruning was done.
@@ -150,10 +157,10 @@ func (b *EthAPIBackend) BlockByNumber(ctx context.Context, number rpc.BlockNumbe
 	if isLatestBlockNumber(number) {
 		blk = b.state.CurrentBlock()
 	} else if number == rpc.EarliestBlockNumber {
-		blk = b.state.GetBlock(common.Hash{}, b.HistoryPruningCutoff())
+		blk = b.state.Block(common.Hash{}, b.HistoryPruningCutoff())
 	} else {
 		n := uint64(number.Int64())
-		blk = b.state.GetBlock(common.Hash{}, n)
+		blk = b.state.Block(common.Hash{}, n)
 	}
 	return blk, nil
 }
@@ -166,40 +173,40 @@ func isLatestBlockNumber(number rpc.BlockNumber) bool {
 		number == rpc.SafeBlockNumber
 }
 
-// StateAndHeaderByNumberOrHash returns evm state and block header by block number or block hash, err if not exists.
-func (b *EthAPIBackend) StateAndHeaderByNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (state.StateDB, *evmcore.EvmHeader, error) {
+// StateAndBlockByNumberOrHash returns evm state and block header by block number or block hash, err if not exists.
+func (b *EthAPIBackend) StateAndBlockByNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (state.StateDB, *evmcore.EvmBlock, error) {
 
-	var header *evmcore.EvmHeader
+	var block *evmcore.EvmBlock
 	if number, ok := blockNrOrHash.Number(); ok {
 		if isLatestBlockNumber(number) {
 			var err error
-			header, err = b.state.LastHeaderWithArchiveState()
+			block, err = b.state.LastBlockWithArchiveState(false)
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to get latest block number; %v", err)
 			}
 		} else if number == rpc.EarliestBlockNumber {
-			header = b.state.GetHeader(common.Hash{}, b.HistoryPruningCutoff())
+			block = b.state.Block(common.Hash{}, b.HistoryPruningCutoff())
 		} else {
-			header = b.state.GetHeader(common.Hash{}, uint64(number))
+			block = b.state.Block(common.Hash{}, uint64(number))
 		}
 	} else if h, ok := blockNrOrHash.Hash(); ok {
 		index := b.svc.store.GetBlockIndex(hash.Event(h))
 		if index == nil {
 			return nil, nil, errors.New("header not found")
 		}
-		header = b.state.GetHeader(common.Hash{}, uint64(*index))
+		block = b.state.Block(common.Hash{}, uint64(*index))
 	} else {
 		return nil, nil, errors.New("unknown header selector")
 	}
 
-	if header == nil {
+	if block == nil {
 		return nil, nil, errors.New("header not found")
 	}
-	stateDb, err := b.state.GetRpcStateDB(header.Number, header.Root)
+	stateDb, err := b.state.BlockStateDB(block.Number, block.Root)
 	if err != nil {
 		return nil, nil, err
 	}
-	return stateDb, header, nil
+	return stateDb, block, nil
 }
 
 // decodeShortEventID decodes ShortID
@@ -300,7 +307,7 @@ func (b *EthAPIBackend) epochWithDefault(ctx context.Context, epoch rpc.BlockNum
 		requested = current
 	case isLatestBlockNumber(epoch):
 		requested = current - 1
-	case epoch >= 0 && idx.Epoch(epoch) <= current:
+	case epoch >= 0 && epoch <= rpc.BlockNumber(current):
 		requested = idx.Epoch(epoch)
 	default:
 		err = errors.New("epoch is not in range")
@@ -336,7 +343,7 @@ func (b *EthAPIBackend) BlockByHash(ctx context.Context, h common.Hash) (*evmcor
 		blk = b.state.CurrentBlock()
 	} else {
 		n := uint64(*index)
-		blk = b.state.GetBlock(common.Hash{}, n)
+		blk = b.state.Block(common.Hash{}, n)
 	}
 
 	return blk, nil
@@ -355,19 +362,23 @@ func (b *EthAPIBackend) GetReceiptsByNumber(ctx context.Context, number rpc.Bloc
 	}
 	number = rpc.BlockNumber(blockNumber)
 
-	block := b.state.GetBlock(common.Hash{}, uint64(number))
+	block := b.state.Block(common.Hash{}, uint64(number))
+	return b.FetchReceiptsForBlock(block), nil
+}
+
+func (b *EthAPIBackend) FetchReceiptsForBlock(block *evmcore.EvmBlock) types.Receipts {
 	time := uint64(block.Time.Unix())
 	baseFee := block.BaseFee
 	blobGasPrice := new(big.Int) // TODO issue #147
-	receipts := b.svc.store.evm.GetReceipts(idx.Block(number),
-		b.ChainConfig(idx.Block(number)),
+	receipts := b.svc.store.evm.GetReceipts(idx.Block(block.NumberU64()),
+		b.ChainConfig(idx.Block(block.NumberU64())),
 		block.Hash,
 		time,
 		baseFee,
 		blobGasPrice,
 		block.Transactions,
 	)
-	return receipts, nil
+	return receipts
 }
 
 func (b *EthAPIBackend) ArchiveStateDiffByNumber(ctx context.Context, number uint64) (mpt.Diff, error) {
@@ -556,11 +567,11 @@ func (b *EthAPIBackend) CurrentEpoch(ctx context.Context) idx.Epoch {
 }
 
 func (b *EthAPIBackend) MinGasPrice() *big.Int {
-	current := b.state.GetCurrentBaseFee()
+	current := b.state.CurrentBaseFee()
 	return gaspricelimits.GetSuggestedGasPriceForNewTransactions(current)
 }
 func (b *EthAPIBackend) MaxGasLimit() uint64 {
-	return b.state.MaxGasLimit()
+	return b.state.CurrentMaxGasLimit()
 }
 
 func (b *EthAPIBackend) GetUptime(ctx context.Context, vid idx.ValidatorID) (*big.Int, error) {
@@ -643,4 +654,39 @@ func (b *EthAPIBackend) GetLatestBlockCertificate() (cert.BlockCertificate, erro
 
 func (b *EthAPIBackend) EnumerateBlockCertificates(first idx.Block) iter.Seq[result.T[cert.BlockCertificate]] {
 	return b.svc.store.EnumerateBlockCertificates(first)
+}
+
+func (b *EthAPIBackend) GetUpgradeHeights() []opera.UpgradeHeight {
+	return b.svc.store.GetUpgradeHeights()
+}
+
+func (b *EthAPIBackend) GetBundleExecutionInfo(hash common.Hash) *bundle.ExecutionInfo {
+	return b.svc.store.GetBundleExecutionInfo(hash)
+}
+
+func (b *EthAPIBackend) IsTestOnlyApiEnabled() bool {
+	return b.svc.config.EnableTestOnlyApi
+}
+
+func (b *EthAPIBackend) ProposeTransactions(
+	txs types.Transactions,
+) error {
+	if !b.IsTestOnlyApiEnabled() {
+		return fmt.Errorf("this feature is disabled")
+	}
+	if len(b.svc.emitters) == 0 {
+		return fmt.Errorf("no emitters available to propose transactions")
+	}
+	return b.proposeTransactionsInternal(txs, b.svc.emitters[0])
+}
+
+func (b *EthAPIBackend) proposeTransactionsInternal(
+	txs types.Transactions,
+	emitter forceableEmitter,
+) error {
+	return emitter.ForceEventEmissionForTesting(txs)
+}
+
+type forceableEmitter interface {
+	ForceEventEmissionForTesting(txs []*types.Transaction) error
 }

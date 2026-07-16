@@ -33,28 +33,18 @@ func TestGasSubsidies_CanBeEnabledAndDisabled(
 
 	// The network is initially started using the distributed protocol.
 	net := tests.StartIntegrationTestNet(t)
-	// a sliced is used here to ensure the forks get updated in an acceptable order.
-	upgrades := []struct {
-		name    string
-		upgrade opera.Upgrades
-	}{
-		{name: "sonic", upgrade: opera.GetSonicUpgrades()},
-		{name: "allegro", upgrade: opera.GetAllegroUpgrades()},
-		// Brio is commented out until the gas cap is properly handled for internal transactions.
-		//{name: "brio", upgrade: opera.GetBrioUpgrades()},
-	}
-	for _, test := range upgrades {
-		t.Run(test.name, func(t *testing.T) {
+	for name, upgrade := range opera.GetAllHardForksInOrder() {
+		t.Run(name, func(t *testing.T) {
 			client, err := net.GetClient()
 			require.NoError(err)
 			defer client.Close()
 
 			// enforce the current upgrade
 			testRules := tests.GetNetworkRules(t, net)
-			testRules.Upgrades = test.upgrade
+			testRules.Upgrades = upgrade
 			tests.UpdateNetworkRules(t, net, testRules)
 			// Advance the epoch by one to apply the change.
-			tests.AdvanceEpochAndWaitForBlocks(t, net)
+			net.AdvanceEpoch(t, 1)
 
 			// check original state
 			type upgrades struct {
@@ -67,7 +57,8 @@ func TestGasSubsidies_CanBeEnabledAndDisabled(
 			var originalRules rulesType
 			err = client.Client().Call(&originalRules, "eth_getRules", "latest")
 			require.NoError(err)
-			require.Equal(false, originalRules.Upgrades.GasSubsidies, "GasSubsidies should be disabled initially")
+			require.False(originalRules.Upgrades.GasSubsidies,
+				"GasSubsidies should be disabled initially")
 
 			// Enable gas subsidies.
 			rulesDiff := rulesType{
@@ -80,7 +71,8 @@ func TestGasSubsidies_CanBeEnabledAndDisabled(
 
 			err = client.Client().Call(&originalRules, "eth_getRules", "latest")
 			require.NoError(err)
-			require.Equal(true, originalRules.Upgrades.GasSubsidies, "GasSubsidies should be enabled after the update")
+			require.True(originalRules.Upgrades.GasSubsidies,
+				"GasSubsidies should be enabled after the update")
 
 			// Disable gas subsidies.
 			rulesDiff = rulesType{
@@ -93,20 +85,15 @@ func TestGasSubsidies_CanBeEnabledAndDisabled(
 
 			err = client.Client().Call(&originalRules, "eth_getRules", "latest")
 			require.NoError(err)
-			require.Equal(false, originalRules.Upgrades.GasSubsidies, "GasSubsidies should be disabled after the update")
+			require.False(originalRules.Upgrades.GasSubsidies,
+				"GasSubsidies should be disabled after the update")
 		})
 	}
 }
 
 func TestGasSubsidies_CallingRegistryBeforeDeploy_FailsTransaction(t *testing.T) {
-	upgrades := map[string]opera.Upgrades{
-		"sonic":   opera.GetSonicUpgrades(),
-		"allegro": opera.GetAllegroUpgrades(),
-		// Brio is commented out until the gas cap is properly handled for internal transactions.
-		//"brio":opera.GetBrioUpgrades(),
-	}
 
-	for name, upgrade := range upgrades {
+	for name, upgrade := range opera.GetAllHardForksInOrder() {
 		t.Run(name, func(t *testing.T) {
 			require := require.New(t)
 			net := tests.StartIntegrationTestNetWithJsonGenesis(t, tests.IntegrationTestNetOptions{

@@ -30,24 +30,8 @@ import (
 )
 
 func TestBlockParameters_BlockHeaderMatchesObservableBlockParameters(t *testing.T) {
-	hardForks := map[string]opera.Upgrades{
-		"sonic": {
-			Berlin:  true,
-			London:  true,
-			Llr:     false,
-			Sonic:   true,
-			Allegro: false,
-		},
-		"allegro": {
-			Berlin:  true,
-			London:  true,
-			Llr:     false,
-			Sonic:   true,
-			Allegro: true,
-		},
-	}
 
-	for name, upgrades := range hardForks {
+	for name, upgrades := range opera.GetAllHardForksInOrder() {
 		t.Run(name, func(t *testing.T) {
 			for _, singleProposer := range []bool{false, true} {
 				t.Run(fmt.Sprintf("single_proposer=%t", singleProposer), func(t *testing.T) {
@@ -101,8 +85,7 @@ func testBlockHeaderMatchesObservableBlockParameters(
 
 			// Verify those block parameters against the block headers.
 			for blockNumber, fromTx := range fromBlocks {
-				block, err := client.BlockByNumber(t.Context(), big.NewInt(int64(blockNumber)))
-				require.NoError(err, "Failed to get block by number")
+				block := WaitForBlock(t, client, int(blockNumber))
 
 				require.Equal(fromTx.ChainId, net.GetChainId())
 				require.Equal(fromTx.Number, block.Number())

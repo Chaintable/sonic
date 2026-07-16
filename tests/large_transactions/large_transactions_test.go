@@ -33,7 +33,7 @@ import (
 func TestLargeTransactions_CanHandleLargeTransactions(t *testing.T) {
 	require := require.New(t)
 	net := tests.StartIntegrationTestNet(t, tests.IntegrationTestNetOptions{
-		Upgrades: tests.AsPointer(opera.GetAllegroUpgrades()),
+		Upgrades: tests.AsPointer(opera.GetBrioUpgrades()),
 	})
 
 	account := tests.NewAccount()
@@ -103,17 +103,12 @@ func TestLargeTransactions_LargeTransactionLoadTest(t *testing.T) {
 		it becomes unstable when running with enabled data race detection.`)
 	}
 
-	hardForks := map[string]opera.Upgrades{
-		"Sonic":   opera.GetSonicUpgrades(),
-		"Allegro": opera.GetAllegroUpgrades(),
-	}
-
 	modes := map[string]bool{
 		"DistributedProposer": false,
 		"SingleProposer":      true,
 	}
 
-	for name, upgrades := range hardForks {
+	for name, upgrades := range opera.GetAllHardForksInOrder() {
 		for mode, singleProposer := range modes {
 			t.Run(fmt.Sprintf("%s/%s", name, mode), func(t *testing.T) {
 				effectiveUpgrades := upgrades
@@ -162,15 +157,8 @@ func testLargeTransactionLoadTest(
 	require.Equal(modified, current)
 
 	// Create accounts and provide them with funds to run the load test.
-	accounts := make([]*tests.Account, numAccounts)
-	addresses := make([]common.Address, len(accounts))
-	for i := range accounts {
-		accounts[i] = tests.NewAccount()
-		addresses[i] = accounts[i].Address()
-	}
 	endowment := new(big.Int).Mul(big.NewInt(100), big.NewInt(1e18))
-	_, err := net.EndowAccounts(addresses, endowment)
-	require.NoError(err)
+	accounts := tests.MakeAccountsWithBalance(t, net, numAccounts, endowment)
 
 	chainId := net.GetChainId()
 	signer := types.NewCancunSigner(chainId)

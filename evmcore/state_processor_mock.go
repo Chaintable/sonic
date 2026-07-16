@@ -12,8 +12,11 @@ package evmcore
 import (
 	reflect "reflect"
 
+	core_types "github.com/0xsoniclabs/sonic/evmcore/core_types"
+	opera "github.com/0xsoniclabs/sonic/opera"
 	common "github.com/ethereum/go-ethereum/common"
 	types "github.com/ethereum/go-ethereum/core/types"
+	params "github.com/ethereum/go-ethereum/params"
 	uint256 "github.com/holiman/uint256"
 	gomock "go.uber.org/mock/gomock"
 )
@@ -43,31 +46,49 @@ func (m *Mock_transactionRunner) EXPECT() *Mock_transactionRunnerMockRecorder {
 }
 
 // runRegularTransaction mocks base method.
-func (m *Mock_transactionRunner) runRegularTransaction(ctxt *runContext, tx *types.Transaction, txIndex int) ProcessedTransaction {
+func (m *Mock_transactionRunner) runRegularTransaction(ctxt *runContext, tx *types.Transaction, trueTxIndexOffset int, sizeLimit uint64) (ProcessedTransaction, core_types.TransactionResult) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "runRegularTransaction", ctxt, tx, txIndex)
+	ret := m.ctrl.Call(m, "runRegularTransaction", ctxt, tx, trueTxIndexOffset, sizeLimit)
 	ret0, _ := ret[0].(ProcessedTransaction)
-	return ret0
+	ret1, _ := ret[1].(core_types.TransactionResult)
+	return ret0, ret1
 }
 
 // runRegularTransaction indicates an expected call of runRegularTransaction.
-func (mr *Mock_transactionRunnerMockRecorder) runRegularTransaction(ctxt, tx, txIndex any) *gomock.Call {
+func (mr *Mock_transactionRunnerMockRecorder) runRegularTransaction(ctxt, tx, trueTxIndexOffset, sizeLimit any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "runRegularTransaction", reflect.TypeOf((*Mock_transactionRunner)(nil).runRegularTransaction), ctxt, tx, txIndex)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "runRegularTransaction", reflect.TypeOf((*Mock_transactionRunner)(nil).runRegularTransaction), ctxt, tx, trueTxIndexOffset, sizeLimit)
 }
 
 // runSponsoredTransaction mocks base method.
-func (m *Mock_transactionRunner) runSponsoredTransaction(ctxt *runContext, tx *types.Transaction, txIndex int) []ProcessedTransaction {
+func (m *Mock_transactionRunner) runSponsoredTransaction(ctxt *runContext, tx *types.Transaction, trueTxIndexOffset int, sizeLimit uint64) ([]ProcessedTransaction, core_types.TransactionResult) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "runSponsoredTransaction", ctxt, tx, txIndex)
+	ret := m.ctrl.Call(m, "runSponsoredTransaction", ctxt, tx, trueTxIndexOffset, sizeLimit)
 	ret0, _ := ret[0].([]ProcessedTransaction)
-	return ret0
+	ret1, _ := ret[1].(core_types.TransactionResult)
+	return ret0, ret1
 }
 
 // runSponsoredTransaction indicates an expected call of runSponsoredTransaction.
-func (mr *Mock_transactionRunnerMockRecorder) runSponsoredTransaction(ctxt, tx, txIndex any) *gomock.Call {
+func (mr *Mock_transactionRunnerMockRecorder) runSponsoredTransaction(ctxt, tx, trueTxIndexOffset, sizeLimit any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "runSponsoredTransaction", reflect.TypeOf((*Mock_transactionRunner)(nil).runSponsoredTransaction), ctxt, tx, txIndex)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "runSponsoredTransaction", reflect.TypeOf((*Mock_transactionRunner)(nil).runSponsoredTransaction), ctxt, tx, trueTxIndexOffset, sizeLimit)
+}
+
+// runTransactionBundle mocks base method.
+func (m *Mock_transactionRunner) runTransactionBundle(ctxt *runContext, tx *types.Transaction, trueTxIndexOffset int, sizeLimit uint64) ([]ProcessedTransaction, core_types.TransactionResult, core_types.ExecutionCost) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "runTransactionBundle", ctxt, tx, trueTxIndexOffset, sizeLimit)
+	ret0, _ := ret[0].([]ProcessedTransaction)
+	ret1, _ := ret[1].(core_types.TransactionResult)
+	ret2, _ := ret[2].(core_types.ExecutionCost)
+	return ret0, ret1, ret2
+}
+
+// runTransactionBundle indicates an expected call of runTransactionBundle.
+func (mr *Mock_transactionRunnerMockRecorder) runTransactionBundle(ctxt, tx, trueTxIndexOffset, sizeLimit any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "runTransactionBundle", reflect.TypeOf((*Mock_transactionRunner)(nil).runTransactionBundle), ctxt, tx, trueTxIndexOffset, sizeLimit)
 }
 
 // Mock_evm is a mock of _evm interface.
@@ -136,4 +157,145 @@ func (m *Mock_evm) runWithoutBaseFeeCheck(arg0 *runContext, arg1 *types.Transact
 func (mr *Mock_evmMockRecorder) runWithoutBaseFeeCheck(arg0, arg1, arg2 any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "runWithoutBaseFeeCheck", reflect.TypeOf((*Mock_evm)(nil).runWithoutBaseFeeCheck), arg0, arg1, arg2)
+}
+
+// MockChainState is a mock of ChainState interface.
+type MockChainState struct {
+	ctrl     *gomock.Controller
+	recorder *MockChainStateMockRecorder
+	isgomock struct{}
+}
+
+// MockChainStateMockRecorder is the mock recorder for MockChainState.
+type MockChainStateMockRecorder struct {
+	mock *MockChainState
+}
+
+// NewMockChainState creates a new mock instance.
+func NewMockChainState(ctrl *gomock.Controller) *MockChainState {
+	mock := &MockChainState{ctrl: ctrl}
+	mock.recorder = &MockChainStateMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockChainState) EXPECT() *MockChainStateMockRecorder {
+	return m.recorder
+}
+
+// GetCurrentChainConfig mocks base method.
+func (m *MockChainState) GetCurrentChainConfig() *params.ChainConfig {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCurrentChainConfig")
+	ret0, _ := ret[0].(*params.ChainConfig)
+	return ret0
+}
+
+// GetCurrentChainConfig indicates an expected call of GetCurrentChainConfig.
+func (mr *MockChainStateMockRecorder) GetCurrentChainConfig() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCurrentChainConfig", reflect.TypeOf((*MockChainState)(nil).GetCurrentChainConfig))
+}
+
+// GetCurrentNetworkRules mocks base method.
+func (m *MockChainState) GetCurrentNetworkRules() opera.Rules {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCurrentNetworkRules")
+	ret0, _ := ret[0].(opera.Rules)
+	return ret0
+}
+
+// GetCurrentNetworkRules indicates an expected call of GetCurrentNetworkRules.
+func (mr *MockChainStateMockRecorder) GetCurrentNetworkRules() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCurrentNetworkRules", reflect.TypeOf((*MockChainState)(nil).GetCurrentNetworkRules))
+}
+
+// Header mocks base method.
+func (m *MockChainState) Header(hash common.Hash, number uint64) *EvmHeader {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Header", hash, number)
+	ret0, _ := ret[0].(*EvmHeader)
+	return ret0
+}
+
+// Header indicates an expected call of Header.
+func (mr *MockChainStateMockRecorder) Header(hash, number any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Header", reflect.TypeOf((*MockChainState)(nil).Header), hash, number)
+}
+
+// Mocklogger is a mock of logger interface.
+type Mocklogger struct {
+	ctrl     *gomock.Controller
+	recorder *MockloggerMockRecorder
+	isgomock struct{}
+}
+
+// MockloggerMockRecorder is the mock recorder for Mocklogger.
+type MockloggerMockRecorder struct {
+	mock *Mocklogger
+}
+
+// NewMocklogger creates a new mock instance.
+func NewMocklogger(ctrl *gomock.Controller) *Mocklogger {
+	mock := &Mocklogger{ctrl: ctrl}
+	mock.recorder = &MockloggerMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *Mocklogger) EXPECT() *MockloggerMockRecorder {
+	return m.recorder
+}
+
+// Debug mocks base method.
+func (m *Mocklogger) Debug(msg string, ctx ...any) {
+	m.ctrl.T.Helper()
+	varargs := []any{msg}
+	for _, a := range ctx {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Debug", varargs...)
+}
+
+// Debug indicates an expected call of Debug.
+func (mr *MockloggerMockRecorder) Debug(msg any, ctx ...any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]any{msg}, ctx...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Debug", reflect.TypeOf((*Mocklogger)(nil).Debug), varargs...)
+}
+
+// Info mocks base method.
+func (m *Mocklogger) Info(msg string, ctx ...any) {
+	m.ctrl.T.Helper()
+	varargs := []any{msg}
+	for _, a := range ctx {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Info", varargs...)
+}
+
+// Info indicates an expected call of Info.
+func (mr *MockloggerMockRecorder) Info(msg any, ctx ...any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]any{msg}, ctx...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Info", reflect.TypeOf((*Mocklogger)(nil).Info), varargs...)
+}
+
+// Warn mocks base method.
+func (m *Mocklogger) Warn(msg string, ctx ...any) {
+	m.ctrl.T.Helper()
+	varargs := []any{msg}
+	for _, a := range ctx {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Warn", varargs...)
+}
+
+// Warn indicates an expected call of Warn.
+func (mr *MockloggerMockRecorder) Warn(msg any, ctx ...any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]any{msg}, ctx...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Warn", reflect.TypeOf((*Mocklogger)(nil).Warn), varargs...)
 }

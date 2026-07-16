@@ -17,7 +17,6 @@
 package gas_subsidies
 
 import (
-	"fmt"
 	"math/big"
 	"testing"
 
@@ -34,27 +33,19 @@ import (
 )
 
 func TestGasSubsidies_SubsidizedTransaction_DeductsSubsidyFunds(t *testing.T) {
-	upgrades := []struct {
-		name    string
-		upgrade opera.Upgrades
-	}{
-		{name: "sonic", upgrade: opera.GetSonicUpgrades()},
-		{name: "allegro", upgrade: opera.GetAllegroUpgrades()},
-		// TODO: add brio once it supports internal transactions
-	}
 	singleProposerOption := map[string]bool{
 		"singleProposer": true,
 		"distributed":    false,
 	}
 
-	for _, test := range upgrades {
+	for upgradeName, upgrade := range opera.GetAllHardForksInOrder() {
 		for mode, enabled := range singleProposerOption {
-			t.Run(fmt.Sprintf("%s/%v", test.name, mode), func(t *testing.T) {
+			t.Run(upgradeName+"/"+mode, func(t *testing.T) {
 
-				test.upgrade.GasSubsidies = true
-				test.upgrade.SingleProposerBlockFormation = enabled
+				upgrade.GasSubsidies = true
+				upgrade.SingleProposerBlockFormation = enabled
 				net := tests.StartIntegrationTestNet(t, tests.IntegrationTestNetOptions{
-					Upgrades: &test.upgrade,
+					Upgrades: &upgrade,
 				})
 
 				testGasSubsidies_SubsidizedTransaction_DeductsSubsidyFunds(t, net)
@@ -282,7 +273,7 @@ func testGasSubsidies_SubsidizedTransaction_DeductsSubsidyFunds(t *testing.T, ne
 
 					if subsidies.IsSponsorshipRequest(tx) {
 						fundsUsed := (receipt.GasUsed +
-							config.OverheadCharge.Uint64()) * block.BaseFee().Uint64()
+							config.OverheadChargeForFundBackedSponsorships.Uint64()) * block.BaseFee().Uint64()
 						require.Greater(t, fundsUsed, uint64(0),
 							"sponsored tx must have a non-zero funds cost",
 						)
@@ -359,7 +350,7 @@ func TestGasSubsidies_SubsidizedTransaction_SkipTransactionIfDeduceFundsDoesNotF
 
 	net.AdvanceEpoch(t, 1)
 
-	tooLargeToFit := 3_000_000 - config.OverheadCharge.Uint64() + 1
+	tooLargeToFit := 3_000_000 - config.OverheadChargeForFundBackedSponsorships.Uint64() + 1
 
 	opts, err := net.GetTransactOptions(sponsoredSender)
 	require.NoError(t, err)
@@ -380,7 +371,7 @@ func TestGasSubsidies_SubsidizedTransaction_SkipTransactionIfDeduceFundsDoesNotF
 
 func TestGasSubsidies_NonSponsoredTransactionsAreRejected(t *testing.T) {
 
-	upgrades := opera.GetSonicUpgrades()
+	upgrades := opera.GetBrioUpgrades()
 	upgrades.GasSubsidies = true
 	net := tests.StartIntegrationTestNet(t, tests.IntegrationTestNetOptions{
 		Upgrades: &upgrades,

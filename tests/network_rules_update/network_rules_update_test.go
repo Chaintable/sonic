@@ -17,16 +17,20 @@
 package network_rules_update
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/big"
 	"testing"
 
+	"github.com/0xsoniclabs/sonic/api/ethapi"
 	"github.com/0xsoniclabs/sonic/evmcore"
 	"github.com/0xsoniclabs/sonic/gossip/contract/driverauth100"
+	"github.com/0xsoniclabs/sonic/integration/makefakegenesis"
 	"github.com/0xsoniclabs/sonic/opera"
 	"github.com/0xsoniclabs/sonic/opera/contracts/driverauth"
 	"github.com/0xsoniclabs/sonic/tests"
+	"github.com/0xsoniclabs/tosca/go/tosca/vm"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -36,8 +40,6 @@ import (
 )
 
 func TestNetworkRule_Update_RulesChangeIsDelayedUntilNextEpochStart(t *testing.T) {
-	t.Parallel()
-
 	require := require.New(t)
 	net := tests.StartIntegrationTestNetWithFakeGenesis(t,
 		tests.IntegrationTestNetOptions{
@@ -84,7 +86,7 @@ func TestNetworkRule_Update_RulesChangeIsDelayedUntilNextEpochStart(t *testing.T
 	require.Less(blockBefore.BaseFee().Int64(), newMinBaseFee, "BaseFee should not reflect new MinBaseFee")
 
 	// apply epoch change
-	tests.AdvanceEpochAndWaitForBlocks(t, net)
+	net.AdvanceEpoch(t, 1)
 
 	// rule should be effective
 	err = client.Client().Call(&updatedRules, "eth_getRules", "latest")
@@ -100,8 +102,6 @@ func TestNetworkRule_Update_RulesChangeIsDelayedUntilNextEpochStart(t *testing.T
 }
 
 func TestNetworkRule_Update_RulesChangeDuringEpoch_PreAllegro(t *testing.T) {
-	t.Parallel()
-
 	require := require.New(t)
 	net := tests.StartIntegrationTestNetWithFakeGenesis(t,
 		tests.IntegrationTestNetOptions{
@@ -149,8 +149,6 @@ func TestNetworkRule_Update_RulesChangeDuringEpoch_PreAllegro(t *testing.T) {
 }
 
 func TestNetworkRule_Update_Restart_Recovers_Original_Value(t *testing.T) {
-	t.Parallel()
-
 	require := require.New(t)
 	net := tests.StartIntegrationTestNetWithFakeGenesis(t,
 		tests.IntegrationTestNetOptions{
@@ -206,7 +204,7 @@ func TestNetworkRule_Update_Restart_Recovers_Original_Value(t *testing.T) {
 		"Network rules should not change - it must be an epoch bound")
 
 	// apply epoch change
-	tests.AdvanceEpochAndWaitForBlocks(t, net)
+	net.AdvanceEpoch(t, 1)
 
 	// rule change should be effective
 	err = client2.Client().Call(&updatedRules, "eth_getRules", "latest")
@@ -221,8 +219,66 @@ func TestNetworkRule_Update_Restart_Recovers_Original_Value(t *testing.T) {
 	require.GreaterOrEqual(blockAfter.BaseFee().Int64(), newMinBaseFee, "BaseFee should reflect new MinBaseFee")
 }
 
+func TestNetworkRules_UpdateMaxEventGas_DropsLargeGasTxs(t *testing.T) {
+	require := require.New(t)
+	net := tests.StartIntegrationTestNetWithFakeGenesis(t,
+		tests.IntegrationTestNetOptions{
+			Upgrades: tests.AsPointer(opera.GetAllegroUpgrades()),
+		})
+
+	client, err := net.GetClient()
+	require.NoError(err)
+	defer client.Close()
+
+	newAccount := tests.MakeAccountWithBalance(t, net, big.NewInt(1e18))
+
+	// make a transaction with over 20M gas
+	tx := tests.CreateTransaction(t, net, &types.LegacyTx{
+		To:    &common.Address{1},
+		Gas:   21_000_000,
+		Nonce: 1, // High nonce that cannot be executed yet but will not be dropped from the txpool
+	}, newAccount)
+
+	err = client.SendTransaction(t.Context(), tx)
+	require.NoError(err, "failed to send high gas transaction")
+
+	var content map[string]map[string]map[string]*ethapi.RPCTransaction
+	err = client.Client().Call(&content, "txpool_content")
+	require.NoError(err, "failed to get tx pool status")
+	require.Equal(1, len(content["queued"]), "expected the high gas tx to be in the queued section of the tx pool")
+
+	type rulesType struct {
+		Economy  struct{ Gas opera.GasRules }
+		Upgrades struct{ Brio bool }
+	}
+
+	var originalRules rulesType
+	err = client.Client().Call(&originalRules, "eth_getRules", "latest")
+	require.NoError(err)
+	require.NotNil(originalRules.Economy.Gas, "GasRules should be filled")
+	require.NotEqual(0, originalRules.Economy.Gas.MaxEventGas, "GasRules should be filled")
+
+	updatedRules := originalRules
+	defaultGasRules := opera.DefaultGasRules()
+	defaultGasRules.MaxEventGas = 16_777_216 // inspired by params.MaxTxGas
+	updatedRules.Economy.Gas = defaultGasRules
+
+	// Update network rules
+	tests.UpdateNetworkRules(t, net, updatedRules)
+
+	err = client.Client().Call(&content, "txpool_content")
+	require.NoError(err, "failed to get tx pool status")
+	require.Equal(1, len(content["queued"]), "expected the high gas tx to be in the queued section of the tx pool")
+
+	// reach epoch ceiling to apply the new rules
+	net.AdvanceEpoch(t, 1)
+
+	err = client.Client().Call(&content, "txpool_content")
+	require.NoError(err, "failed to get tx pool status")
+	require.Equal(0, len(content["queued"]))
+}
+
 func TestNetworkRule_MinEventGas_AllowsChangingRules(t *testing.T) {
-	t.Parallel()
 
 	require := require.New(t)
 	net := tests.StartIntegrationTestNetWithFakeGenesis(t,
@@ -269,8 +325,6 @@ func TestNetworkRule_MinEventGas_AllowsChangingRules(t *testing.T) {
 }
 
 func TestNetworkRules_PragueFeaturesBecomeAvailableWithAllegroUpgrade(t *testing.T) {
-	t.Parallel()
-
 	net := tests.StartIntegrationTestNetWithFakeGenesis(t,
 		tests.IntegrationTestNetOptions{
 			// Explicitly set the network to use the Sonic Hard Fork
@@ -302,7 +356,7 @@ func TestNetworkRules_PragueFeaturesBecomeAvailableWithAllegroUpgrade(t *testing
 	tests.UpdateNetworkRules(t, net, rulesDiff)
 
 	// reach epoch ceiling to apply the new rules
-	tests.AdvanceEpochAndWaitForBlocks(t, net)
+	net.AdvanceEpoch(t, 1)
 
 	// Wait for another block, this is time for the tx_pool to tick, run reorg,
 	// and implement the new rules.
@@ -323,8 +377,15 @@ func TestNetworkRules_PragueFeaturesBecomeAvailableWithAllegroUpgrade(t *testing
 
 		forEachClientInNet(t, net, func(t *testing.T, client *tests.PooledEhtClient) {
 
-			// make sure that this client has already processed the transaction
-			_, err := net.GetReceipt(tx.Hash())
+			// Query receipt from each node, this will ensure that the transaction
+			// is executed and the new rules are in effect on all nodes.
+			err := tests.WaitFor(t.Context(), func(ctx context.Context) (bool, error) {
+				_, err := client.TransactionReceipt(ctx, tx.Hash())
+				if err != nil {
+					return false, nil
+				}
+				return true, nil
+			})
 			require.NoError(t, err, "failed to get receipt for the transaction")
 
 			code, err := client.CodeAt(t.Context(), account.Address(), nil)
@@ -370,4 +431,99 @@ func makeSetCodeTx(
 		AuthList: []types.SetCodeAuthorization{authorization},
 	}
 	return tests.CreateTransaction(t, net, txData, account)
+}
+
+func TestNetworkRulesUpdate_BrioFeaturesBecomeAvailable_WhenBrioUpgradesEnabled(t *testing.T) {
+	// This Test verifies that the Brio upgrade features (namely CLZ opcode)
+	// become available when the Brio upgrade is enabled via network rules update.
+
+	code := []byte{
+		byte(vm.PUSH1), 0x00, // constant input for CLZ
+		byte(vm.CLZ),  // count leading zeros
+		byte(vm.STOP), // stop
+	}
+
+	address := common.HexToAddress("0x42")
+	net := tests.StartIntegrationTestNet(t,
+		tests.IntegrationTestNetOptions{
+			Upgrades: tests.AsPointer(opera.GetSonicUpgrades()),
+			Accounts: []makefakegenesis.Account{{
+				Name:    "account",
+				Address: address,
+				Code:    code,
+			}},
+		},
+	)
+
+	client, err := net.GetClient()
+	require.NoError(t, err)
+	defer client.Close()
+
+	// get current network rules
+	var rules opera.Rules
+	err = client.Client().Call(&rules, "eth_getRules", "latest")
+	require.NoError(t, err)
+	require.False(t, rules.Upgrades.Brio, "Brio upgrade should be disabled initially")
+
+	for _, upgrade := range opera.GetAllHardForksInOrder() {
+		// update network
+		rules.Upgrades = upgrade
+		tests.UpdateNetworkRules(t, net, rules)
+		// reach epoch ceiling to apply the new rules
+		net.AdvanceEpoch(t, 1)
+
+		txData := &types.LegacyTx{
+			Gas: 58_000,
+			To:  &address,
+		}
+		tx := tests.CreateTransaction(t, net, txData, net.GetSessionSponsor())
+		receipt, err := net.Run(tx)
+		require.NoError(t, err)
+		if !upgrade.Brio {
+			require.Equal(t, types.ReceiptStatusFailed, receipt.Status)
+		} else {
+			require.Equal(t, types.ReceiptStatusSuccessful, receipt.Status)
+		}
+	}
+}
+
+func TestNetworkRulesUpdate_AllegroAndBrioCannotBeDisabledOnceEnabled(t *testing.T) {
+	net := tests.StartIntegrationTestNetWithFakeGenesis(t,
+		tests.IntegrationTestNetOptions{
+			Upgrades: tests.AsPointer(opera.GetBrioUpgrades()),
+		},
+	)
+
+	// Verify that both Allegro and Brio are enabled initially
+	rules := tests.GetNetworkRules(t, net)
+	require.True(t, rules.Upgrades.Allegro, "Allegro should be enabled initially")
+	require.True(t, rules.Upgrades.Brio, "Brio should be enabled initially")
+
+	t.Run("Allegro upgrade cannot be disabled", func(t *testing.T) {
+		type rulesType struct {
+			Upgrades struct{ Allegro bool }
+		}
+		tests.UpdateNetworkRules(t, net, rulesType{
+			Upgrades: struct{ Allegro bool }{Allegro: false},
+		})
+		net.AdvanceEpoch(t, 1)
+
+		rules := tests.GetNetworkRules(t, net)
+		require.True(t, rules.Upgrades.Allegro,
+			"Allegro should still be enabled after attempting to disable it")
+	})
+
+	t.Run("Brio upgrade cannot be disabled", func(t *testing.T) {
+		type rulesType struct {
+			Upgrades struct{ Brio bool }
+		}
+		tests.UpdateNetworkRules(t, net, rulesType{
+			Upgrades: struct{ Brio bool }{Brio: false},
+		})
+		net.AdvanceEpoch(t, 1)
+
+		rules := tests.GetNetworkRules(t, net)
+		require.True(t, rules.Upgrades.Brio,
+			"Brio should still be enabled after attempting to disable it")
+	})
 }

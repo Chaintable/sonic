@@ -22,6 +22,7 @@ import (
 
 	"github.com/0xsoniclabs/sonic/inter/state"
 	"github.com/0xsoniclabs/sonic/opera"
+	"github.com/0xsoniclabs/sonic/utils"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -56,14 +57,17 @@ func TestTxPool_SponsoredTransactionsAreIncludedInThePendingSet(t *testing.T) {
 	// mock the external chain dependencies
 	chain := mockChain(ctrl, chainConfig, upgrades)
 
-	subsidiesCheckerMock := NewMocksubsidiesChecker(ctrl)
-	subsidiesCheckerMock.EXPECT().isSponsored(gomock.Any()).Return(true).AnyTimes()
+	subsidiesCheckFactory := func(opera.Rules, StateReader, state.StateDB, types.Signer) utils.TransactionCheckFunc {
+		// This test accepts all sponsorship requests
+		return func(tx *types.Transaction) bool {
+			return true
+		}
+	}
+
+	bundlesEvaluator := NewMockBundleEvaluator(ctrl)
 
 	// Instantiate the pool
-	factory := func(opera.Rules, StateReader, state.StateDB, types.Signer) subsidiesChecker {
-		return subsidiesCheckerMock
-	}
-	pool := newTxPool(poolConfig, chainConfig, chain, factory)
+	pool := newTxPool(poolConfig, chainConfig, chain, subsidiesCheckFactory, bundlesEvaluator)
 
 	// transactions per sender
 	const transactionsPerSender = 5
@@ -161,17 +165,17 @@ func mockChain(ctrl *gomock.Controller, chainConfig *params.ChainConfig, upgrade
 			Number: big.NewInt(1),
 		},
 	}).AnyTimes()
-	chain.EXPECT().Config().Return(chainConfig).AnyTimes()
-	chain.EXPECT().GetTxPoolStateDB().Return(state, nil).AnyTimes()
-	chain.EXPECT().MaxGasLimit().Return(uint64(30_000_000)).AnyTimes()
-	chain.EXPECT().GetCurrentBaseFee().Return(big.NewInt(1)).AnyTimes()
+	chain.EXPECT().CurrentConfig().Return(chainConfig).AnyTimes()
+	chain.EXPECT().CurrentStateDB().Return(state, nil).AnyTimes()
+	chain.EXPECT().CurrentMaxGasLimit().Return(uint64(30_000_000)).AnyTimes()
+	chain.EXPECT().CurrentBaseFee().Return(big.NewInt(1)).AnyTimes()
 
 	sub := NewMocksubscriber(ctrl)
 	sub.EXPECT().Err().Return(make(chan error)).AnyTimes()
 	sub.EXPECT().Unsubscribe().AnyTimes()
 
 	chain.EXPECT().SubscribeNewBlock(gomock.Any()).Return(sub).AnyTimes()
-	chain.EXPECT().GetCurrentRules().
+	chain.EXPECT().CurrentRules().
 		Return(opera.Rules{Upgrades: upgrades}).AnyTimes()
 	return chain
 }

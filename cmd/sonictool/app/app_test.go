@@ -17,9 +17,10 @@
 package app_test
 
 import (
+	"fmt"
+
 	"crypto/ecdsa"
 	"crypto/rand"
-	"fmt"
 	"io"
 	"math/big"
 	"os"
@@ -27,14 +28,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/0xsoniclabs/sonic/api/sonicapi"
 	sonictool "github.com/0xsoniclabs/sonic/cmd/sonictool/app"
 	"github.com/0xsoniclabs/sonic/cmd/sonictool/genesis"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/bundle"
 	"github.com/0xsoniclabs/sonic/opera"
 	ogenesis "github.com/0xsoniclabs/sonic/opera/genesis"
 	"github.com/0xsoniclabs/sonic/opera/genesisstore"
 	"github.com/0xsoniclabs/sonic/tests"
+	"github.com/0xsoniclabs/sonic/tests/bundles"
 	"github.com/0xsoniclabs/sonic/utils/caution"
 	"github.com/0xsoniclabs/sonic/utils/prompt"
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -45,19 +50,40 @@ import (
 
 func TestSonicTool_check_ExecutesWithoutErrors(t *testing.T) {
 
-	net := tests.StartIntegrationTestNet(t)
-	generateNBlocks(t, net, 2)
-	net.Stop()
+	tests := map[string]struct {
+		mode      string
+		checkMode string
+	}{
+		"rpc db live state can be checked": {
+			mode:      "rpc",
+			checkMode: "live",
+		},
+		"rpc db archive state can be checked": {
+			mode:      "validator",
+			checkMode: "archive",
+		},
+		"validator db live state can be checked": {
+			mode:      "validator",
+			checkMode: "live",
+		},
+		"validator db archive state can be checked": {
+			mode:      "validator",
+			checkMode: "archive",
+		},
+	}
 
-	_, err := executeSonicTool(t,
-		"--datadir", net.GetDirectory()+"/state",
-		"check", "live")
-	require.NoError(t, err)
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
 
-	_, err = executeSonicTool(t,
-		"--datadir", net.GetDirectory()+"/state",
-		"check", "archive")
-	require.NoError(t, err)
+			tmp := t.TempDir()
+			_, err := executeSonicTool(t,
+				"--datadir", tmp, "genesis", "--mode", test.mode, "fake", "15")
+			require.NoError(t, err)
+
+			_, err = executeSonicTool(t, "--datadir", tmp, "check", test.checkMode)
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestSonicTool_compact_ExecutesWithoutErrors(t *testing.T) {
@@ -136,7 +162,38 @@ func TestSonicTool_account_ExecutesWithoutErrors(t *testing.T) {
 	require.Len(t, accounts, 2)
 }
 
-func TestSonicTool_genesis_ExecutesWithoutErrors(t *testing.T) {
+func TestSonicTool_genesis_CreatesDataDirWithAllowedUpgrades(t *testing.T) {
+
+	upgrades := []string{
+		"sonic",
+		"allegro",
+		"brio",
+	}
+
+	for _, upgradeName := range upgrades {
+		t.Run(upgradeName, func(t *testing.T) {
+			datadir := t.TempDir()
+
+			_, err := executeSonicTool(t,
+				"--datadir", datadir,
+				"genesis", "fake",
+				"--upgrades", upgradeName,
+				"10")
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestSonicTool_genesis_ReturnsErrorIfHardforkIsInvalid(t *testing.T) {
+	_, err := executeSonicTool(t,
+		"--datadir", t.TempDir(),
+		"genesis", "fake",
+		"--upgrades", "invalid",
+		"1")
+	require.ErrorContains(t, err, "invalid profile invalid - must be 'sonic', 'allegro', or 'brio'")
+}
+
+func TestSonicTool_genesis_ExportsAndSigns_WithoutErrors(t *testing.T) {
 
 	// Create a history by running some transactions
 	net := tests.StartIntegrationTestNetWithFakeGenesis(t)
@@ -176,6 +233,64 @@ func TestSonicTool_genesis_ExecutesWithoutErrors(t *testing.T) {
 	// Note, this how far we can get without the actual key
 	require.ErrorContains(t, err, "genesis signature does not match any trusted signer")
 	revertPrompt()
+}
+
+func TestSonicTool_genesis_ExportImport_WithBundles(t *testing.T) {
+	// Create a history by running some transactions
+	upgrades := opera.GetBrioUpgrades()
+	upgrades.TransactionBundles = true
+	net := tests.StartIntegrationTestNet(t, tests.IntegrationTestNetOptions{
+		Upgrades: &upgrades,
+	})
+	client, err := net.GetClient()
+	require.NoError(t, err)
+
+	// run a bundle and check it can be queried
+	bundleHash1, originalInfo1 := runBundle(t, net)
+	info1, err := bundles.GetBundleInfo(t.Context(), client.Client(), bundleHash1)
+	require.NoError(t, err)
+	require.Equal(t, originalInfo1, info1,
+		"bundle info mismatch after genesis export-import")
+
+	// restart the net
+	client.Close()
+	require.NoError(t, net.RestartWithExportImport())
+	client, err = net.GetClient()
+	require.NoError(t, err)
+
+	// check that the bundle is still there after the export-import process
+	info1, err = bundles.GetBundleInfo(t.Context(), client.Client(), bundleHash1)
+	require.NoError(t, err)
+	require.Equal(t, originalInfo1, info1,
+		"bundle info mismatch after genesis export-import")
+
+	// run enough blocks to make sure that the history hash is pruned.
+	generateNBlocks(t, net, int(bundle.MaxBlockRangeLength)+10)
+
+	// run another bundle
+	bundleHash2, originalInfo2 := runBundle(t, net)
+
+	// check that the first bundle is pruned and the second bundle is still there after pruning
+	_, err = bundles.GetBundleInfo(t.Context(), client.Client(), bundleHash1)
+	require.ErrorContains(t, err, "not found")
+	info2, err := bundles.GetBundleInfo(t.Context(), client.Client(), bundleHash2)
+	require.NoError(t, err)
+	require.Equal(t, originalInfo2, info2)
+
+	// restart the net
+	client.Close()
+	require.NoError(t, net.RestartWithExportImport())
+	client, err = net.GetClient()
+	require.NoError(t, err)
+
+	// check that the second bundle is available, but the first bundle is not, after the export-import process
+	_, err = bundles.GetBundleInfo(t.Context(), client.Client(), bundleHash1)
+	require.ErrorContains(t, err, "not found")
+	info2, err = bundles.GetBundleInfo(t.Context(), client.Client(), bundleHash2)
+	require.NoError(t, err)
+	require.Equal(t, originalInfo2, info2)
+
+	client.Close()
 }
 
 func TestSonicTool_heal_ExecutesWithoutErrors(t *testing.T) {
@@ -245,6 +360,88 @@ func TestSonicTool_events_ExecutesWithoutErrors(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestSonicTool_EventsExport_ExecutesWithoutErrors_ForEpochRange(t *testing.T) {
+	net := tests.StartIntegrationTestNet(t)
+	numEpochs := 5
+	for range numEpochs {
+		generateNBlocks(t, net, 3)
+		net.AdvanceEpoch(t, 1)
+	}
+
+	net.Stop()
+
+	eventsExportFile := t.TempDir() + "/events.json"
+
+	_, err := executeSonicTool(t,
+		"--datadir", net.GetDirectory()+"/state",
+		"events", "export", eventsExportFile, "2", fmt.Sprintf("%d", numEpochs))
+	require.NoError(t, err)
+
+}
+
+func TestSonicTool_EventsExport_ReturnsError_ForEpochOutOfRange(t *testing.T) {
+	net := tests.StartIntegrationTestNet(t)
+	generateNBlocks(t, net, 3)
+
+	client, err := net.GetClient()
+	require.NoError(t, err)
+	defer client.Close()
+
+	current, err := client.BlockNumber(t.Context())
+	require.NoError(t, err)
+	currentEpoch := tests.GetEpochOfBlock(t, client, int(current))
+
+	net.Stop()
+
+	eventsExportFile := t.TempDir() + "/events.json"
+
+	_, err = executeSonicTool(t,
+		"--datadir", net.GetDirectory()+"/state",
+		"events", "export", eventsExportFile, "2", fmt.Sprintf("%d", currentEpoch+1))
+	require.ErrorContains(t, err, "but last known event is 2")
+}
+
+func TestSonicTool_EventExport_ReturnsError_ForInvalidRange(t *testing.T) {
+	net := tests.StartIntegrationTestNet(t)
+	generateNBlocks(t, net, 3)
+	net.Stop()
+
+	eventsExportFile := t.TempDir() + "/events.json"
+
+	_, err := executeSonicTool(t,
+		"--datadir", net.GetDirectory()+"/state",
+		"events", "export", eventsExportFile, "2", "1")
+	require.ErrorContains(t, err, "invalid requested range")
+}
+
+func TestSonicTool_EventsExport_ReturnsError_ForEpochsWithNoEvents(t *testing.T) {
+	net := tests.StartIntegrationTestNet(t)
+	generateNBlocks(t, net, 1)
+	net.Stop()
+
+	eventsExportFile := t.TempDir() + "/events.json"
+
+	// There are no events in epoch 0 and 1 because they are generated by the genesis.
+	_, err := executeSonicTool(t,
+		"--datadir", net.GetDirectory()+"/state",
+		"events", "export", eventsExportFile, "0", "1")
+	require.ErrorContains(t, err, "could not find events")
+}
+
+func TestSonicTool_EventsExport_ReturnsError_ForWrongNumberOfArguments(t *testing.T) {
+
+	net := tests.StartIntegrationTestNet(t)
+	generateNBlocks(t, net, 3)
+	net.Stop()
+
+	eventsExportFile := t.TempDir() + "/events.json"
+
+	_, err := executeSonicTool(t,
+		"--datadir", net.GetDirectory()+"/state",
+		"events", "export", eventsExportFile, "2")
+	require.ErrorContains(t, err, "specify both from and to epochs")
+}
+
 func TestSonicTool_validator_ExecutesWithoutErrors(t *testing.T) {
 
 	dataDir := t.TempDir()
@@ -296,6 +493,32 @@ func TestSonicTool_validator_ExecutesWithoutErrors(t *testing.T) {
 	require.NotEqual(t, newValidatorKeyFile, convertedValidatorKeyFile, "new and converted validator keys should be different")
 
 	revertPrompt()
+}
+
+func TestSonicTool_analyze_ExecutesWithoutErrors(t *testing.T) {
+	net := tests.StartIntegrationTestNet(t, tests.IntegrationTestNetOptions{
+		NumNodes: 1,
+	})
+
+	client, err := net.GetClient()
+	require.NoError(t, err)
+	defer client.Close()
+
+	// The genesis has 2 blocks
+	txs := 0
+	for i := 0; i <= 1; i++ {
+		block, err := client.BlockByNumber(t.Context(), big.NewInt(int64(i)))
+		require.NoError(t, err)
+		txs += len(block.Transactions())
+	}
+
+	net.Stop()
+
+	output, err := executeSonicTool(t, "--datadir", net.GetDirectory()+"/state", "analyze")
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(output, "DB: "), "expected output to start with 'DB: ', got: %q", output)
+	blocksLineRe := regexp.MustCompile(fmt.Sprintf(`(?m)^Txs\s+\w\s+%d\b`, txs))
+	require.True(t, blocksLineRe.FindStringIndex(output) != nil, "expected %d Txs in output, got: %q", txs, output)
 }
 
 // =============================================================================
@@ -420,4 +643,48 @@ func replaceUserPrompter(newPrompt prompt.UserPrompter) (cleanup func()) {
 	prompt.UserPrompt = newPrompt
 	cleanup = func() { prompt.UserPrompt = oldPrompt }
 	return
+}
+
+// runBundle runs a simple bundle in the provided network and returns the hash
+// of the execution plan and the info about the execution of the bundle.
+func runBundle(t *testing.T, net *tests.IntegrationTestNet) (
+	common.Hash,
+	*sonicapi.RPCBundleInfo,
+) {
+	t.Helper()
+	client, err := net.GetClient()
+	require.NoError(t, err)
+	defer client.Close()
+
+	signer := types.LatestSignerForChainID(net.GetChainId())
+
+	block, err := client.BlockNumber(t.Context())
+	require.NoError(t, err)
+
+	envelope, plan := bundle.NewBuilder().
+		WithSigner(signer).
+		SetEarliest(block).
+		AllOf(
+			bundle.Step(
+				net.GetSessionSponsor().PrivateKey,
+				tests.SetTransactionDefaults(t, net, &types.AccessListTx{
+					To:    &common.Address{0x42},
+					Value: big.NewInt(1),
+				}, net.GetSessionSponsor()),
+			),
+		).
+		BuildEnvelopeAndPlan()
+
+	// Check bundle status before submission.
+	_, err = bundles.GetBundleInfo(t.Context(), client.Client(), plan.Hash())
+	require.ErrorIs(t, err, ethereum.NotFound)
+
+	// Run the bundle.
+	require.NoError(t, client.SendTransaction(t.Context(), envelope))
+
+	// Wait for the bundle to be processed.
+	info, err := bundles.WaitForBundleExecution(t.Context(), client.Client(), plan.Hash())
+	require.NoError(t, err)
+
+	return plan.Hash(), info
 }

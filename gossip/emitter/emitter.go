@@ -22,11 +22,14 @@ import (
 	"math/big"
 	"math/rand/v2"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/opera"
 	"github.com/0xsoniclabs/sonic/utils"
 	"github.com/0xsoniclabs/sonic/utils/txtime"
 	"github.com/Fantom-foundation/lachesis-base/emitter/ancestor"
@@ -35,9 +38,11 @@ import (
 	"github.com/Fantom-foundation/lachesis-base/inter/pos"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/txpool"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/bundle"
 	"github.com/0xsoniclabs/sonic/gossip/emitter/config"
 	"github.com/0xsoniclabs/sonic/gossip/emitter/originatedtxs"
 	"github.com/0xsoniclabs/sonic/gossip/emitter/throttler"
@@ -62,6 +67,10 @@ const (
 	// This constant is local to the emitter and does not affect consensus. It
 	// may be altered without the need of a hard fork if need to improve the
 	// performance of the block formation process.
+	//
+	// By limiting the size of transactions, this constant also limits the maximum
+	// block size (the header size can be treated as constant).
+	// To stay compliant with EIP-7934, the maximum block size must not exceed 10 MiB.
 	maxTotalTransactionsSizeInEventInBytes = 8 * 1024 * 1024 // 8 MiB
 )
 
@@ -151,6 +160,8 @@ type Emitter struct {
 	proposalTracker inter.ProposalTracker
 
 	eventEmissionThrottler throttler.ThrottlingState
+
+	bundleCache evmcore.BundleEvaluator
 }
 
 type BaseFeeSource interface {
@@ -182,6 +193,7 @@ func NewEmitter(
 	world World,
 	baseFeeSource BaseFeeSource,
 	errorLock *errlock.ErrorLock,
+	bundleCache evmcore.BundleEvaluator,
 ) *Emitter {
 	// Randomize event time to decrease chance of 2 parallel instances emitting event at the same time
 	// It increases the chance of detecting parallel instances
@@ -195,6 +207,7 @@ func NewEmitter(
 		Periodic:      logger.Periodic{Instance: logger.New()},
 		baseFeeSource: baseFeeSource,
 		errorLock:     errorLock,
+		bundleCache:   bundleCache,
 	}
 	res.eventEmissionThrottler = throttler.NewThrottlingState(
 		config.Validator.ID,
@@ -310,28 +323,50 @@ func (em *Emitter) getSortedTxs(baseFee *big.Int) *transactionsByPriceAndNonce {
 		em.Log.Error("Tx pool transactions fetching error", "err", err)
 		return nil
 	}
+
+	// remove bundle only transactions from potential event payload
+	rules := em.world.GetRules()
+	removeBundleOnlyTxs(rules.Upgrades, pendingTxs)
+
 	for from, txs := range pendingTxs {
 		// Filter the excessive transactions from each sender
 		if len(txs) > em.config.MaxTxsPerAddress {
 			pendingTxs[from] = txs[:em.config.MaxTxsPerAddress]
 		}
 	}
+
 	// Convert to lists of LazyTransactions
 	txs := make(map[common.Address][]*txpool.LazyTransaction, len(pendingTxs))
 	for from, list := range pendingTxs {
 		lazyTxs := make([]*txpool.LazyTransaction, 0, len(list))
 		for _, tx := range list {
+
+			gasFee, err := utils.BigIntToUint256(tx.GasFeeCap())
+			if err != nil {
+				em.Log.Warn("Failed to convert tx fee cap to uint256", "hash", tx.Hash(), "gasFeeCap", tx.GasFeeCap(), "err", err)
+				// stop iteration, skipped transaction invalidates the rest of transactions because they introduce a nonce gap
+				break
+			}
+			gasTip, err := utils.BigIntToUint256(tx.GasTipCap())
+			if err != nil {
+				em.Log.Warn("Failed to convert tx tip cap to uint256", "hash", tx.Hash(), "gasTipCap", tx.GasTipCap(), "err", err)
+				// stop iteration, skipped transaction invalidates the rest of transactions because they introduce a nonce gap
+				break
+			}
+
 			lazyTxs = append(lazyTxs, &txpool.LazyTransaction{
 				Hash:      tx.Hash(),
 				Tx:        tx,
 				Time:      tx.Time(),
-				GasFeeCap: utils.BigIntToUint256(tx.GasFeeCap()),
-				GasTipCap: utils.BigIntToUint256(tx.GasTipCap()),
+				GasFeeCap: gasFee,
+				GasTipCap: gasTip,
 				Gas:       tx.Gas(),
 				BlobGas:   tx.BlobGas(),
 			})
 		}
-		txs[from] = lazyTxs
+		if len(lazyTxs) != 0 {
+			txs[from] = lazyTxs
+		}
 	}
 
 	sortedTxs := newTransactionsByPriceAndNonce(em.world.TransactionSigner, txs, baseFee)
@@ -340,6 +375,31 @@ func (em *Emitter) getSortedTxs(baseFee *big.Int) *transactionsByPriceAndNonce {
 	em.cache.poolBlock = em.world.GetLatestBlockIndex()
 	em.cache.poolTime = time.Now()
 	return sortedTxs.Copy()
+}
+
+// removeBundleOnlyTxs removes transactions which are marked as bundle-only
+// from the pending transactions. This prevents bundle-only transactions from
+// being part of the consensus payload, thereby avoiding execution of these
+// transactions outside of the bundle they were prepared for.
+func removeBundleOnlyTxs(
+	upgrades opera.Upgrades,
+	pendingTxs map[common.Address]types.Transactions) {
+
+	if !upgrades.Brio {
+		return
+	}
+
+	for addr, txs := range pendingTxs {
+		// if a bundle-only transaction is found, remove it and all subsequent transactions
+		// since the nonce will be non-sequential after that
+		index := slices.IndexFunc(txs, bundle.IsBundleOnly)
+		if index != -1 {
+			pendingTxs[addr] = pendingTxs[addr][:index]
+			if len(pendingTxs[addr]) == 0 {
+				delete(pendingTxs, addr)
+			}
+		}
+	}
 }
 
 func (em *Emitter) EmitEvent() (*inter.EventPayload, error) {
@@ -498,13 +558,8 @@ func (em *Emitter) createEvent(sortedTxs *transactionsByPriceAndNonce) (*inter.E
 	mutEvent.SetLamport(maxLamport + 1)
 	mutEvent.SetCreationTime(inter.MaxTimestamp(inter.Timestamp(time.Now().UnixNano()), selfParentTime+1))
 
-	// node version
-	if mutEvent.Seq() <= 1 && len(em.config.VersionToPublish) > 0 {
-		version := []byte("v-" + em.config.VersionToPublish)
-		if uint32(len(version)) <= em.world.GetRules().Dag.MaxExtraData {
-			mutEvent.SetExtra(version)
-		}
-	}
+	// fill optional extra data field
+	em.fillExtraData(mutEvent)
 
 	// set consensus fields
 	err := em.world.Build(mutEvent, nil)
@@ -584,4 +639,19 @@ func (em *Emitter) nameEventForDebug(e *inter.EventPayload) {
 	hash.SetEventName(e.ID(), fmt.Sprintf("%s%03d",
 		strings.ToLower(string(name)),
 		e.Seq()))
+}
+
+func (em *Emitter) fillExtraData(event *inter.MutableEventPayload) {
+	var clientVersion *string
+	if event.Seq() <= 1 && len(em.config.VersionToPublish) > 0 {
+		clientVersion = &em.config.VersionToPublish
+	}
+	var latestBlockInfo *BlockNumberAndHash
+	if latestBlock := em.world.GetLatestBlock(); latestBlock != nil {
+		latestBlockInfo = &BlockNumberAndHash{
+			Number: latestBlock.Number,
+			Hash:   latestBlock.Hash(),
+		}
+	}
+	event.SetExtra(encodeExtraData(clientVersion, latestBlockInfo))
 }

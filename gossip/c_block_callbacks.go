@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"cmp"
 	"fmt"
+	"math"
 	"slices"
 	"sort"
 	"sync"
@@ -27,8 +28,10 @@ import (
 	"time"
 
 	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/evmcore/core_types"
 	"github.com/0xsoniclabs/sonic/scc/cert"
 	scc_node "github.com/0xsoniclabs/sonic/scc/node"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/dag"
@@ -40,7 +43,10 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
+	"github.com/ethereum/go-ethereum/params"
 
+	"github.com/0xsoniclabs/sonic/gossip/blockproc"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/bundle"
 	"github.com/0xsoniclabs/sonic/gossip/blockproc/verwatcher"
 	"github.com/0xsoniclabs/sonic/gossip/emitter"
 	"github.com/0xsoniclabs/sonic/gossip/evmstore"
@@ -72,6 +78,19 @@ var (
 
 	confirmedEventsMeter = metrics.GetOrRegisterMeter("chain/events/confirmed", nil) // events received from lachesis
 	spilledEventsMeter   = metrics.GetOrRegisterMeter("chain/events/spilled", nil)   // tx excluded because of MaxBlockGas
+
+	sonicFeaturesMetrics = &evmcore.SonicBlockExecutionMetrics{
+		SponsoredTxs:        utils.MetricsCounter(metrics.GetOrRegisterCounter("chain/sponsored", nil)),
+		SkippedSponsoredTxs: utils.MetricsCounter(metrics.GetOrRegisterCounter("chain/sponsored/skipped", nil)),
+		ExecutedBundles:     utils.MetricsCounter(metrics.GetOrRegisterCounter("chain/bundles", nil)),
+		RolledBackBundles:   utils.MetricsCounter(metrics.GetOrRegisterCounter("chain/bundles/rolledback", nil)),
+		InvalidBundles:      utils.MetricsCounter(metrics.GetOrRegisterCounter("chain/bundles/invalid", nil)),
+		BundleEfficiency: utils.MetricsHistogram(utils.NewPrometheusHistogram(prometheus.HistogramOpts{
+			Name:    "chain_bundle_gas_effective",
+			Help:    "Effective gas usage ratio for a bundle transaction",
+			Buckets: prometheus.LinearBuckets(0.00, 0.01, 100), // Buckets [0.00, 0.01, ..., 0.99, +inf]
+		})),
+	}
 )
 
 type ExtendedTxPosition struct {
@@ -170,9 +189,12 @@ func consensusCallbackBeginBlockFn(
 			},
 			EndBlock: func() (newValidators *pos.Validators) {
 
+				// Fix the rules to be used by this block.
+				thisBlocksRules := es.Rules.Copy()
+
 				// sort events by Lamport time
 				sort.Sort(confirmedEvents)
-				maxBlockGas := es.Rules.Blocks.MaxBlockGas
+				maxBlockGas := thisBlocksRules.Blocks.MaxBlockGas
 				blockEvents := spillBlockEvents(confirmedEvents, maxBlockGas,
 					func(id hash.Event) inter.EventPayloadI {
 						// Note: currently, GetEventPayload returns a pointer to struct,
@@ -189,11 +211,11 @@ func consensusCallbackBeginBlockFn(
 
 				// Start assembling the resulting block.
 				number := uint64(bs.LastBlock.Idx + 1)
-				lastBlockHeader := evmStateReader.GetHeaderByNumber(number - 1)
+				lastBlockHeader := evmStateReader.Header(common.Hash{}, number-1)
 
 				randao := computePrevRandao(confirmedEvents)
 				chainCfg := opera.CreateTransientEvmChainConfig(
-					es.Rules.NetworkID,
+					thisBlocksRules.NetworkID,
 					store.GetUpgradeHeights(),
 					idx.Block(number),
 				)
@@ -211,13 +233,15 @@ func consensusCallbackBeginBlockFn(
 				// gas limit. With this parameter, this limit is enforced.
 				userTransactionGasLimit := maxBlockGas
 
+				signer := types.LatestSignerForChainID(chainCfg.ChainID)
+
 				// Get a proposal for the block to be created.
 				proposal := inter.Proposal{
 					Number:     idx.Block(number),
 					ParentHash: lastBlockHeader.Hash,
 				}
 				blockTime := atroposTime
-				if es.Rules.Upgrades.SingleProposerBlockFormation {
+				if thisBlocksRules.Upgrades.SingleProposerBlockFormation {
 					if proposed, proposer, time := extractProposalForNextBlock(lastBlockHeader, blockEvents, log.Root()); proposed != nil {
 						proposal = *proposed
 						blockTime = time
@@ -231,7 +255,7 @@ func consensusCallbackBeginBlockFn(
 
 						userTransactionGasLimit = inter.GetEffectiveGasLimit(
 							blockTime.Time().Sub(lastBlockHeader.Time.Time()),
-							es.Rules.Economy.ShortGasPower.AllocPerSec,
+							thisBlocksRules.Economy.ShortGasPower.AllocPerSec,
 							maxBlockGas,
 						)
 					}
@@ -246,13 +270,12 @@ func consensusCallbackBeginBlockFn(
 						unorderedTxs = append(unorderedTxs, e.Transactions()...)
 					}
 
-					signer := types.LatestSignerForChainID(chainCfg.ChainID)
-					proposal.Transactions = scrambler.GetExecutionOrder(unorderedTxs, signer, es.Rules.Upgrades.Sonic)
+					proposal.Transactions = scrambler.GetExecutionOrder(unorderedTxs, signer, thisBlocksRules.Upgrades.Sonic)
 				}
 
 				// Filter invalid transactions from the proposal.
 				proposal.Transactions = filterNonPermissibleTransactions(
-					proposal.Transactions, &es.Rules, log.Root(), invalidTxsMeter,
+					proposal.Transactions, &thisBlocksRules, signer, log.Root(), invalidTxsMeter,
 				)
 
 				// Make sure the new block time is after the last block time.
@@ -277,7 +300,7 @@ func consensusCallbackBeginBlockFn(
 				skipBlock := atroposDegenerate
 				// Check if empty block should be pruned
 				emptyBlock := confirmedEvents.Len() == 0 && cBlock.Cheaters.Len() == 0
-				if es.Rules.Upgrades.SingleProposerBlockFormation {
+				if thisBlocksRules.Upgrades.SingleProposerBlockFormation {
 					// Just checking for the number of confirmed events is not
 					// enough in the SingleProposer mode, because proposals may
 					// be empty or may have been found invalid (wrong block
@@ -290,7 +313,7 @@ func consensusCallbackBeginBlockFn(
 					// in general be skipped.
 					emptyBlock = cBlock.Cheaters.Len() == 0 && len(proposal.Transactions) == 0
 				}
-				skipBlock = skipBlock || (emptyBlock && blockCtx.Time < bs.LastBlock.Time+es.Rules.Blocks.MaxEmptyBlockSkipPeriod)
+				skipBlock = skipBlock || (emptyBlock && blockCtx.Time < bs.LastBlock.Time+thisBlocksRules.Blocks.MaxEmptyBlockSkipPeriod)
 				// Finalize the progress of eventProcessor
 				bs = eventProcessor.Finalize(blockCtx, skipBlock) // TODO: refactor to not mutate the bs, it is unclear
 				if skipBlock {
@@ -307,18 +330,10 @@ func consensusCallbackBeginBlockFn(
 					)
 				}
 
-				log.Info("EndBlock", "blockCtx", blockCtx)
-
-				//if blockCtx.Idx == 2 && opera.DefaultVMConfig.Tracer != nil && opera.DefaultVMConfig.Tracer.OnGenesisBlock != nil {
-				//	log.Info("waiting for trigger block 0&1 trace")
-				//	time.Sleep(60 * time.Second)
-				//	log.Info("end waiting trace block 0&1")
-				//}
-
 				sealer := blockProc.SealerModule.Start(blockCtx, bs, es)
 				sealing := sealer.EpochSealing()
 				txListener := blockProc.TxListenerModule.Start(blockCtx, bs, es, statedb)
-				onNewLogAll := func(l *types.Log) {
+				onNewLogAll := func(l *core_types.Log) {
 					txListener.OnNewLog(l)
 					// Note: it's possible for logs to get indexed twice by BR and block processing
 					if verWatcher != nil {
@@ -332,15 +347,16 @@ func consensusCallbackBeginBlockFn(
 					statedb,
 					evmStateReader,
 					onNewLogAll,
-					es.Rules,
+					thisBlocksRules,
 					chainCfg,
 					randao,
+					sonicFeaturesMetrics,
 				)
 				executionStart := time.Now()
 
 				// Execute pre-internal transactions
 				preInternalTxs := blockProc.PreTxTransactor.PopInternalTxs(blockCtx, bs, es, sealing, statedb)
-				preInternalProcessedTxs := evmProcessor.Execute(preInternalTxs, maxBlockGas)
+				preInternalProcessedTxs := evmProcessor.Execute(preInternalTxs, maxBlockGas, math.MaxUint64).ProcessedTransactions
 				bs = txListener.Finalize()
 				for _, tx := range preInternalProcessedTxs {
 					if tx.Receipt == nil || tx.Receipt.Status == 0 {
@@ -352,7 +368,14 @@ func consensusCallbackBeginBlockFn(
 				if sealing {
 					sealer.Update(bs, es)
 					prevUpg := es.Rules.Upgrades
-					bs, es = sealer.SealEpoch() // TODO: refactor to not mutate the bs, it is unclear
+
+					_, execPlanChainHash := store.GetLatestProcessedBundleHistoryHash()
+
+					bs, es = sealer.SealEpoch(
+						hash.Hash(lastBlockHeader.Hash),
+						hash.Hash(execPlanChainHash),
+						preInternalTxs,
+					) // TODO: refactor to not mutate the bs, it is unclear
 					if es.Rules.Upgrades != prevUpg {
 						store.AddUpgradeHeight(opera.UpgradeHeight{
 							Upgrades: es.Rules.Upgrades,
@@ -367,6 +390,7 @@ func consensusCallbackBeginBlockFn(
 
 				// At this point, newValidators may be returned and the rest of the code may be executed in a parallel thread
 				blockFn := func() {
+
 					blockDuration := time.Duration(blockCtx.Time - bs.LastBlock.Time)
 					blockBuilder := inter.NewBlockBuilder().
 						WithEpoch(blockCtx.Atropos.Epoch()).
@@ -391,7 +415,7 @@ func consensusCallbackBeginBlockFn(
 					// (8054923) in which the gas limit was adapted. To support
 					// this one-time exception, we add a special case for
 					// this block here to ensure backward compatibility.
-					if es.Rules.NetworkID == 146 && number == 8054923 {
+					if thisBlocksRules.NetworkID == 146 && number == 8054923 {
 						blockBuilder.WithGasLimit(es.Rules.Blocks.MaxBlockGas)
 					}
 
@@ -406,7 +430,7 @@ func consensusCallbackBeginBlockFn(
 
 					// Execute post-internal transactions
 					internalTxs := blockProc.PostTxTransactor.PopInternalTxs(blockCtx, bs, es, sealing, statedb)
-					internalProcessedTxs := evmProcessor.Execute(internalTxs, maxBlockGas)
+					internalProcessedTxs := evmProcessor.Execute(internalTxs, maxBlockGas, math.MaxUint64).ProcessedTransactions
 					for _, tx := range internalProcessedTxs {
 						if tx.Receipt == nil || tx.Receipt.Status == 0 {
 							log.Warn("Internal transaction skipped or reverted", "txid", tx.Transaction.Hash().String())
@@ -422,15 +446,13 @@ func consensusCallbackBeginBlockFn(
 						}
 					}
 
-					orderedTxs := proposal.Transactions
-					for _, processed := range evmProcessor.Execute(orderedTxs, userTransactionGasLimit) {
-						if processed.Receipt != nil { // < nil if skipped
-							blockBuilder.AddTransaction(
-								processed.Transaction,
-								processed.Receipt,
-							)
-						}
-					}
+					txCausedBy := processUserTransactions(
+						evmProcessor,
+						blockBuilder,
+						proposal.Transactions,
+						userTransactionGasLimit,
+						thisBlocksRules.Upgrades,
+					)
 
 					evmBlock, numSkippedTxs, allReceipts := evmProcessor.Finalize()
 
@@ -482,7 +504,13 @@ func consensusCallbackBeginBlockFn(
 
 					// call OnNewReceipt
 					for i, r := range allReceipts {
-						creator := txPositions[r.TxHash].EventCreator
+						originTx := r.TxHash
+						if thisBlocksRules.Upgrades.Brio {
+							if origin, found := txCausedBy[r.TxHash]; found {
+								originTx = origin
+							}
+						}
+						creator := txPositions[originTx].EventCreator
 						if creator != 0 && es.Validators.Get(creator) == 0 {
 							creator = 0
 						}
@@ -519,70 +547,6 @@ func consensusCallbackBeginBlockFn(
 					for _, tx := range blockBuilder.GetTransactions() {
 						store.evm.SetTx(tx.Hash(), tx)
 					}
-
-					//evmBlockHeader := &types.Header{
-					//	ParentHash:  block.ParentHash,
-					//	UncleHash:   types.EmptyUncleHash,
-					//	Coinbase:    common.Address{}, // < in Sonic, the coinbase is always 0
-					//	Root:        block.StateRoot,
-					//	TxHash:      block.TransactionsHashRoot,
-					//	ReceiptHash: block.ReceiptsHashRoot,
-					//	Bloom:       block.LogBloom,
-					//	Difficulty:  big.NewInt(int64(block.Difficulty)),
-					//	Number:      big.NewInt(int64(block.Number)),
-					//	GasLimit:    block.GasLimit,
-					//	GasUsed:     block.GasUsed,
-					//	Time:        uint64(block.Time.Time().Unix()),
-					//	Extra: inter.EncodeExtraData(
-					//		block.Time.Time(),
-					//		time.Duration(block.Duration)*time.Nanosecond,
-					//	),
-					//	MixDigest: block.PrevRandao,
-					//	Nonce:     types.BlockNonce{}, // constant 0 in Ethereum
-					//	BaseFee:   block.BaseFee,
-					//
-					//	// Sonic does not have a beacon chain and no withdrawals.
-					//	WithdrawalsHash: &types.EmptyWithdrawalsHash,
-					//
-					//	// Sonic does not support blobs, so no blob gas is used and there is
-					//	// no excess blob gas.
-					//	BlobGasUsed:   new(uint64), // = 0
-					//	ExcessBlobGas: new(uint64), // = 0
-					//}
-
-					//if opera.DefaultVMConfig.Tracer != nil && opera.DefaultVMConfig.Tracer.OnCommit != nil {
-					//	// hack override block header for pipeline tracer, writer from OnBlockStart
-					//	tracer.BlockCtx.BlockHeader = util.BuildPilelineBlockHeader(types.NewBlockForPipelineTrace(evmBlockHeader, nil, nil, trie.NewStackTrie(nil)))
-					//	tracer.BlockCtx.BlockFile.Block = util.BuildPipelineBlock(types.NewBlockForPipelineTrace(evmBlockHeader, nil, nil, trie.NewStackTrie(nil)))
-					//
-					//	pBlock := evmStateReader.GetBlock(common.Hash{}, block.Number-1)
-					//
-					//	log.Info("OnBlockEnd", "block idx", block.Number, "block hash", block.Hash().Hex(), "txs", len(block.TransactionHashes), "state root", block.StateRoot.Hex(), "parent root", pBlock.Root.Hex())
-					//
-					//	opera.DefaultVMConfig.Tracer.OnCommit(pBlock.Root, block.StateRoot, nil, nil, nil, nil, nil, nil)
-					//
-					//	defer func() {
-					//		blockChange := &ptypes.BlockChangeNotification{
-					//			ChangeType: 1, // 1 for new, 2 for fork
-					//			NewBlocks: []ptypes.BlockContext{
-					//				{
-					//					Hash:        block.Hash(),
-					//					ParentHash:  block.ParentHash,
-					//					BlockNumber: block.Number,
-					//					Timestamp:   uint64(block.Time.Unix()),
-					//				},
-					//			},
-					//		}
-					//
-					//		start := time.Now()
-					//		err = tracer.NodeXPusher.PushBlockChangeNotification(blockChange)
-					//		if err == nil {
-					//			log.Info("Push kafka", "dropBlocks", blockChange.DropBlocks, "newBlocks", blockChange.NewBlocks, "kafka elapsed", common.PrettyDuration(time.Since(start)))
-					//		} else {
-					//			log.Error("Failed to push kafka", "err", err, "dropBlocks", blockChange.DropBlocks, "newBlocks", blockChange.NewBlocks)
-					//		}
-					//	}()
-					//}
 
 					store.SetBlock(blockCtx.Idx, block)
 					store.SetBlockIndex(block.Hash(), blockCtx.Idx)
@@ -658,6 +622,51 @@ func consensusCallbackBeginBlockFn(
 			},
 		}
 	}
+}
+
+// rlpEncodedMaxHeaderSizeInBytes is an upper bound of the EVM block header size
+// used for block size calculations.
+const rlpEncodedMaxHeaderSizeInBytes = 1024
+
+// processUserTransactions executes user transactions in order, adding them to
+// the block until all transactions are processed or the gas/block size limit is
+// reached. The function returns a map linking the hashes of accepted
+// transactions to the transaction they are derived from in the given list.
+func processUserTransactions(
+	evmProcessor blockproc.EVMProcessor,
+	blockBuilder *inter.BlockBuilder,
+	orderedTxs []*types.Transaction,
+	userTransactionGasLimit uint64,
+	upgrades opera.Upgrades,
+) (
+	causedBy map[common.Hash]common.Hash,
+) {
+	remainingSize := uint64(math.MaxUint64)
+	if upgrades.Brio {
+		remainingSize = uint64(params.MaxBlockSize - rlpEncodedMaxHeaderSizeInBytes)
+		for _, tx := range blockBuilder.GetTransactions() {
+			txSize := tx.Size()
+			if txSize > remainingSize {
+				// Still call evmProcessor execute with 0 remaining size to track skipped transactions correctly.
+				log.Warn("block filled with only internal transactions")
+				remainingSize = 0
+				break
+			}
+			remainingSize -= txSize
+		}
+	}
+
+	summary := evmProcessor.Execute(orderedTxs, userTransactionGasLimit, remainingSize)
+	for _, processed := range summary.ProcessedTransactions {
+		if processed.Receipt != nil { // < nil if skipped
+			blockBuilder.AddTransaction(
+				processed.Transaction,
+				processed.Receipt,
+			)
+		}
+	}
+
+	return summary.CausedBy
 }
 
 // resolveRandaoMix computes the randao mix to be used by the block processor
@@ -835,15 +844,17 @@ func extractProposalForNextBlock(
 func filterNonPermissibleTransactions(
 	transactions []*types.Transaction,
 	rules *opera.Rules,
+	signer types.Signer,
 	log log.Logger,
 	counter metricCounter,
 ) []*types.Transaction {
+
 	// This filter is only enabled with the Allegro upgrade.
 	if !rules.Upgrades.Allegro {
 		return transactions
 	}
 	return slices.DeleteFunc(transactions, func(tx *types.Transaction) bool {
-		if err := isPermissible(tx, rules); err != nil {
+		if err := isPermissible(tx, rules, signer); err != nil {
 			if log != nil {
 				log.Warn("Non-permissible transaction in the proposal", "tx", tx.Hash(), "issue", err)
 			}
@@ -870,10 +881,29 @@ func filterNonPermissibleTransactions(
 func isPermissible(
 	tx *types.Transaction,
 	rules *opera.Rules,
+	signer types.Signer,
 ) error {
+	return isPermissibleInternal(tx, rules, signer, false)
+}
 
+func isPermissibleInternal(
+	tx *types.Transaction,
+	rules *opera.Rules,
+	signer types.Signer,
+	isInBundle bool,
+) error {
 	if tx == nil {
 		return fmt.Errorf("nil transaction")
+	}
+
+	// -- Check static properties --
+
+	// TODO: verify whether the static checks are backward compatible to allow
+	// this to be enabled before Brio as well.
+	if rules.Upgrades.Brio {
+		if err := evmcore.ValidateTxStatic(tx); err != nil {
+			return err
+		}
 	}
 
 	// -- Check transaction type --
@@ -902,6 +932,33 @@ func isPermissible(
 			return fmt.Errorf(
 				"set code transaction without authorizations is not supported",
 			)
+		}
+	}
+
+	// Starting with Brio, rules for bundled transactions are introduced.
+	if rules.Upgrades.Brio {
+		// Bundle-only transactions must not be included in blocks stand-alone.
+		if !isInBundle && bundle.IsBundleOnly(tx) {
+			return fmt.Errorf("bundle-only transactions are not supported")
+		}
+
+		// Deal with envelopes.
+		if bundle.IsEnvelope(tx) {
+			// Envelopes delivering bundles are ignored if feature is disabled.
+			if !rules.Upgrades.TransactionBundles {
+				return fmt.Errorf("bundle transactions are disabled")
+			}
+
+			// Make sure the envelope does not contain non-permissible transactions.
+			txBundle, err := bundle.OpenEnvelope(signer, tx)
+			if err != nil {
+				return fmt.Errorf("invalid bundle envelope: %w", err)
+			}
+			for _, inner := range txBundle.Transactions {
+				if err := isPermissibleInternal(inner, rules, signer, true); err != nil {
+					return fmt.Errorf("bundle contains non-permissible transaction: %w", err)
+				}
+			}
 		}
 	}
 

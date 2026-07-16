@@ -41,7 +41,7 @@ func TestIntegration_NoTransactions_ProducesAnEmptySchedule(t *testing.T) {
 	state := state.NewMockStateDB(ctrl)
 
 	chain.EXPECT().GetCurrentNetworkRules().Return(opera.Rules{}).AnyTimes()
-	chain.EXPECT().GetEvmChainConfig(gomock.Any()).Return(&params.ChainConfig{})
+	chain.EXPECT().GetCurrentChainConfig().Return(&params.ChainConfig{})
 	chain.EXPECT().StateDB().Return(state)
 	state.EXPECT().Release()
 
@@ -63,7 +63,7 @@ func TestIntegration_OneTransactions_ProducesScheduleWithOneTransaction(t *testi
 	state := state.NewMockStateDB(ctrl)
 
 	chain.EXPECT().GetCurrentNetworkRules().Return(opera.Rules{}).AnyTimes()
-	chain.EXPECT().GetEvmChainConfig(gomock.Any()).Return(&params.ChainConfig{})
+	chain.EXPECT().GetCurrentChainConfig().Return(&params.ChainConfig{})
 	chain.EXPECT().StateDB().Return(state)
 
 	// The scheduler configured for production is running transactions on the
@@ -72,6 +72,7 @@ func TestIntegration_OneTransactions_ProducesScheduleWithOneTransaction(t *testi
 	// main objective is to make the one transaction to be scheduled pass the
 	// execution to make it eligible to be included in the resulting schedule.
 	any := gomock.Any()
+	state.EXPECT().InterTxSnapshot()
 	state.EXPECT().SetTxContext(any, any)
 	state.EXPECT().GetBalance(any).Return(uint256.NewInt(math.MaxInt64)).AnyTimes()
 	state.EXPECT().AddBalance(any, any, any).AnyTimes()

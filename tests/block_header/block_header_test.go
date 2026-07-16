@@ -52,15 +52,11 @@ func TestBlockHeader_FakeGenesis_SatisfiesInvariants(t *testing.T) {
 
 func TestBlockHeader_JsonGenesis_SatisfiesInvariants(t *testing.T) {
 
-	upgrades := map[string]opera.Upgrades{
-		"Sonic":   opera.GetSonicUpgrades(),
-		"Allegro": opera.GetAllegroUpgrades(),
-	}
 	modes := map[string]bool{
 		"DistributedProposer": false,
 		"SingleProposer":      true,
 	}
-	for name, upgrades := range upgrades {
+	for name, upgrades := range opera.GetAllHardForksInOrder() {
 		t.Run(name, func(t *testing.T) {
 			upgrades := upgrades
 			for singleProposer, isSingleProposer := range modes {
@@ -672,7 +668,7 @@ func testScc_HasCommitteeCertificates(
 	results := []struct {
 		ChainId uint64
 	}{}
-	err := client.Client().Call(&results, "sonic_getCommitteeCertificates", "0x0", "max")
+	err := client.Client().Call(&results, "scc_getCommitteeCertificates", "0x0", "max")
 	require.NoError(err)
 	require.NotEmpty(results, "no committee certificates found")
 
@@ -696,7 +692,7 @@ func testScc_HasBlockCertificatesForBlocks(
 		Hash      common.Hash
 		StateRoot common.Hash
 	}{}
-	err := client.Client().Call(&results, "sonic_getBlockCertificates", "0x0", "max")
+	err := client.Client().Call(&results, "scc_getBlockCertificates", "0x0", "max")
 	require.NoError(err)
 
 	// Check that all certificates starting with block 0 are present.

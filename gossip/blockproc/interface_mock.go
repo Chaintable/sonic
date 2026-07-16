@@ -14,10 +14,12 @@ import (
 	reflect "reflect"
 
 	evmcore "github.com/0xsoniclabs/sonic/evmcore"
+	core_types "github.com/0xsoniclabs/sonic/evmcore/core_types"
 	inter "github.com/0xsoniclabs/sonic/inter"
 	iblockproc "github.com/0xsoniclabs/sonic/inter/iblockproc"
 	state "github.com/0xsoniclabs/sonic/inter/state"
 	opera "github.com/0xsoniclabs/sonic/opera"
+	hash "github.com/Fantom-foundation/lachesis-base/hash"
 	idx "github.com/Fantom-foundation/lachesis-base/inter/idx"
 	common "github.com/ethereum/go-ethereum/common"
 	types "github.com/ethereum/go-ethereum/core/types"
@@ -64,7 +66,7 @@ func (mr *MockTxListenerMockRecorder) Finalize() *gomock.Call {
 }
 
 // OnNewLog mocks base method.
-func (m *MockTxListener) OnNewLog(arg0 *types.Log) {
+func (m *MockTxListener) OnNewLog(arg0 *core_types.Log) {
 	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "OnNewLog", arg0)
 }
@@ -214,18 +216,18 @@ func (mr *MockSealerProcessorMockRecorder) EpochSealing() *gomock.Call {
 }
 
 // SealEpoch mocks base method.
-func (m *MockSealerProcessor) SealEpoch() (iblockproc.BlockState, iblockproc.EpochState) {
+func (m *MockSealerProcessor) SealEpoch(lastBlockHash, lastExecPlanChainHash hash.Hash, sealingTxs []*types.Transaction) (iblockproc.BlockState, iblockproc.EpochState) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SealEpoch")
+	ret := m.ctrl.Call(m, "SealEpoch", lastBlockHash, lastExecPlanChainHash, sealingTxs)
 	ret0, _ := ret[0].(iblockproc.BlockState)
 	ret1, _ := ret[1].(iblockproc.EpochState)
 	return ret0, ret1
 }
 
 // SealEpoch indicates an expected call of SealEpoch.
-func (mr *MockSealerProcessorMockRecorder) SealEpoch() *gomock.Call {
+func (mr *MockSealerProcessorMockRecorder) SealEpoch(lastBlockHash, lastExecPlanChainHash, sealingTxs any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SealEpoch", reflect.TypeOf((*MockSealerProcessor)(nil).SealEpoch))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SealEpoch", reflect.TypeOf((*MockSealerProcessor)(nil).SealEpoch), lastBlockHash, lastExecPlanChainHash, sealingTxs)
 }
 
 // Update mocks base method.
@@ -391,17 +393,17 @@ func (m *MockEVMProcessor) EXPECT() *MockEVMProcessorMockRecorder {
 }
 
 // Execute mocks base method.
-func (m *MockEVMProcessor) Execute(txs types.Transactions, gasLimit uint64) []evmcore.ProcessedTransaction {
+func (m *MockEVMProcessor) Execute(txs types.Transactions, gasLimit, sizeLimit uint64) evmcore.ProcessSummary {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Execute", txs, gasLimit)
-	ret0, _ := ret[0].([]evmcore.ProcessedTransaction)
+	ret := m.ctrl.Call(m, "Execute", txs, gasLimit, sizeLimit)
+	ret0, _ := ret[0].(evmcore.ProcessSummary)
 	return ret0
 }
 
 // Execute indicates an expected call of Execute.
-func (mr *MockEVMProcessorMockRecorder) Execute(txs, gasLimit any) *gomock.Call {
+func (mr *MockEVMProcessorMockRecorder) Execute(txs, gasLimit, sizeLimit any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Execute", reflect.TypeOf((*MockEVMProcessor)(nil).Execute), txs, gasLimit)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Execute", reflect.TypeOf((*MockEVMProcessor)(nil).Execute), txs, gasLimit, sizeLimit)
 }
 
 // Finalize mocks base method.
@@ -445,15 +447,15 @@ func (m *MockEVM) EXPECT() *MockEVMMockRecorder {
 }
 
 // Start mocks base method.
-func (m *MockEVM) Start(block iblockproc.BlockCtx, statedb state.StateDB, reader evmcore.DummyChain, onNewLog func(*types.Log), net opera.Rules, evmCfg *params.ChainConfig, prevrandao common.Hash) EVMProcessor {
+func (m *MockEVM) Start(block iblockproc.BlockCtx, statedb state.StateDB, reader evmcore.DummyChain, onNewLog func(*core_types.Log), net opera.Rules, evmCfg *params.ChainConfig, prevrandao common.Hash, metrics evmcore.BlockExecutionMetrics) EVMProcessor {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Start", block, statedb, reader, onNewLog, net, evmCfg, prevrandao)
+	ret := m.ctrl.Call(m, "Start", block, statedb, reader, onNewLog, net, evmCfg, prevrandao, metrics)
 	ret0, _ := ret[0].(EVMProcessor)
 	return ret0
 }
 
 // Start indicates an expected call of Start.
-func (mr *MockEVMMockRecorder) Start(block, statedb, reader, onNewLog, net, evmCfg, prevrandao any) *gomock.Call {
+func (mr *MockEVMMockRecorder) Start(block, statedb, reader, onNewLog, net, evmCfg, prevrandao, metrics any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Start", reflect.TypeOf((*MockEVM)(nil).Start), block, statedb, reader, onNewLog, net, evmCfg, prevrandao)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Start", reflect.TypeOf((*MockEVM)(nil).Start), block, statedb, reader, onNewLog, net, evmCfg, prevrandao, metrics)
 }

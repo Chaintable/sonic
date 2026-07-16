@@ -154,6 +154,8 @@ func initFlags() {
 		flags.RPCGlobalEVMTimeoutFlag,
 		flags.RPCGlobalTxFeeCapFlag,
 		flags.RPCGlobalTimeoutFlag,
+		flags.RPCLogQueryParameterLimit,
+		flags.RPCLogQueryResultLimit,
 		flags.BatchRequestLimit,
 		flags.BatchResponseMaxSize,
 		flags.MaxResponseSizeFlag,
@@ -238,7 +240,7 @@ func initApp() *cli.App {
 	}
 
 	app.After = func(ctx *cli.Context) error {
-		debug.Exit()
+		debug.Exit(ctx)
 		// Close will resets terminal mode.
 		if err := prompt.Stdin.Close(); err != nil {
 			return fmt.Errorf("failed to reset terminal input")
@@ -280,8 +282,8 @@ func lachesisMainInternal(
 			if strings.ToLower(module) == "ftm" {
 				log.Warn(fmt.Sprintf("The 'ftm' API is deprecated, use 'eth' instead (--%s).", flag))
 			}
-			if strings.ToLower(module) == "sonic" {
-				log.Warn(fmt.Sprintf("The 'sonic' API is experimental and should not be used in production environments (--%s).", flag))
+			if strings.ToLower(module) == "scc" {
+				log.Warn(fmt.Sprintf("The 'scc' API is experimental and should not be used in production environments (--%s).", flag))
 			}
 		}
 	}
@@ -395,7 +397,7 @@ func startNode(ctx *cli.Context, stack *node.Node, stop <-chan bool) error {
 			}
 		}
 		// received 10 interrupts - kill the node forcefully
-		debug.Exit() // ensure trace and CPU profile data is flushed.
+		debug.Exit(ctx) // ensure trace and CPU profile data is flushed.
 		debug.LoudPanic("boom")
 	}()
 

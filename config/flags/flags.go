@@ -23,6 +23,7 @@ import (
 	"github.com/0xsoniclabs/sonic/evmcore"
 	"github.com/0xsoniclabs/sonic/gossip"
 	emitter_config "github.com/0xsoniclabs/sonic/gossip/emitter/config"
+	"github.com/0xsoniclabs/sonic/gossip/filters"
 	"github.com/Fantom-foundation/lachesis-base/utils/cachescale"
 	pcsclite "github.com/gballet/go-libpcsclite"
 	"gopkg.in/urfave/cli.v1"
@@ -303,6 +304,16 @@ var (
 		Usage: "Time limit for RPC calls execution",
 		Value: gossip.DefaultConfig(cachescale.Identity).RPCTimeout,
 	}
+	RPCLogQueryParameterLimit = &cli.UintFlag{
+		Name:  "rpc.log-query-parameter-limit",
+		Usage: "Maximum total number of addresses or topics allowed in eth_getLogs filter criteria (0 = no cap)",
+		Value: filters.DefaultConfig().LogQueryParameterLimit,
+	}
+	RPCLogQueryResultLimit = &cli.UintFlag{
+		Name:  "rpc.log-query-result-limit",
+		Usage: "Maximum number of logs that can be returned in a single eth_getLogs query if the query covers a range of more than one block. For a single block, there is no limit (0 = no cap)",
+		Value: filters.DefaultConfig().LogQueryResultLimit,
+	}
 	BatchRequestLimit = &cli.IntFlag{
 		Name:  "rpc.batch-request-limit",
 		Usage: "Maximum number of requests in a batch",
@@ -355,7 +366,7 @@ var (
 	}
 
 	// Event Emission Throttling
-	EnableThrottlingFlag = cli.BoolFlag{
+	EnableThrottlingFlag = cli.BoolTFlag{
 		Name:  "event-throttler",
 		Usage: "Enable event emission throttling based on network conditions.",
 	}
@@ -396,18 +407,6 @@ var (
 			"Setting this value to <=2000 will result in pre-configured cache capacity of 2KB", CacheFlag.Name),
 		Value: 0,
 	}
-
-	//VmTrace = cli.StringFlag{
-	//	Name:  "vmtrace",
-	//	Usage: fmt.Sprintf("type of vm trace", CacheFlag.Name),
-	//	Value: "",
-	//}
-	//
-	//VMTraceJsonConfig = cli.StringFlag{
-	//	Name:  "vmtrace.jsonconfig",
-	//	Usage: fmt.Sprintf("vm trace config", CacheFlag.Name),
-	//	Value: "{}",
-	//}
 	StateDbCacheCapacityFlag = cli.IntFlag{
 		Name: "statedb.cache",
 		Usage: "The number of cached data elements by each StateDb instance. Since this is an experimental feature " +
@@ -427,5 +426,12 @@ var (
 	TEST_ONLY_DisableTransactionPoolValidation = cli.BoolFlag{
 		Name:  "disable-txPool-validation",
 		Usage: "Disable transaction pool validation",
+	}
+
+	TEST_ONLY_EnableTestOnlyApi = cli.BoolFlag{
+		Name: "enable-test-only-api",
+		Usage: "Enable the test-only API, which provides methods that are not intended to be used " +
+			"in production and may be modified at any time in the future. This is intended to be " +
+			"used in integration tests to simulate malicious behavior of nodes.",
 	}
 )

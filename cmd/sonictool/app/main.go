@@ -157,6 +157,9 @@ The archive state is used for RPC - allows to handle state-related RPC queries.
 			Usage:       "Fix database in dirty state",
 			Action:      heal,
 			Description: "Tries to recover database corrupted by incorrect termination of the client.",
+			Flags: []cli.Flag{
+				EpochNumberFlag,
+			},
 		},
 
 		{
@@ -421,13 +424,24 @@ Converts an account private key to a validator private key and saves in the vali
 				},
 			},
 		},
+		{
+			Name:   "analyze",
+			Usage:  "Analyze the disk usage of the chaindata databases",
+			Action: analyzeDbs,
+			Flags: []cli.Flag{
+				flags.DataDirFlag,
+			},
+			Description: `
+Analyzes the disk usage of the chaindata databases and prints for each table the number of entries and their accumulated size.
+`,
+		},
 	}
 
 	app.Before = func(ctx *cli.Context) error {
 		return debug.Setup(ctx)
 	}
 	app.After = func(ctx *cli.Context) error {
-		debug.Exit()
+		debug.Exit(ctx)
 		return nil
 	}
 

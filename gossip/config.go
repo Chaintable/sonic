@@ -111,6 +111,12 @@ type (
 		StructLogLimit int
 
 		RPCBlockExt bool
+
+		// EnableTestOnlyApi enables the test-only API, which provides methods that
+		// are not intended to be used in production and may be modified at any time
+		// in the future. This is intended to be used in integration tests to
+		// simulate malicious behavior of a node.
+		EnableTestOnlyApi bool `toml:"-"` // not to be set in config file, only via CLI flag
 	}
 
 	StoreCacheConfig struct {
@@ -208,7 +214,7 @@ func DefaultConfig(scale cachescale.Func) Config {
 		RPCEVMTimeout: 5 * time.Second,
 
 		GPO: gasprice.Config{
-			MaxGasPrice:      gasprice.DefaultMaxGasPrice,
+			MaxGasPrice:      gasprice.DefaultMaxGasPrice(),
 			MinGasPrice:      new(big.Int),
 			DefaultCertainty: 0.5 * gasprice.DecimalUnit,
 		},

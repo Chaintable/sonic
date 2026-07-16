@@ -17,6 +17,7 @@
 package drivermodule
 
 import (
+	"fmt"
 	"io"
 	"math"
 	"math/big"
@@ -26,7 +27,10 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 
+	"github.com/0xsoniclabs/sonic/evmcore/core_types"
 	"github.com/0xsoniclabs/sonic/gossip/blockproc"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/subsidies"
+	"github.com/0xsoniclabs/sonic/gossip/gasprice"
 	"github.com/0xsoniclabs/sonic/inter"
 	"github.com/0xsoniclabs/sonic/inter/drivertype"
 	"github.com/0xsoniclabs/sonic/inter/iblockproc"
@@ -147,6 +151,14 @@ func (p *DriverTxTransactor) PopInternalTxs(_ iblockproc.BlockCtx, _ iblockproc.
 }
 
 func (p *DriverTxListener) OnNewReceipt(tx *types.Transaction, r *types.Receipt, originator idx.ValidatorID, baseFee *big.Int, blobBaseFee *big.Int) {
+	if p.es.Rules.Upgrades.Brio {
+		p.onNewReceiptPostBrio(originator, tx, r)
+	} else {
+		p.onNewReceiptPreBrio(tx, r, originator, baseFee, blobBaseFee)
+	}
+}
+
+func (p *DriverTxListener) onNewReceiptPreBrio(tx *types.Transaction, r *types.Receipt, originator idx.ValidatorID, baseFee *big.Int, blobBaseFee *big.Int) {
 	if originator == 0 {
 		return
 	}
@@ -181,12 +193,123 @@ func effectiveGasPrice(tx *types.Transaction, baseFee *big.Int) *big.Int {
 	if baseFee == nil {
 		return tx.GasPrice()
 	}
-	// EffectiveGasTip returns an error for negative values, this is no problem here
-	gasTip, _ := tx.EffectiveGasTip(baseFee)
+
+	// To ensure backwards compatibility the gas tip calculation has to be
+	// preserved in its current form. In case of an error due to a negative
+	// result, the computed tip still needs to be used as reported by the
+	// function for backward compatibility with previous client versions.
+	gasTip, _ := gasprice.EffectiveGasTip(tx, baseFee)
 	return new(big.Int).Add(baseFee, gasTip)
 }
 
-func decodeDataBytes(l *types.Log) ([]byte, error) {
+// onNewReceiptPostBrio is called for every transaction accepted in a block,
+// providing the ID of the validator that has proposed the transaction in one of
+// its events, the accepted transaction, and its receipt. It is used to keep
+// track of validator-originated transaction fees.
+//
+// This function is an updated version of the `onNewReceiptPreBrio` function
+// above, which is getting enabled with the Brio flag. Unlike the previous
+// version, this function correctly accounts for fees of sponsored and bundled
+// transactions. The old code is preserved for backward compatibility until the
+// Brio hard-fork and to support full-history syncs.
+func (p *DriverTxListener) onNewReceiptPostBrio(
+	originator idx.ValidatorID,
+	tx *types.Transaction,
+	r *types.Receipt,
+) {
+	p.onNewReceiptPostBrioInternal(originator, tx, r, log.Root())
+}
+
+func (p *DriverTxListener) onNewReceiptPostBrioInternal(
+	originator idx.ValidatorID,
+	tx *types.Transaction,
+	r *types.Receipt,
+	log log.Logger,
+) {
+	fee, err := ComputeEffectiveFee(tx, r)
+	if err != nil {
+		// If there is an error in the fee computation, the safe default
+		// is to avoid attributing it to any validator, so no fees are paid out.
+		if r == nil {
+			log.Warn("error in fee computation", "tx", tx.Hash(), "err", err)
+		} else {
+			log.Warn("error in fee computation", "tx", tx.Hash(),
+				"usedGas", r.GasUsed, "gasPrice", r.EffectiveGasPrice,
+				"blobGasUsed", r.BlobGasUsed, "blobGasPrice", r.BlobGasPrice,
+				"err", err,
+			)
+		}
+		return
+	}
+
+	var blockNumber uint64
+	if r != nil && r.BlockNumber != nil {
+		blockNumber = r.BlockNumber.Uint64()
+	}
+
+	if originator == 0 {
+		log.Warn("failed to attribute transaction to validator, fees got burned", "tx", tx.Hash(), "block", blockNumber, "fees", fee)
+		return
+	}
+
+	originatorIdx := p.es.Validators.GetIdx(originator)
+	originated := p.bs.ValidatorStates[originatorIdx].Originated
+	originated.Add(originated, fee)
+}
+
+// ComputeEffectiveFee returns the effective fee charged for the given
+// transaction and its receipt. For regular transactions, this is simply
+// gasUsed * effectiveGasPrice + blobGasUsed * blobGasPrice. For fee charge
+// transactions used to charge the fees of sponsored transactions, the fee is
+// extracted from the transaction input data. The function returns an error if
+// the effective price could not be determined, for example due to missing
+// receipt data.
+func ComputeEffectiveFee(
+	tx *types.Transaction,
+	r *types.Receipt,
+) (*big.Int, error) {
+	// pre-checks
+	if r == nil {
+		return nil, fmt.Errorf("missing receipt")
+	}
+
+	// Special case: fee charge transactions have their effective fee specified
+	// in the input data, and not in the receipt gas used and gas price fields.
+	// The fees only get charged if the transaction succeeded.
+	if subsidies.IsFeeChargeTransaction(tx) && r.Status == types.ReceiptStatusSuccessful {
+		if fee, err := subsidies.ParseFeeChargeAmount(tx); err == nil {
+			return fee.ToBig(), nil
+		}
+	}
+
+	// Track transactions for network sponsored transactions with tracking have
+	// gasPrice=0, so the effective fee is naturally zero. No special case is
+	// needed; they fall through to the calculation below.
+
+	if r.EffectiveGasPrice == nil {
+		return nil, fmt.Errorf("missing effective gas price in receipt")
+	}
+	if r.BlobGasUsed > 0 && r.BlobGasPrice == nil {
+		return nil, fmt.Errorf("missing blob gas price in receipt")
+	}
+
+	gasFee := new(big.Int).Mul(
+		new(big.Int).SetUint64(r.GasUsed),
+		r.EffectiveGasPrice,
+	)
+
+	blobGasFee := big.NewInt(0)
+	if r.BlobGasUsed > 0 {
+		blobGasFee = new(big.Int).Mul(
+			new(big.Int).SetUint64(r.BlobGasUsed),
+			r.BlobGasPrice,
+		)
+	}
+
+	return new(big.Int).Add(gasFee, blobGasFee), nil
+}
+
+func decodeDataBytes(l *core_types.Log) ([]byte, error) {
 	if len(l.Data) < 32 {
 		return nil, io.ErrUnexpectedEOF
 	}
@@ -201,7 +324,7 @@ func decodeDataBytes(l *types.Log) ([]byte, error) {
 	return l.Data[start+32 : start+32+size], nil
 }
 
-func (p *DriverTxListener) OnNewLog(l *types.Log) {
+func (p *DriverTxListener) OnNewLog(l *core_types.Log) {
 	if l.Address != driver.ContractAddress {
 		return
 	}

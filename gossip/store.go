@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math/big"
 	"math/rand/v2"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -56,6 +57,9 @@ type Store struct {
 		EpochBlocks            kvdb.Store `table:"P"`
 		Genesis                kvdb.Store `table:"g"`
 		UpgradeHeights         kvdb.Store `table:"U"`
+
+		// Tables tracking processed bundles
+		ProcessedBundles kvdb.Store `table:"p"`
 
 		// Sonic Certification Chain tables
 		CommitteeCertificates kvdb.Store `table:"C"`
@@ -96,6 +100,9 @@ type Store struct {
 	// values needed for flush randomizationAdd comment
 	randomOffsetEpoch idx.Epoch // epoch when random offset was selected
 	randomOffset      uint64    // random number re-selected in each epoch between 0 and 99
+
+	// mutex for synchronizing access to processed bundles data
+	processedBundleMutex sync.Mutex
 }
 
 // NewMemStore creates temporary gossip store for testing purposes.
@@ -127,7 +134,7 @@ func NewStore(dbs kvdb.FlushableDBProducer, cfg StoreConfig) (*Store, error) {
 	table.MigrateTables(&s.table, s.mainDB)
 
 	s.initCache()
-	s.evm = evmstore.NewStore(s.mainDB, cfg.EVM)
+	s.evm = evmstore.NewStore(s.mainDB, cfg.EVM, s)
 
 	if err := s.migrateData(); err != nil {
 		return nil, fmt.Errorf("failed to migrate gossip db: %w", err)

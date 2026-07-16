@@ -94,6 +94,12 @@ func MakeNode(ctx *cli.Context, cfg *Config) (*node.Node, *gossip.Service, func(
 		setBootnodes(ctx, bootnodes, &cfg.Node)
 	}
 
+	// Use lightweight KDF in fakenet mode since the password is hardcoded
+	// and there is no security benefit from expensive key derivation.
+	if ctx.GlobalIsSet(FakeNetFlag.Name) {
+		cfg.Node.UseLightweightKDF = true
+	}
+
 	stack, err := MakeNetworkStack(ctx, &cfg.Node)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to unlock validator key: %w", err)
@@ -108,9 +114,21 @@ func MakeNode(ctx *cli.Context, cfg *Config) (*node.Node, *gossip.Service, func(
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to setup account config: %w", err)
 	}
-	valKeystore := valkeystore.NewDefaultFileKeystore(path.Join(keystoreDir, "validator"))
+	newValKeystore := valkeystore.NewDefaultFileKeystore
+	if cfg.Node.UseLightweightKDF {
+		log.Warn("Using lightweight KDF for validator keystore for testing - DO NOT USE THIS IN PRODUCTION")
+		newValKeystore = valkeystore.NewLightFileKeystore
+	}
+	valKeystore := newValKeystore(path.Join(keystoreDir, "validator"))
 	valPubkey := cfg.Emitter.Validator.PubKey
 	if key := getFakeValidatorKey(ctx); key != nil && cfg.Emitter.Validator.ID != 0 {
+		validators := gdb.GetValidators()
+		if !validators.Exists(cfg.Emitter.Validator.ID) {
+			// This error indicates the client tried to initialize as a fake validator
+			// with an ID greater than the number of validators in the genesis.
+			return nil, nil, nil, fmt.Errorf("validator ID %d is not in the validator set", cfg.Emitter.Validator.ID)
+		}
+
 		if err := addFakeValidatorKey(ctx, key, valPubkey, valKeystore); err != nil {
 			return nil, nil, nil, err
 		}
@@ -127,12 +145,15 @@ func MakeNode(ctx *cli.Context, cfg *Config) (*node.Node, *gossip.Service, func(
 	}
 	signer := valkeystore.NewSignerAuthority(valKeystore, cfg.Emitter.Validator.PubKey)
 
+	// shared resource between the tx pool and the emitter
+	bundleEvaluationCache := evmcore.NewBundleEvaluationCache()
+
 	// Create and register a gossip network service.
 	newTxPool := func(reader evmcore.StateReader) gossip.TxPool {
 		if cfg.TxPool.Journal != "" {
 			cfg.TxPool.Journal = path.Join(cfg.Node.DataDir, cfg.TxPool.Journal)
 		}
-		pool := evmcore.NewTxPool(cfg.TxPool, reader.Config(), reader)
+		pool := evmcore.NewTxPool(cfg.TxPool, reader.CurrentConfig(), reader, bundleEvaluationCache)
 		cleanup = append(cleanup, pool.Stop)
 		return pool
 	}
@@ -173,6 +194,7 @@ func MakeNode(ctx *cli.Context, cfg *Config) (*node.Node, *gossip.Service, func(
 			svc.EmitterWorld(signer),
 			gdb.AsBaseFeeSource(),
 			errorLock,
+			bundleEvaluationCache,
 		))
 	}
 

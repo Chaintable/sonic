@@ -42,18 +42,18 @@ func (s *Store) GetLiveStateDb(stateRoot hash.Hash) (state.StateDB, error) {
 	if s.liveStateDb.GetHash() != cc.Hash(stateRoot) {
 		return nil, fmt.Errorf("unable to get Carmen live StateDB - unexpected state root (%x != %x)", s.liveStateDb.GetHash(), stateRoot)
 	}
-	return CreateCarmenStateDb(s.liveStateDb), nil
+	return CreateCarmenStateDb(s.liveStateDb, s.processedBundleStore), nil
 }
 
-// GetTxPoolStateDB obtains StateDB for TxPool evaluation - the latest finalized, read-only.
+// GetCurrentStateDb obtains a read only StateDB for TxPool evaluation - the latest finalized.
 // It is also used in emitter for emitterdriver contract reading at the start of an epoch.
-func (s *Store) GetTxPoolStateDB() (state.StateDB, error) {
+func (s *Store) GetCurrentStateDb() (state.StateDB, error) {
 	// for TxPool and emitter it is ok to provide the newest state (and ignore the expected hash)
 	if s.carmenState == nil {
 		return nil, fmt.Errorf("unable to get TxPool StateDb - EvmStore is not open")
 	}
 	stateDb := carmen.CreateNonCommittableStateDBUsing(s.carmenState)
-	return CreateCarmenStateDb(stateDb), nil
+	return CreateNonCommittableCarmenStateDb(stateDb, s.processedBundleStore), nil
 }
 
 // GetArchiveBlockHeight provides the last block number available in the archive. Returns 0 if not known.
@@ -64,8 +64,8 @@ func (s *Store) GetArchiveBlockHeight() (height uint64, empty bool, err error) {
 	return s.liveStateDb.GetArchiveBlockHeight()
 }
 
-// GetRpcStateDb obtains archive StateDB for RPC requests evaluation
-func (s *Store) GetRpcStateDb(blockNum *big.Int, stateRoot common.Hash) (state.StateDB, error) {
+// GetBlockStateDb returns archived StateDB for the given block and verifies the state root.
+func (s *Store) GetBlockStateDb(blockNum *big.Int, stateRoot common.Hash) (state.StateDB, error) {
 	// always use archive state (live state may mix data from various block heights)
 	if s.liveStateDb == nil {
 		return nil, fmt.Errorf("unable to get RPC StateDb - EvmStore is not open")
@@ -77,7 +77,12 @@ func (s *Store) GetRpcStateDb(blockNum *big.Int, stateRoot common.Hash) (state.S
 	if stateDb.GetHash() != cc.Hash(stateRoot) && blockNum.Sign() != 0 {
 		return nil, fmt.Errorf("unable to get Carmen archive StateDB - unexpected state root (%x != %x)", stateDb.GetHash(), stateRoot)
 	}
-	return CreateCarmenStateDb(stateDb), nil
+	// Note: the execution plan store does not track historic states. Thus, the
+	// accurate data can not be provided, and the processedBundleStore is set to
+	// nil. The result of this function is expected to be used for RPC calls,
+	// which do not support the processing of bundles.
+	var processedBundleStore ProcessedBundleStore = nil
+	return CreateNonCommittableCarmenStateDb(stateDb, processedBundleStore), nil
 }
 
 // CheckLiveStateHash returns if the hash of the current live StateDB hash matches (and fullsync is possible)

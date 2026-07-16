@@ -2,7 +2,7 @@
 all: sonicd sonictool
 
 GOPROXY ?= "https://proxy.golang.org,direct"
-.PHONY: sonicd sonictool
+.PHONY: sonicd sonictool sonicd-debug
 sonicd:
 	GIT_COMMIT=`git rev-list -1 HEAD 2>/dev/null || echo ""` && \
 	GIT_DATE=`git log -1 --date=short --pretty=format:%ct 2>/dev/null || echo ""` && \
@@ -25,6 +25,21 @@ sonictool:
 	    ./cmd/sonictool && \
 	    ./build/sonictool --version
 
+# Builds with go-ethereum's internal debug RPC methods enabled (file-write
+# endpoints such as debug_startCPUProfile are active). For development and
+# diagnostics only — do NOT use in production or on public-facing nodes.
+sonicd-debug:
+	GIT_COMMIT=`git rev-list -1 HEAD 2>/dev/null || echo ""` && \
+	GIT_DATE=`git log -1 --date=short --pretty=format:%ct 2>/dev/null || echo ""` && \
+	GOPROXY=$(GOPROXY) \
+	go build \
+	    -tags enable_debug \
+	    -ldflags "-s -w -X github.com/0xsoniclabs/sonic/version.gitCommit=$${GIT_COMMIT} \
+	                    -X github.com/0xsoniclabs/sonic/version.gitDate=$${GIT_DATE}" \
+	    -o build/sonicd-debug \
+	    ./cmd/sonicd && \
+	    ./build/sonicd-debug version
+
 TAG ?= "latest"
 .PHONY: sonic-image
 sonic-image:
@@ -34,12 +49,12 @@ sonic-image:
 
 .PHONY: test
 test:
-	go test --timeout 30m ./...
+	go test --timeout 30m -failfast ./...
 
 .PHONY: coverage
 coverage:
 	@mkdir -p build ;\
-	go test -coverpkg=./... --timeout=30m -coverprofile=build/coverage.cov ./... && \
+	go test -coverpkg=./... --timeout=30m -failfast -coverprofile=build/coverage.cov ./... && \
 	go tool cover -html build/coverage.cov -o build/coverage.html &&\
 	echo "Coverage report generated in build/coverage.html"
 
@@ -51,7 +66,7 @@ clean:
 
 .PHONY: lint
 lint: 
-	@go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.1.6
+	@go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.1
 	@golangci-lint run ./...
 
 .PHONY: license-check

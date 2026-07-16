@@ -21,7 +21,6 @@ import (
 	"fmt"
 
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
-	"github.com/Fantom-foundation/lachesis-base/kvdb"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 )
@@ -37,17 +36,11 @@ var (
 //go:generate mockgen -source=topicsdb.go -package=topicsdb -destination=topicsdb_mock.go
 
 type Index interface {
-	FindInBlocks(ctx context.Context, from, to idx.Block, pattern [][]common.Hash) (logs []*types.Log, err error)
+	FindInBlocks(ctx context.Context, from, to idx.Block, pattern [][]common.Hash, limit uint) (logs []*types.Log, err error)
 	Push(recs ...*types.Log) error
 	Close()
 
 	WrapTablesAsBatched() (unwrap func())
-}
-
-// NewWithThreadPool creates an Index instance consuming a limited number of threads.
-func NewWithThreadPool(db kvdb.Store) Index {
-	tt := newIndex(db)
-	return &withThreadPool{tt}
 }
 
 func NewDummy() Index {

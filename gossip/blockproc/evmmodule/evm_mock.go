@@ -13,9 +13,9 @@ import (
 	reflect "reflect"
 
 	evmcore "github.com/0xsoniclabs/sonic/evmcore"
+	core_types "github.com/0xsoniclabs/sonic/evmcore/core_types"
 	state "github.com/0xsoniclabs/sonic/inter/state"
 	opera "github.com/0xsoniclabs/sonic/opera"
-	types "github.com/ethereum/go-ethereum/core/types"
 	vm "github.com/ethereum/go-ethereum/core/vm"
 	params "github.com/ethereum/go-ethereum/params"
 	gomock "go.uber.org/mock/gomock"
@@ -45,18 +45,32 @@ func (m *Mock_stateProcessorFactory) EXPECT() *Mock_stateProcessorFactoryMockRec
 	return m.recorder
 }
 
-// NewStateProcessor mocks base method.
-func (m *Mock_stateProcessorFactory) NewStateProcessor(evmCfg *params.ChainConfig, reader evmcore.DummyChain, upgrades opera.Upgrades) _stateProcessor {
+// NewStateProcessorForHeadState mocks base method.
+func (m *Mock_stateProcessorFactory) NewStateProcessorForHeadState(evmCfg *params.ChainConfig, reader evmcore.DummyChain, upgrades opera.Upgrades, metrics evmcore.BlockExecutionMetrics) _stateProcessor {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "NewStateProcessor", evmCfg, reader, upgrades)
+	ret := m.ctrl.Call(m, "NewStateProcessorForHeadState", evmCfg, reader, upgrades, metrics)
 	ret0, _ := ret[0].(_stateProcessor)
 	return ret0
 }
 
-// NewStateProcessor indicates an expected call of NewStateProcessor.
-func (mr *Mock_stateProcessorFactoryMockRecorder) NewStateProcessor(evmCfg, reader, upgrades any) *gomock.Call {
+// NewStateProcessorForHeadState indicates an expected call of NewStateProcessorForHeadState.
+func (mr *Mock_stateProcessorFactoryMockRecorder) NewStateProcessorForHeadState(evmCfg, reader, upgrades, metrics any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewStateProcessor", reflect.TypeOf((*Mock_stateProcessorFactory)(nil).NewStateProcessor), evmCfg, reader, upgrades)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewStateProcessorForHeadState", reflect.TypeOf((*Mock_stateProcessorFactory)(nil).NewStateProcessorForHeadState), evmCfg, reader, upgrades, metrics)
+}
+
+// NewStateProcessorForReplay mocks base method.
+func (m *Mock_stateProcessorFactory) NewStateProcessorForReplay(evmCfg *params.ChainConfig, reader evmcore.DummyChain, upgrades opera.Upgrades) _stateProcessor {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "NewStateProcessorForReplay", evmCfg, reader, upgrades)
+	ret0, _ := ret[0].(_stateProcessor)
+	return ret0
+}
+
+// NewStateProcessorForReplay indicates an expected call of NewStateProcessorForReplay.
+func (mr *Mock_stateProcessorFactoryMockRecorder) NewStateProcessorForReplay(evmCfg, reader, upgrades any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewStateProcessorForReplay", reflect.TypeOf((*Mock_stateProcessorFactory)(nil).NewStateProcessorForReplay), evmCfg, reader, upgrades)
 }
 
 // Mock_stateProcessor is a mock of _stateProcessor interface.
@@ -84,15 +98,15 @@ func (m *Mock_stateProcessor) EXPECT() *Mock_stateProcessorMockRecorder {
 }
 
 // Process mocks base method.
-func (m *Mock_stateProcessor) Process(block *evmcore.EvmBlock, statedb state.StateDB, vmCfg vm.Config, gasLimit uint64, gasUsed *uint64, onNewLog func(*types.Log)) []evmcore.ProcessedTransaction {
+func (m *Mock_stateProcessor) Process(block *evmcore.EvmBlock, statedb state.StateDB, vmCfg vm.Config, gasLimit uint64, gasUsed *uint64, trueTxOffset int, onNewLog func(*core_types.Log), remainingSize uint64) evmcore.ProcessSummary {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Process", block, statedb, vmCfg, gasLimit, gasUsed, onNewLog)
-	ret0, _ := ret[0].([]evmcore.ProcessedTransaction)
+	ret := m.ctrl.Call(m, "Process", block, statedb, vmCfg, gasLimit, gasUsed, trueTxOffset, onNewLog, remainingSize)
+	ret0, _ := ret[0].(evmcore.ProcessSummary)
 	return ret0
 }
 
 // Process indicates an expected call of Process.
-func (mr *Mock_stateProcessorMockRecorder) Process(block, statedb, vmCfg, gasLimit, gasUsed, onNewLog any) *gomock.Call {
+func (mr *Mock_stateProcessorMockRecorder) Process(block, statedb, vmCfg, gasLimit, gasUsed, trueTxOffset, onNewLog, remainingSize any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Process", reflect.TypeOf((*Mock_stateProcessor)(nil).Process), block, statedb, vmCfg, gasLimit, gasUsed, onNewLog)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Process", reflect.TypeOf((*Mock_stateProcessor)(nil).Process), block, statedb, vmCfg, gasLimit, gasUsed, trueTxOffset, onNewLog, remainingSize)
 }

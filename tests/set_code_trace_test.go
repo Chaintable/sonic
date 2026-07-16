@@ -20,7 +20,7 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/0xsoniclabs/sonic/ethapi"
+	"github.com/0xsoniclabs/sonic/api/ethapi"
 	"github.com/0xsoniclabs/sonic/opera"
 	"github.com/0xsoniclabs/sonic/tests/contracts/counter"
 	"github.com/0xsoniclabs/sonic/tests/contracts/sponsoring"
@@ -87,9 +87,6 @@ func TestTrace7702Transaction(t *testing.T) {
 		debugTraceSponsoredTransaction(t, client.Client(), setCodeTx.Hash(), expectedAddress)
 	})
 
-	t.Run("Trace 7702 transaction", func(t *testing.T) {
-		traceSponsoredTransaction(t, client.Client(), setCodeTx.Hash(), expectedAddress)
-	})
 }
 
 type calledAddresses struct {
@@ -128,55 +125,4 @@ func debugTraceSponsoredTransaction(t *testing.T, rpcClient *rpc.Client, txHash 
 	// Inner call
 	require.Equal(expected.Sponsored, res.Calls[0].From)
 	require.Equal(expected.CalledContract, res.Calls[0].To)
-}
-
-func traceSponsoredTransaction(t *testing.T, rpcClient *rpc.Client, txHash common.Hash, expected calledAddresses) {
-	require := require.New(t)
-
-	type traceAction struct {
-		From common.Address `json:"from"`
-		To   common.Address `json:"to"`
-	}
-	type trace struct {
-		Action       traceAction `json:"action"`
-		TraceAddress []int       `json:"traceAddress"`
-		Subtraces    int         `json:"subtraces"`
-	}
-
-	var traces []trace
-	err := rpcClient.Call(&traces, "trace_transaction", txHash)
-	require.NoError(err, "failed to call trace_transaction; %v", err)
-
-	// Transaction tracing is not preserving hierarchical structure of the calls.
-	// Each call has a traceAddress, which contains the index of the call
-	// and subtraces count of the nested contract calls.
-
-	// There should be two contract calls for this transaction
-	// and they don't need to be in order
-	require.Len(traces, 2)
-
-	// First call is the sponsoring transaction targeting the sponsored contract
-	// in code of sponsored EOA. It is a root trace so the traceAddress is empty
-	// and has 1 subtrace
-	require.Contains(traces, trace{
-		Action: traceAction{
-			From: expected.Sponsor,
-			To:   expected.Sponsored,
-		},
-		TraceAddress: []int{},
-		Subtraces:    1,
-	})
-
-	// Second call is the sponsoring contract in code of sponsored EOA
-	// calling the increment function of counter contract,
-	// which acts as a dApp contract. This trace is a first child of a root trace,
-	// so the traceAddress is [0] and has 0 subtraces as there are no other nested calls
-	require.Contains(traces, trace{
-		Action: traceAction{
-			From: expected.Sponsored,
-			To:   expected.CalledContract,
-		},
-		TraceAddress: []int{0},
-		Subtraces:    0,
-	})
 }

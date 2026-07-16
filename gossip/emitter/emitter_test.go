@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/bundle"
 	"github.com/0xsoniclabs/sonic/gossip/emitter/config"
 	"github.com/0xsoniclabs/sonic/integration/makefakegenesis"
 	"github.com/0xsoniclabs/sonic/inter"
@@ -78,7 +79,7 @@ func TestEmitter(t *testing.T) {
 		TxPool:            txPool,
 		EventsSigner:      signer,
 		TransactionSigner: txSigner,
-	}, fixedPriceBaseFeeSource{}, nil)
+	}, fixedPriceBaseFeeSource{}, nil, nil)
 
 	t.Run("init", func(t *testing.T) {
 		external.EXPECT().GetRules().
@@ -142,23 +143,12 @@ func (fixedPriceBaseFeeSource) GetCurrentBaseFee() *big.Int {
 
 func TestEmitter_CreateEvent_CreatesCorrectEventVersion(t *testing.T) {
 
-	tests := map[string]opera.Upgrades{
-		"sonic": {
-			Sonic:   true,
-			Allegro: false,
-		},
-		"allegro": {
-			Sonic:   true,
-			Allegro: true,
-		},
-	}
-
 	validator := idx.ValidatorID(1)
 	builder := pos.NewBuilder()
 	builder.Set(validator, pos.Weight(1))
 	validators := builder.Build()
 
-	for name, upgrades := range tests {
+	for name, upgrades := range opera.GetAllHardForksInOrder() {
 		t.Run(name, func(t *testing.T) {
 
 			cases := map[bool]uint8{
@@ -254,6 +244,66 @@ func TestEmitter_CreateEvent_InvalidValidatorSetIsDetected(t *testing.T) {
 
 	_, err := em.createEvent(nil)
 	require.ErrorContains(t, err, "no validators")
+}
+
+func TestEmitter_CreateEvent_FirstEventInEpoch_IncludesClientVersionAndBlockInfo(t *testing.T) {
+
+	versions := []string{"1.2.3", "4.5.6-rc.1234", "something_else"}
+	blockNumber := []uint64{0, 42, 123456}
+
+	for _, version := range versions {
+		for _, blockNum := range blockNumber {
+			t.Run(fmt.Sprintf("version=%s/blockNumber=%d", version, blockNum), func(t *testing.T) {
+				ctrl := gomock.NewController(t)
+				world := NewMockExternal(ctrl)
+				signer := valkeystore.NewMockSignerAuthority(ctrl)
+
+				validator := idx.ValidatorID(1)
+				builder := pos.NewBuilder()
+				builder.Set(validator, pos.Weight(1))
+				validators := builder.Build()
+
+				em := &Emitter{
+					config: config.Config{
+						VersionToPublish: version,
+						Validator: config.ValidatorConfig{
+							ID: validator,
+						},
+					},
+					world: World{
+						External:     world,
+						EventsSigner: signer,
+					},
+				}
+				em.validators.Store(validators)
+
+				block := inter.NewBlockBuilder().
+					WithNumber(blockNum).
+					Build()
+
+				any := gomock.Any()
+				world.EXPECT().GetRules().Return(opera.Rules{}).AnyTimes()
+				world.EXPECT().GetLastEvent(any, any).AnyTimes()
+				world.EXPECT().Build(any, any).AnyTimes()
+				world.EXPECT().Check(any, any).Return(nil).AnyTimes()
+				world.EXPECT().GetLatestBlock().Return(block).AnyTimes()
+
+				signer.EXPECT().Sign(any).AnyTimes()
+
+				event, err := em.createEvent(nil)
+				require.NoError(t, err)
+				require.EqualValues(t, 1, event.Seq())
+
+				decodedVersion, info, err := DecodeExtraData(event.Extra())
+				require.NoError(t, err)
+				require.NotNil(t, decodedVersion)
+				require.Equal(t, version, *decodedVersion)
+				require.NotNil(t, info)
+				require.Equal(t, blockNum, info.Number)
+				require.Equal(t, block.Hash(), info.Hash)
+			})
+		}
+	}
 }
 
 func TestEmitter_EmitEvent_DoesNotEmit_IfNodeIsNotValidator(t *testing.T) {
@@ -370,7 +420,7 @@ func TestEmitter_EmitEvent_DoesNotEmit_IfWorldIsBusy(t *testing.T) {
 	baseFeeSource.EXPECT().GetCurrentBaseFee()
 	em.baseFeeSource = baseFeeSource
 
-	world.EXPECT().GetRules()
+	world.EXPECT().GetRules().AnyTimes()
 
 	e, err := em.EmitEvent()
 	require.NoError(t, err)
@@ -432,6 +482,214 @@ func TestEmitter_EmitEvent(t *testing.T) {
 	require.NotNil(t, e)
 }
 
+func TestEmitter_EmitEvent_logsErrorAndSkipsMalformedTxs(t *testing.T) {
+	any := gomock.Any()
+
+	validator := idx.ValidatorID(1)
+	builder := pos.NewBuilder()
+	builder.Set(validator, pos.Weight(1))
+	validators := builder.Build()
+
+	tests := map[string]struct {
+		tx               *types.Transaction
+		expectedLog      string
+		expectedArgument string
+	}{
+
+		"overflow GasPrice": {
+			tx: types.NewTx(&types.LegacyTx{
+				GasPrice: new(big.Int).Lsh(big.NewInt(1), 256),
+			}),
+			expectedLog:      "Failed to convert tx fee cap to uint256",
+			expectedArgument: "gasFeeCap",
+		},
+		"overflow GasFeeCap": {
+			tx: types.NewTx(&types.DynamicFeeTx{
+				GasFeeCap: new(big.Int).Lsh(big.NewInt(1), 256),
+			}),
+			expectedLog:      "Failed to convert tx fee cap to uint256",
+			expectedArgument: "gasFeeCap",
+		},
+		"overflow GasTipCap": {
+			tx: types.NewTx(&types.DynamicFeeTx{
+				GasFeeCap: big.NewInt(1),
+				GasTipCap: new(big.Int).Lsh(big.NewInt(1), 256),
+			}),
+			expectedLog:      "Failed to convert tx tip cap to uint256",
+			expectedArgument: "gasTipCap",
+		},
+		"negative GasPrice": {
+			tx: types.NewTx(&types.LegacyTx{
+				GasPrice: big.NewInt(-1),
+			}),
+			expectedLog:      "Failed to convert tx fee cap to uint256",
+			expectedArgument: "gasFeeCap",
+		},
+		"negative GasFeeCap": {
+			tx: types.NewTx(&types.DynamicFeeTx{
+				GasFeeCap: big.NewInt(-1),
+			}),
+			expectedLog:      "Failed to convert tx fee cap to uint256",
+			expectedArgument: "gasFeeCap",
+		},
+		"negative GasTipCap": {
+			tx: types.NewTx(&types.DynamicFeeTx{
+				GasFeeCap: big.NewInt(1),
+				GasTipCap: big.NewInt(-1),
+			}),
+			expectedLog:      "Failed to convert tx tip cap to uint256",
+			expectedArgument: "gasTipCap",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+
+			ctrl := gomock.NewController(t)
+
+			world := NewMockExternal(ctrl)
+			world.EXPECT().GetRules().AnyTimes()
+			world.EXPECT().GetLastEvent(any, any).AnyTimes()
+			world.EXPECT().Build(any, any).AnyTimes()
+			world.EXPECT().Check(any, any).Return(nil).AnyTimes()
+			world.EXPECT().GetLatestBlock().Return(&inter.Block{}).AnyTimes()
+			world.EXPECT().GetLatestBlockIndex().Return(idx.Block(1)).AnyTimes()
+			world.EXPECT().IsBusy().AnyTimes()
+			world.EXPECT().Lock()
+			world.EXPECT().Unlock()
+			world.EXPECT().Process(any)
+			world.EXPECT().Broadcast(any)
+
+			log := logger.NewMockLogger(ctrl)
+
+			txPool := NewMockTxPool(ctrl)
+			txPool.EXPECT().Count().Return(1)
+
+			transactions := map[common.Address]types.Transactions{
+				{1}: {tt.tx},
+			}
+
+			txPool.EXPECT().Pending(gomock.Any()).Return(transactions, nil)
+
+			signer := valkeystore.NewMockSignerAuthority(ctrl)
+			signer.EXPECT().Sign(gomock.Any()).AnyTimes()
+
+			baseFeeSource := NewMockBaseFeeSource(ctrl)
+			baseFeeSource.EXPECT().GetCurrentBaseFee()
+
+			em := &Emitter{
+				baseFeeSource: baseFeeSource,
+				Periodic: logger.Periodic{
+					Instance: logger.Instance{
+						Log: log,
+					},
+				},
+				config: config.Config{
+					MaxTxsPerAddress: 1,
+					Validator: config.ValidatorConfig{
+						ID: validator,
+					},
+				},
+				world: World{
+					External:     world,
+					TxPool:       txPool,
+					EventsSigner: signer,
+				},
+			}
+			em.validators.Store(validators)
+
+			log.EXPECT().Warn(tt.expectedLog, "hash", gomock.Any(), tt.expectedArgument, gomock.Any(), "err", gomock.Any())
+
+			e, err := em.EmitEvent()
+			require.NoError(t, err)
+			require.NotNil(t, e)
+		})
+	}
+}
+
+func TestEmitter_EmitEvent_skippingTxsAlsoSkipsGappedNoncesTxs(t *testing.T) {
+	any := gomock.Any()
+
+	validator := idx.ValidatorID(1)
+	builder := pos.NewBuilder()
+	builder.Set(validator, pos.Weight(1))
+	validators := builder.Build()
+
+	sender := common.Address{1}
+	validTx0 := types.NewTx(&types.LegacyTx{
+		Nonce:    0,
+		GasPrice: big.NewInt(1000),
+		Gas:      21000,
+	})
+	malformedTx1 := types.NewTx(&types.LegacyTx{
+		Nonce:    1,
+		GasPrice: new(big.Int).Neg(new(big.Int).Exp(big.NewInt(2), big.NewInt(256), nil)),
+		Gas:      21000,
+	})
+	validTx2 := types.NewTx(&types.LegacyTx{
+		Nonce:    2,
+		GasPrice: big.NewInt(1000),
+		Gas:      21000,
+	})
+
+	ctrl := gomock.NewController(t)
+
+	world := NewMockExternal(ctrl)
+	world.EXPECT().GetRules().AnyTimes()
+	world.EXPECT().GetLatestBlockIndex().Return(idx.Block(1)).AnyTimes()
+
+	log := logger.NewMockLogger(ctrl)
+	// Expect exactly one warning for the malformed tx at nonce=1.
+	// The valid tx at nonce=2 should be silently skipped (no second warning).
+	log.EXPECT().Warn("Failed to convert tx fee cap to uint256",
+		"hash", malformedTx1.Hash(), "gasFeeCap", malformedTx1.GasPrice(), "err", gomock.Any())
+
+	txPool := NewMockTxPool(ctrl)
+	txPool.EXPECT().Count().Return(3)
+	txPool.EXPECT().Pending(any).Return(
+		map[common.Address]types.Transactions{
+			sender: {validTx0, malformedTx1, validTx2},
+		}, nil,
+	)
+
+	txSigner := NewMockTxSigner(ctrl)
+	txSigner.EXPECT().Sender(any).Return(sender, nil).AnyTimes()
+
+	em := &Emitter{
+		Periodic: logger.Periodic{
+			Instance: logger.Instance{
+				Log: log,
+			},
+		},
+		config: config.Config{
+			MaxTxsPerAddress: 10,
+			Validator: config.ValidatorConfig{
+				ID: validator,
+			},
+		},
+		world: World{
+			External:          world,
+			TxPool:            txPool,
+			TransactionSigner: txSigner,
+		},
+	}
+	em.validators.Store(validators)
+
+	sorted := em.getSortedTxs(big.NewInt(0))
+	require.NotNil(t, sorted)
+
+	// Only the valid tx at nonce=0 should survive.
+	// The malformed tx at nonce=1 was skipped, which breaks the loop
+	// and also drops the valid tx at nonce=2 due to the nonce gap.
+	tx, _ := sorted.Peek()
+	require.NotNil(t, tx, "expected the valid tx at nonce=0 to be present")
+	require.Equal(t, validTx0.Hash(), tx.Hash)
+
+	sorted.Shift()
+	tx, _ = sorted.Peek()
+	require.Nil(t, tx, "expected no more txs after the nonce gap")
+}
+
 func TestEmitter_ThrottlerWorldAdapter_ReturnsNilIfNoEventIsFound(t *testing.T) {
 	validator := idx.ValidatorID(1)
 
@@ -461,4 +719,250 @@ func TestEmitter_ThrottlerWorldAdapter_ReturnsNilIfNoEventIsFound(t *testing.T) 
 		e := wa.GetLastEvent(validator)
 		require.Nil(t, e)
 	})
+}
+
+func TestEmitter_fillExtraData_EncodesExpectedData(t *testing.T) {
+
+	block := inter.NewBlockBuilder().
+		WithNumber(42).
+		Build()
+
+	info := &BlockNumberAndHash{
+		Number: block.Number,
+		Hash:   block.Hash(),
+	}
+
+	tests := map[string]struct {
+		seqNumber idx.Event
+		version   string
+		blockInfo *BlockNumberAndHash
+		want      []byte
+	}{
+		"first event - no version or block info": {
+			seqNumber: 1,
+			want:      []byte{},
+		},
+		"first event - with version": {
+			seqNumber: 1,
+			version:   "1.2.3",
+			want:      []byte("v-1.2.3"),
+		},
+		"first event - with block info": {
+			seqNumber: 1,
+			blockInfo: info,
+			want:      encodeExtraData(nil, info),
+		},
+		"first event - with version and block info": {
+			seqNumber: 1,
+			version:   "1.2.3",
+			blockInfo: info,
+			want:      encodeExtraData(ptr("1.2.3"), info),
+		},
+		"second event - no version or block info": {
+			seqNumber: 2,
+			want:      []byte{},
+		},
+		"second event - with version": {
+			seqNumber: 2,
+			version:   "1.2.3",
+			want:      []byte{},
+		},
+		"second event - with block info": {
+			seqNumber: 2,
+			blockInfo: info,
+			want:      encodeExtraData(nil, info),
+		},
+		"second event - with version and block info": {
+			seqNumber: 2,
+			version:   "1.2.3",
+			blockInfo: info,
+			want:      encodeExtraData(nil, info), // < version should be omitted
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+
+			world := NewMockExternal(ctrl)
+
+			if tt.blockInfo != nil {
+				world.EXPECT().GetLatestBlock().Return(block).AnyTimes()
+			} else {
+				world.EXPECT().GetLatestBlock().Return(nil).AnyTimes()
+			}
+
+			event := &inter.MutableEventPayload{}
+			event.SetSeq(tt.seqNumber)
+
+			em := &Emitter{
+				config: config.Config{
+					VersionToPublish: tt.version,
+				},
+				world: World{External: world},
+			}
+			em.fillExtraData(event)
+
+			require.Equal(t, tt.want, event.Extra())
+		})
+	}
+}
+
+func TestRemoveBundleOnlyTxs_OnlyFiltersTxIfBrioIsEnabled(t *testing.T) {
+
+	sender := common.Address{1}
+
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enabled=%t", enabled), func(t *testing.T) {
+
+			bundleOnlyMark := types.AccessTuple{
+				Address:     bundle.BundleOnly,
+				StorageKeys: []common.Hash{{}},
+			}
+
+			pendingTxs := map[common.Address]types.Transactions{
+				sender: {
+					types.NewTx(&types.AccessListTx{
+						AccessList: []types.AccessTuple{bundleOnlyMark},
+					}),
+				},
+			}
+
+			upgrades := opera.Upgrades{
+				Brio: enabled,
+			}
+
+			removeBundleOnlyTxs(upgrades, pendingTxs)
+
+			if enabled {
+				require.Empty(t, pendingTxs)
+			} else {
+				require.Len(t, pendingTxs, 1)
+				require.Len(t, pendingTxs[sender], 1)
+			}
+		})
+	}
+}
+
+func TestRemoveBundleOnlyTxs_ErasesGappedNoncesAfterRemoval(t *testing.T) {
+	// And deletes sender transactions entry if list is empty
+
+	bundleOnlyMark := types.AccessTuple{
+		Address:     bundle.BundleOnly,
+		StorageKeys: []common.Hash{{}},
+	}
+	sender := common.Address{1}
+
+	for _, position := range []int{0, 1, 2} {
+
+		t.Run(fmt.Sprintf("bundle-only tx at position %d", position), func(t *testing.T) {
+
+			pendingTxs := map[common.Address]types.Transactions{}
+
+			for i := range position {
+				pendingTxs[sender] = append(pendingTxs[sender], types.NewTx(&types.AccessListTx{
+					Nonce: uint64(i),
+				}))
+			}
+
+			pendingTxs[sender] = append(pendingTxs[sender], types.NewTx(&types.AccessListTx{
+				Nonce:      uint64(position),
+				AccessList: []types.AccessTuple{bundleOnlyMark},
+			}))
+			for i := position + 1; i < 3; i++ {
+				pendingTxs[sender] = append(pendingTxs[sender], types.NewTx(&types.AccessListTx{
+					Nonce: uint64(i),
+				}))
+			}
+
+			removeBundleOnlyTxs(opera.Upgrades{
+				Brio:               true,
+				TransactionBundles: true,
+			}, pendingTxs)
+
+			switch position {
+			case 0:
+				// sender does not have any valid transaction, so entry should be deleted
+				require.Empty(t, pendingTxs)
+			case 1, 2:
+				// transactions until position are preserved, the nonces are sequential
+				require.Len(t, pendingTxs, 1)
+				require.Len(t, pendingTxs[sender], position)
+				for i := range position {
+					require.Equal(t, uint64(i), pendingTxs[sender][i].Nonce())
+				}
+			default:
+				t.Fatal("malformed test case", position)
+			}
+		})
+	}
+}
+
+func TestRemoveBundleOnlyTxs_LeavesNonMarkedTxsUnmodified(t *testing.T) {
+	upgrades := opera.Upgrades{
+		TransactionBundles: true,
+	}
+	sender1 := common.Address{1}
+	sender2 := common.Address{2}
+
+	pendingTxs := map[common.Address]types.Transactions{
+		sender1: {
+			types.NewTx(&types.AccessListTx{
+				Nonce: uint64(0),
+			}),
+			types.NewTx(&types.AccessListTx{
+				Nonce: uint64(1),
+			}),
+		},
+		sender2: {
+			types.NewTx(&types.AccessListTx{
+				Nonce: uint64(17),
+			}),
+		},
+	}
+
+	removeBundleOnlyTxs(upgrades, pendingTxs)
+
+	require.Len(t, pendingTxs, 2)
+	require.Len(t, pendingTxs[sender1], 2)
+	require.Equal(t, uint64(0), pendingTxs[sender1][0].Nonce())
+	require.Equal(t, uint64(1), pendingTxs[sender1][1].Nonce())
+	require.Len(t, pendingTxs[sender2], 1)
+	require.Equal(t, uint64(17), pendingTxs[sender2][0].Nonce())
+}
+
+func TestRemoveBundleOnlyTxs_ErasesMultipleBundleMarkedTransactions(t *testing.T) {
+
+	bundleOnlyMark := types.AccessTuple{
+		Address:     bundle.BundleOnly,
+		StorageKeys: []common.Hash{{}},
+	}
+	sender := common.Address{1}
+
+	pendingTxs := map[common.Address]types.Transactions{
+		sender: {
+			types.NewTx(&types.AccessListTx{
+				Nonce: uint64(0),
+			}),
+			types.NewTx(&types.AccessListTx{
+				Nonce:      uint64(1),
+				AccessList: []types.AccessTuple{bundleOnlyMark},
+			}),
+			types.NewTx(&types.AccessListTx{
+				Nonce: uint64(2),
+			}),
+			types.NewTx(&types.AccessListTx{
+				Nonce:      uint64(3),
+				AccessList: []types.AccessTuple{bundleOnlyMark},
+			}),
+		},
+	}
+
+	removeBundleOnlyTxs(opera.Upgrades{
+		Brio: true,
+	}, pendingTxs)
+
+	require.Len(t, pendingTxs, 1)
+	require.Len(t, pendingTxs[sender], 1)
+	require.Equal(t, uint64(0), pendingTxs[sender][0].Nonce())
 }
