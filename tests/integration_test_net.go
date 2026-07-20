@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"math/big"
 	"os"
@@ -30,6 +31,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"runtime/pprof"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +39,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
 
 	sonicd "github.com/0xsoniclabs/sonic/cmd/sonicd/app"
@@ -53,8 +56,9 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
-	geth_crypto "github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
@@ -75,6 +79,31 @@ type IntegrationTestNetSession interface {
 	// multiple endowments may get bundled in the same block.
 	EndowAccounts(addresses []common.Address, value *big.Int) ([]*types.Receipt, error)
 
+	// Send sends the given transaction to the network without waiting for it to
+	// be processed. An error is returned if the submission failed.
+	Send(tx *types.Transaction) (common.Hash, error)
+
+	// SendAll sends the given transactions to the network without waiting for
+	// them to be processed. An error is returned if the submission of any
+	// transaction failed.
+	SendAll(txs []*types.Transaction) ([]common.Hash, error)
+
+	// ForceEmit sends the given transaction to the network by directly causing
+	// a validator to propose it for inclusion in a block, by-passing the
+	// transaction pool. This is intended for testing miscellaneous edge cases
+	// that can not be tested by sending transactions through the normal
+	// transaction submission flow.
+	ForceEmit(ctx context.Context, tx *types.Transaction) (common.Hash, error)
+
+	// ForceEmitAll is the multi-transaction version of ForceEmit.
+	ForceEmitAll(ctx context.Context, txs []*types.Transaction) ([]common.Hash, error)
+
+	// TrySendAll transactions to the network without waiting for them to be
+	// processed. The method returns the list of hashes of accepted transactions,
+	// a map of hashes to error reasons for rejected transactions, and an error
+	// indicating if any other issue prevented the operation from being carried out.
+	TrySendAll(txs []*types.Transaction) (accepted []common.Hash, rejected map[common.Hash]error, error error)
+
 	// Run sends the given transaction to the network and waits for it to be processed.
 	// The resulting receipt is returned.
 	Run(tx *types.Transaction) (*types.Receipt, error)
@@ -88,6 +117,16 @@ type IntegrationTestNetSession interface {
 
 	// GetReceipts waits for the receipts of the given transaction hashes to be available.
 	GetReceipts(txHash []common.Hash) ([]*types.Receipt, error)
+
+	// TryGetReceipt waits for the receipt of the given transaction hash to be
+	// available, returning an error if no receipt can be obtained within the
+	// given timeout or a communication error occurred.
+	TryGetReceipt(timeout time.Duration, txHash common.Hash) (*types.Receipt, error)
+
+	// TryGetReceipts waits for the receipt of the given transaction hashes to be
+	// available, returning an error if not all receipts can be obtained within
+	// the given timeout or a communication error occurred.
+	TryGetReceipts(timeout time.Duration, txHashes []common.Hash) ([]*types.Receipt, error)
 
 	// GetTransactOptions provides transaction options to be used to send a transaction
 	// from the given account.
@@ -125,6 +164,9 @@ type IntegrationTestNetSession interface {
 	// GetClientConnectedToNode returns a client connected to the specified node
 	// in the test network.
 	GetClientConnectedToNode(node int) (*PooledEhtClient, error)
+
+	// GetGenesisJson returns the genesis JSON used to start the network.
+	GetGenesisId() common.Hash
 }
 
 // AsPointer is a utility function that returns a pointer to the given value.
@@ -166,6 +208,12 @@ type IntegrationTestNetOptions struct {
 	// SkipCleanUp indicates whether the network should add its stop function
 	// to t.Cleanup or not.
 	SkipCleanUp bool
+	// Size of live db cache in bytes.
+	LiveCacheSize *int
+	// Size of archive cache in bytes.
+	ArchiveCacheSize *int
+	// The number of cached data elements by each StateDb instance.
+	CacheSize *int
 }
 
 // IntegrationTestNet is a in-process test network for integration tests. When
@@ -189,9 +237,10 @@ type IntegrationTestNetOptions struct {
 // integration test networks can also be used for automated integration and
 // regression tests for client code.
 type IntegrationTestNet struct {
-	options IntegrationTestNetOptions
-	genesis *makefakegenesis.GenesisJson
-	nodes   []integrationTestNode
+	options   IntegrationTestNetOptions
+	genesis   *makefakegenesis.GenesisJson
+	genesisId common.Hash
+	nodes     []integrationTestNode
 
 	sessionsMutex sync.Mutex
 	Session
@@ -281,7 +330,7 @@ func startHeapProfiler(tb testing.TB) {
 // The network start procedure will create a temporary directory and populate with
 // a network genesis block. To retrieve the directory path, use the GetDirectory.
 func StartIntegrationTestNet(
-	t *testing.T,
+	t testing.TB,
 	options ...IntegrationTestNetOptions,
 ) *IntegrationTestNet {
 	t.Helper()
@@ -293,7 +342,7 @@ func StartIntegrationTestNet(
 // is mainly intended for demo and small scale test networks used for development
 // and integration testing in Norma.
 func StartIntegrationTestNetWithFakeGenesis(
-	t *testing.T,
+	t testing.TB,
 	options ...IntegrationTestNetOptions,
 ) *IntegrationTestNet {
 	t.Helper()
@@ -308,14 +357,18 @@ func StartIntegrationTestNetWithFakeGenesis(
 		upgrades = "sonic"
 	} else if *effectiveOptions.Upgrades == opera.GetAllegroUpgrades() {
 		upgrades = "allegro"
+	} else if *effectiveOptions.Upgrades == opera.GetBrioUpgrades() {
+		upgrades = "brio"
 	} else {
-		t.Fatal("fake genesis only supports sonic and allegro feature sets")
+		t.Fatal("fake genesis only supports sonic, allegro and brio feature sets")
 	}
+
+	numNodesString := fmt.Sprintf("%d", effectiveOptions.NumNodes)
 
 	net, err := startIntegrationTestNet(
 		t,
 		t.TempDir(),
-		[]string{"genesis", "fake", "1", "--upgrades", upgrades},
+		[]string{"genesis", "fake", numNodesString, "--upgrades", upgrades},
 		effectiveOptions,
 	)
 	require.NoError(t, err, "failed to start integration test network with fake genesis")
@@ -328,7 +381,7 @@ func StartIntegrationTestNetWithFakeGenesis(
 // is the genesis procedure used in long-running production networks like the
 // Sonic mainnet and the testnet.
 func StartIntegrationTestNetWithJsonGenesis(
-	t *testing.T,
+	t testing.TB,
 	options ...IntegrationTestNetOptions,
 ) *IntegrationTestNet {
 	t.Helper()
@@ -343,8 +396,31 @@ func StartIntegrationTestNetWithJsonGenesis(
 
 	jsonGenesis.Accounts = append(jsonGenesis.Accounts, effectiveOptions.Accounts...)
 
+	// Give extra balance to the first validator, being the account used to
+	// sponsor transactions and endow accounts in tests.
+	sponsorAddress := crypto.PubkeyToAddress(evmcore.FakeKey(1).PublicKey)
+	found := false
+	for i := range jsonGenesis.Accounts {
+		cur := &jsonGenesis.Accounts[i]
+		if cur.Address == sponsorAddress {
+			// enough tokens to endow plenty of accounts
+			extraBalanceForSponsor := new(uint256.Int).Mul(uint256.NewInt(1e18), uint256.NewInt(1e9))
+			balance := cur.Balance
+			cur.Balance = new(uint256.Int).Add(balance, extraBalanceForSponsor)
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "sponsor account not found in genesis accounts")
+
 	// Speed up the block generation time to reduce test time.
 	jsonGenesis.Rules.Emitter.Interval = inter.Timestamp(time.Millisecond)
+
+	// Set a long stall threshold to avoid the network switching into stall
+	// mode during tests. On slow machines or under heavy load each node may
+	// start stalling if the bootstrap phase takes longer than StallThreshold,
+	// this can prevent consensus from being formed.
+	jsonGenesis.Rules.Emitter.StallThreshold = inter.Timestamp(1 * time.Hour)
 
 	encoded, err := json.MarshalIndent(jsonGenesis, "", "  ")
 	require.NoError(t, err, "failed to marshal genesis json")
@@ -365,15 +441,19 @@ func StartIntegrationTestNetWithJsonGenesis(
 	require.NoError(t, err, "failed to start integration test network with json genesis")
 
 	net.genesis = jsonGenesis
+	net.genesisId, err = makefakegenesis.GetGenesisIdFromJson(jsonGenesis)
+	require.NoError(t, err, "failed to get genesis ID from json genesis")
+
 	return net
 }
 
 func startIntegrationTestNet(
-	t *testing.T,
+	t testing.TB,
 	directory string,
 	sonicToolArguments []string,
 	options IntegrationTestNetOptions,
 ) (*IntegrationTestNet, error) {
+
 	net := &IntegrationTestNet{
 		options: options,
 		Session: Session{
@@ -450,6 +530,19 @@ func (n *IntegrationTestNet) start() error {
 				}
 			}()
 
+			liveCacheSize := 1
+			if n.options.LiveCacheSize != nil {
+				liveCacheSize = *n.options.LiveCacheSize
+			}
+			archiveCacheSize := 1
+			if n.options.ArchiveCacheSize != nil {
+				archiveCacheSize = *n.options.ArchiveCacheSize
+			}
+			cacheSize := 1024
+			if n.options.CacheSize != nil {
+				cacheSize = *n.options.CacheSize
+			}
+
 			// start the fakenet sonic node
 			// equivalent to running `sonicd ...` but in this local process
 			args := append([]string{
@@ -464,11 +557,15 @@ func (n *IntegrationTestNet) start() error {
 
 				// http-client option
 				"--http", "--http.addr", "127.0.0.1", "--http.port", "0",
-				"--http.api", "admin,eth,dag,web3,net,txpool,trace,debug,sonic",
+				"--http.api", "admin,eth,dag,web3,net,txpool,trace,debug,sonic,scc,test",
 
 				// websocket-client options
 				"--ws", "--ws.addr", "127.0.0.1", "--ws.port", "0",
 				"--ws.api", "admin,eth",
+
+				// extend rpc timeout to avoid flakes in tests that perform heavy operations or run on slow machines
+				"--rpc.timeout", "60s",
+				"--rpc.evmtimeout", "60s",
 
 				//  net options
 				"--port", "0",
@@ -476,31 +573,39 @@ func (n *IntegrationTestNet) start() error {
 				"--nodiscover",
 
 				// database memory usage options
-				"--statedb.livecache", "1",
-				"--statedb.archivecache", "1",
-				"--statedb.cache", "1024",
+				"--statedb.livecache", fmt.Sprintf("%d", liveCacheSize),
+				"--statedb.archivecache", fmt.Sprintf("%d", archiveCacheSize),
+				"--statedb.cache", fmt.Sprintf("%d", cacheSize),
 
 				"--ipcpath", fmt.Sprintf("%s/sonic.ipc", tmp),
+
+				// enable test-only API
+				"--enable-test-only-api",
 			},
 				// append extra arguments
 				n.options.ClientExtraArguments...,
 			)
 
-			if n.options.ModifyConfig != nil {
-				configFile := filepath.Join(tmp, "config.toml")
-				if err := sonicd.RunWithArgs(append(args, "--dump-config", configFile), nil); err != nil {
-					panic(fmt.Sprint("Failed to dump config file:", err))
-				}
-				var loadedConfig config.Config
-				if err := config.LoadAllConfigs(configFile, &loadedConfig); err != nil {
-					panic(fmt.Sprint("Failed to load default config file:", err))
-				}
-				n.options.ModifyConfig(&loadedConfig)
-				if err := config.SaveAllConfigs(configFile, &loadedConfig); err != nil {
-					panic(fmt.Sprint("Failed to save modified config file:", err))
-				}
-				args = append(args, "--config", configFile)
+			configFile := filepath.Join(tmp, "config.toml")
+			if err := sonicd.RunWithArgs(append(args, "--dump-config", configFile), &sonicd.AppControl{}); err != nil {
+				panic(fmt.Sprint("Failed to dump config file:", err))
 			}
+			var loadedConfig config.Config
+			if err := config.LoadAllConfigs(configFile, &loadedConfig); err != nil {
+				panic(fmt.Sprint("Failed to load default config file:", err))
+			}
+
+			// Enable faster event emission to speed up integration tests.
+			loadedConfig.Emitter.EmitIntervals.Min = time.Millisecond
+			loadedConfig.Emitter.EmitIntervals.Confirming = time.Millisecond
+
+			if n.options.ModifyConfig != nil {
+				n.options.ModifyConfig(&loadedConfig)
+			}
+			if err := config.SaveAllConfigs(configFile, &loadedConfig); err != nil {
+				panic(fmt.Sprint("Failed to save modified config file:", err))
+			}
+			args = append(args, "--config", configFile)
 
 			control := &sonicd.AppControl{
 				NodeIdAnnouncement:   nodeIds[i],
@@ -516,13 +621,13 @@ func (n *IntegrationTestNet) start() error {
 
 	// Collect all enode IDs and HTTP ports.
 	endPointPattern := regexp.MustCompile(`^http://.*:(\d+)$`)
-	nodeEnodes := make([]string, len(n.nodes))
+	enodes := make([]string, len(n.nodes))
 	for i := range n.nodes {
 		id, ok := <-nodeIds[i]
 		if !ok {
 			return fmt.Errorf("failed to start the network, no ID announced for node %d", i)
 		}
-		nodeEnodes[i] = id
+		enodes[i] = id
 		endpoint, ok := <-httpPorts[i]
 		if !ok {
 			return fmt.Errorf("failed to start the network, no HTTP port announced for node %d", i)
@@ -551,29 +656,97 @@ func (n *IntegrationTestNet) start() error {
 		}
 	}
 
-	// connect to blockchain network
-	client, err := n.GetClient()
-	if err != nil {
-		return fmt.Errorf("failed to connect to the Ethereum client: %w", err)
-	}
-	defer client.Close()
+	// Wait for all nodes to be ready to serve requests
+	for i := range n.nodes {
+		err := WaitFor(context.Background(), func(ctx context.Context) (bool, error) {
+			client, err := n.GetClientConnectedToNode(i)
+			if err != nil {
+				return false, fmt.Errorf("failed to connect to the Ethereum client: %w", err)
+			}
+			defer client.Close()
 
-	// wait for the node to be ready to serve requests
-	err = WaitFor(context.Background(), func(ctx context.Context) (bool, error) {
-		_, err := client.ChainID(ctx)
-		return err == nil, nil
-	})
-	if err != nil {
-		return fmt.Errorf("failed to connect to the Ethereum client: %w", err)
-	}
-
-	// Connect the nodes with each other.
-	for i, enode := range nodeEnodes {
-		if err := client.Client().Call(nil, "admin_addPeer", enode); err != nil {
-			return fmt.Errorf("failed to connect to node %d: %v", i, err)
+			_, err = client.ChainID(ctx)
+			return err == nil, nil
+		})
+		if err != nil {
+			return fmt.Errorf("failed to connect to the Ethereum client: %w", err)
 		}
 	}
 
+	// Connect the nodes P2P network together
+	if err := n.connectP2PNetwork(enodes); err != nil {
+		return fmt.Errorf("failed to connect P2P network: %w", err)
+	}
+
+	return nil
+}
+
+// connectP2PNetwork connects all nodes in the network to each other.
+// The current implementation aims to keep the arity of the network low,
+// by connecting each node to the next one in the list, and the last one to the first.
+// This reduces the amount of duplicated messages generated and improves test stability.
+// Regarding latencies, the net is small enough and the local loop is fast enough
+// to have latency not be a concern.
+func (n *IntegrationTestNet) connectP2PNetwork(enodes []string) error {
+	if len(n.nodes) == 1 {
+		return nil
+	}
+
+	// First, register each node's next neighbor in the ring as trusted before
+	// waiting for any connections.
+	//
+	// - Trusted status is important because if a gossip handshake times out),
+	// 	 the gossip layer bans the peer's node ID via discfilter.Ban() and
+	//   subsequent attempts to connect with that peer are rejected in postHandshakeChecks.
+	// 	 Marking the configured ring peers as trusted prevents this rejection.
+	for i := range n.nodes {
+		client, err := n.GetClientConnectedToNode(i)
+		if err != nil {
+			return fmt.Errorf("failed to connect to the Ethereum client: %w", err)
+		}
+
+		enode := enodes[(i+1)%len(n.nodes)]
+		if err := client.Client().Call(nil, "admin_addTrustedPeer", enode); err != nil {
+			client.Close()
+			return fmt.Errorf("failed to add trusted peer on node %d: %v", i, err)
+		}
+		if err := client.Client().Call(nil, "admin_addPeer", enode); err != nil {
+			client.Close()
+			return fmt.Errorf("failed to add peer on node %d: %v", i, err)
+		}
+		client.Close()
+	}
+
+	// Now wait for each node to have the expected number of connections.
+	for i := range n.nodes {
+		client, err := n.GetClientConnectedToNode(i)
+		if err != nil {
+			return fmt.Errorf("failed to connect to the client: %w", err)
+		}
+		defer client.Close()
+
+		err = WaitFor(context.Background(), func(ctx context.Context) (bool, error) {
+			// Fetch the list of connected peers
+			var res []map[string]any
+			if err := client.Client().Call(&res, "admin_peers"); err != nil {
+				return false, fmt.Errorf("failed to query peers on node %d: %v", i, err)
+			}
+
+			// Expect each node to be connected to the previous and next nodes,
+			// except for the first node which will only be connected to the
+			// next at this point in time, and each node in a 2-nodes
+			// network which can only have one connection each.
+			expectedConnections := 1
+			if i > 0 {
+				// min is for the 2-nodes network special case
+				expectedConnections = min(len(n.nodes)-1, 2)
+			}
+			return len(res) >= expectedConnections, nil
+		})
+		if err != nil {
+			return fmt.Errorf("failed to wait for node %d to be connected: %v", i, err)
+		}
+	}
 	return nil
 }
 
@@ -731,6 +904,32 @@ func (n *IntegrationTestNet) GetHeaders() ([]*types.Header, error) {
 	return headers, nil
 }
 
+// GetBlocks returns all blocks on the network from block 0 to the latest block,
+// as reported by node zero.
+func (n *IntegrationTestNet) GetBlocks(ctxt context.Context) ([]*types.Block, error) {
+	client, err := n.GetClient()
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to the Ethereum client: %w", err)
+	}
+	defer client.Close()
+
+	lastBlock, err := client.BlockByNumber(context.Background(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get last block: %w", err)
+	}
+
+	blocks := []*types.Block{}
+	for i := range lastBlock.NumberU64() {
+		block, err := client.BlockByNumber(ctxt, big.NewInt(int64(i)))
+		if err != nil {
+			return nil, fmt.Errorf("failed to get block: %w", err)
+		}
+		blocks = append(blocks, block)
+	}
+
+	return blocks, nil
+}
+
 // SpawnSession creates a new test session on the network.
 // The session is backed by an account which will be used to sign and pay for
 // transactions. By using this function, multiple test sessions can be run in
@@ -750,7 +949,7 @@ func (n *IntegrationTestNet) SpawnSession(t *testing.T) IntegrationTestNetSessio
 	n.sessionsMutex.Lock()
 	defer n.sessionsMutex.Unlock()
 
-	key, _ := geth_crypto.GenerateKey()
+	key, _ := crypto.GenerateKey()
 	nextSessionAccount := Account{
 		PrivateKey: key,
 	}
@@ -764,13 +963,30 @@ func (n *IntegrationTestNet) SpawnSession(t *testing.T) IntegrationTestNetSessio
 	}
 }
 
-// AdvanceEpoch trigger the sealing of an epoch and the epoch number to progress by the given number.
-// The function blocks until the final epoch has been reached. This method can only be called
-// on a validator account.
+// AdvanceEpoch triggers the sealing of the current epoch and advances the epoch
+// number by the specified amount.
+// The function blocks until the target epoch is reached and the sealing block
+// is finalized. This function could wait more than one block after the epoch end
+// but never less than one.
+//
+// Note: This function affects the global network state and may interfere with concurrent transactions.
+// For this reason, it is not exposed via the Session object to avoid side effects in parallel tests.
 func (n *IntegrationTestNet) AdvanceEpoch(t testing.TB, epochs int) {
 	t.Helper()
+
 	client, err := n.GetClient()
 	require.NoError(t, err, "failed to connect to the Ethereum client")
+	defer client.Close()
+
+	//send a noop transaction to trigger a block
+	sendNoop := func() {
+		noopTx := CreateTransaction(t, n, &types.LegacyTx{Gas: 100_000}, n.GetSessionSponsor())
+		// This transaction can fail because the new epoch has new rules,
+		// hence invalidating the values assigned during the transaction creation.
+		// Since the transaction is only meant to trigger a block,
+		// the error is safe to ignore and move on with the epoch change.
+		_ = client.SendTransaction(t.Context(), noopTx)
+	}
 
 	var currentEpoch hexutil.Uint64
 	err = client.Client().Call(&currentEpoch, "eth_currentEpoch")
@@ -791,15 +1007,44 @@ func (n *IntegrationTestNet) AdvanceEpoch(t testing.TB, epochs int) {
 		if err := client.Client().Call(&newEpoch, "eth_currentEpoch"); err != nil {
 			return false, fmt.Errorf("failed to get current epoch: %w", err)
 		}
-		return newEpoch >= currentEpoch+hexutil.Uint64(epochs), nil
+		hasEpochAdvanced := newEpoch >= currentEpoch+hexutil.Uint64(epochs)
+		if !hasEpochAdvanced {
+			sendNoop()
+		}
+		return hasEpochAdvanced, nil
 	})
 	require.NoError(t, err, "failed to wait for epoch to advance")
+
+	// current block could be the previous block to the sealing block
+	// or the sealing block itself. In both cases, waiting for the
+	// block after the current number guarantees that the epoch has indeed
+	// begun. Rules changes and any practical effect of the new epoch are
+	// not materialized until the sealing block is completed. Store will
+	// return the new epoch earlier, since it is updated before the sealing
+	// block is completed.
+	currentBlock, err := client.BlockByNumber(t.Context(), nil)
+	require.NoError(t, err)
+
+	sendNoop()
+	err = WaitFor(t.Context(), func(ctx context.Context) (bool, error) {
+		newBlock, err := client.BlockByNumber(t.Context(), nil)
+		if err != nil {
+			return false, err
+		}
+		advancedEnough := newBlock.Number().Int64() > currentBlock.Number().Int64()+1
+		if !advancedEnough {
+			sendNoop()
+			return false, nil
+		}
+		return true, nil
+	})
+	require.NoError(t, err, "failed to wait seling block to be completed epoch change")
 }
 
 // DeployContract is a utility function handling the deployment of a contract on the network.
 // The contract is deployed with by the network's validator account. The function returns the
 // deployed contract instance and the transaction receipt.
-func DeployContract[T any](n IntegrationTestNetSession, deploy contractDeployer[T]) (*T, *types.Receipt, error) {
+func DeployContract[T any](n IntegrationTestNetSession, deploy ContractDeployer[T]) (*T, *types.Receipt, error) {
 	client, err := n.GetClient()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to connect to the Ethereum client: %w", err)
@@ -831,8 +1076,8 @@ func DeployContract[T any](n IntegrationTestNetSession, deploy contractDeployer[
 	return contract, receipt, nil
 }
 
-// contractDeployer is the type of the deployment functions generated by abigen.
-type contractDeployer[T any] func(*bind.TransactOpts, bind.ContractBackend) (common.Address, *types.Transaction, *T, error)
+// ContractDeployer is the type of the deployment functions generated by abigen.
+type ContractDeployer[T any] func(*bind.TransactOpts, bind.ContractBackend) (common.Address, *types.Transaction, *T, error)
 
 // Session is a test session on the network. It is backed by an account which
 // will be used to sign and pay for transactions.
@@ -877,6 +1122,19 @@ func (s *Session) EndowAccounts(
 	}
 	defer client.Close()
 
+	// Check that there are enough funds in the account to endow the requested accounts.
+	balance, err := client.BalanceAt(context.Background(), s.account.Address(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get balance: %w", err)
+	}
+	totalValue := new(big.Int).Mul(value, big.NewInt(int64(len(addresses))))
+	if balance.Cmp(totalValue) < 0 {
+		return nil, fmt.Errorf("not enough funds to endow accounts: balance %s, required %s",
+			new(big.Float).SetInt(balance).String(), // scientific notation for large numbers
+			new(big.Float).SetInt(totalValue).String(),
+		)
+	}
+
 	chainId, err := client.ChainID(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get chain ID: %w", err)
@@ -910,6 +1168,77 @@ func (s *Session) EndowAccounts(
 		nonce++
 	}
 	return s.RunAll(transactions)
+}
+
+func (s *Session) Send(tx *types.Transaction) (common.Hash, error) {
+	hashes, err := s.SendAll([]*types.Transaction{tx})
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("failed to send transaction: %w", err)
+	}
+	return hashes[0], nil
+}
+
+func (s *Session) SendAll(tx []*types.Transaction) ([]common.Hash, error) {
+	accepted, rejected, err := s.TrySendAll(tx)
+	return accepted, errors.Join(err, errors.Join(slices.Collect(maps.Values(rejected))...))
+}
+
+func (s *Session) TrySendAll(tx []*types.Transaction) ([]common.Hash, map[common.Hash]error, error) {
+	accepted := make([]common.Hash, len(tx))
+	rejected := make(map[common.Hash]error)
+	rejectedMutex := sync.Mutex{}
+	err := runParallelWithClient(s.net, len(tx), func(client *PooledEhtClient, i int) error {
+		err := client.SendTransaction(context.Background(), tx[i])
+		if err != nil {
+			rejectedMutex.Lock()
+			rejected[tx[i].Hash()] = fmt.Errorf("failed to send transaction %d: %w", i, err)
+			rejectedMutex.Unlock()
+		} else {
+			accepted[i] = tx[i].Hash()
+		}
+		return nil
+	})
+	return accepted, rejected, err
+}
+
+func (s *Session) ForceEmit(
+	ctx context.Context,
+	tx *types.Transaction,
+) (common.Hash, error) {
+	res, err := s.ForceEmitAll(ctx, []*types.Transaction{tx})
+	if err != nil {
+		return common.Hash{}, err
+	}
+	return res[0], nil
+}
+
+func (s *Session) ForceEmitAll(ctx context.Context, txs []*types.Transaction) ([]common.Hash, error) {
+	client, err := s.GetClient()
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+
+	data := make([][]byte, len(txs))
+	for i, tx := range txs {
+		encoded, err := rlp.EncodeToBytes(tx)
+		if err != nil {
+			return nil, err
+		}
+		data[i] = encoded
+	}
+
+	err = client.Client().CallContext(ctx, nil, "test_proposeTransactions", data)
+	if err != nil {
+		return nil, err
+	}
+
+	hashes := make([]common.Hash, len(txs))
+	for i, tx := range txs {
+		hashes[i] = tx.Hash()
+	}
+
+	return hashes, nil
 }
 
 // Run sends the given transaction to the network and waits for it to be processed.
@@ -952,6 +1281,23 @@ func (s *Session) GetReceipt(txHash common.Hash) (*types.Receipt, error) {
 }
 
 func (s *Session) GetReceipts(txHash []common.Hash) ([]*types.Receipt, error) {
+	return s.TryGetReceipts(100*time.Second, txHash)
+}
+
+func (s *Session) TryGetReceipt(timeout time.Duration, txHash common.Hash) (*types.Receipt, error) {
+	receipts, err := s.TryGetReceipts(timeout, []common.Hash{txHash})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get receipt: %w", err)
+
+	}
+	return receipts[0], nil
+}
+
+func (s *Session) TryGetReceipts(timeout time.Duration, txHash []common.Hash) ([]*types.Receipt, error) {
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
 	res := make([]*types.Receipt, len(txHash))
 	err := runParallelWithClient(
 		s.net,
@@ -959,7 +1305,7 @@ func (s *Session) GetReceipts(txHash []common.Hash) ([]*types.Receipt, error) {
 		func(client *PooledEhtClient, i int) error {
 			hash := txHash[i]
 
-			err := WaitFor(context.Background(), func(ctx context.Context) (bool, error) {
+			err := WaitFor(ctx, func(ctx context.Context) (bool, error) {
 				receipt, err := client.TransactionReceipt(ctx, hash)
 				if errors.Is(err, ethereum.NotFound) {
 					return false, nil // receipt not yet available, keep waiting
@@ -1108,6 +1454,10 @@ func (s *Session) GetWebSocketClient() (*ethClient, error) {
 
 func (s *Session) NumNodes() int {
 	return s.net.NumNodes()
+}
+
+func (s *Session) GetGenesisId() common.Hash {
+	return s.net.genesisId
 }
 
 // validateAndSanitizeOptions ensures that the options are valid and sets the default values.

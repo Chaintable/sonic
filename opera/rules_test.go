@@ -200,6 +200,11 @@ func TestRules_Copy_CopiesAreDisjoint(t *testing.T) {
 				rule.Upgrades.GasSubsidies = !rule.Upgrades.GasSubsidies
 			},
 		},
+		"upgrade Upgrades.TransactionBundles": {
+			update: func(rule *Rules) {
+				rule.Upgrades.TransactionBundles = !rule.Upgrades.TransactionBundles
+			},
+		},
 	}
 
 	for name, test := range tests {
@@ -230,6 +235,43 @@ func TestRules_MinBaseFee_NoCopy_PreAllegro(t *testing.T) {
 	}
 }
 
+func TestRules_Copy_WorksForNilEntries(t *testing.T) {
+	tests := map[string]func(*Rules){
+		"MinGasPrice is nil": func(rules *Rules) {
+			rules.Economy.MinGasPrice = nil
+		},
+		"MinBaseFee is nil": func(rules *Rules) {
+			rules.Economy.MinBaseFee = nil
+		},
+		"MinGasPrice and MinBaseFee are nil": func(rules *Rules) {
+			rules.Economy.MinGasPrice = nil
+			rules.Economy.MinBaseFee = nil
+		},
+	}
+
+	for name, update := range tests {
+		t.Run(name, func(t *testing.T) {
+			require := require.New(t)
+			defaultRules := FakeNetRules(GetAllegroUpgrades())
+			require.NotNil(defaultRules.Economy.MinGasPrice)
+			require.NotNil(defaultRules.Economy.MinBaseFee)
+
+			original := defaultRules.Copy()
+			update(&original)
+			require.True(
+				original.Economy.MinGasPrice == nil ||
+					original.Economy.MinBaseFee == nil,
+			)
+
+			copy := original.Copy()
+			require.Equal(original, copy)
+
+			require.Equal(original.Economy.MinGasPrice, copy.Economy.MinGasPrice)
+			require.Equal(original.Economy.MinBaseFee, copy.Economy.MinBaseFee)
+		})
+	}
+}
+
 func TestCreateTransientEvmChainConfig_ContainsUpgradesBasedOnConstructionTimeBlockHeigh(t *testing.T) {
 
 	chainID := uint64(12345)
@@ -237,6 +279,7 @@ func TestCreateTransientEvmChainConfig_ContainsUpgradesBasedOnConstructionTimeBl
 	tests := map[string]Upgrades{
 		"Sonic":   GetSonicUpgrades(),
 		"Allegro": GetAllegroUpgrades(),
+		"Brio":    GetBrioUpgrades(),
 	}
 
 	for name, upgrades := range tests {
@@ -274,10 +317,7 @@ func TestCreateTransientEvmChainConfig_RespectsBlockHeightOfUpgradeHeight(t *tes
 	upgrades := []Upgrades{
 		GetSonicUpgrades(),
 		GetAllegroUpgrades(),
-		{
-			Allegro: true,
-			Brio:    true,
-		},
+		GetBrioUpgrades(),
 	}
 
 	var upgradeHeights []UpgradeHeight

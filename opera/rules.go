@@ -24,13 +24,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/0xsoniclabs/sonic/opera/contracts/evmwriter"
-	"github.com/0xsoniclabs/tosca/go/geth_adapter"
-	"github.com/0xsoniclabs/tosca/go/interpreter/lfvm"
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/tracing"
-	"github.com/ethereum/go-ethereum/core/vm"
-
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	ethparams "github.com/ethereum/go-ethereum/params"
 
@@ -49,49 +42,19 @@ const (
 	// hard-forks
 	sonicBit   = 1 << 3
 	allegroBit = 1 << 4
-	brioBit    = 1 << 5
+	_unused    = 1 << 5 // reserved, do not use
+	brioBit    = 1 << 6
 
 	// optional features
 	singleProposerBlockFormationBit = 1 << 63
 	gasSubsidiesBit                 = 1 << 62
+	transactionBundlesBit           = 1 << 61
 
 	MinimumMaxBlockGas          = 5_000_000_000 // < must be large enough to allow internal transactions to seal blocks
 	MaximumMaxBlockGas          = math.MaxInt64 // < should fit into 64-bit signed integers to avoid parsing errors in third-party libraries
 	defaultTargetGasRate        = 15_000_000    // 15 MGas/s
 	defaultEventEmitterInterval = 600 * time.Millisecond
 )
-
-var VmTracer *tracing.Hooks
-
-var DefaultVMConfig = func() vm.Config {
-
-	// For transaction processing, Tosca's LFVM is used.
-	interpreter, err := lfvm.NewInterpreter(lfvm.Config{})
-	if err != nil {
-		panic(err)
-	}
-	lfvmFactory := geth_adapter.NewGethInterpreterFactory(interpreter)
-
-	// For tracing, Geth's EVM is used.
-	gethFactory := func(evm *vm.EVM) vm.Interpreter {
-		return vm.NewEvmInterpreter(evm)
-	}
-
-	return vm.Config{
-		StatePrecompiles: map[common.Address]vm.PrecompiledStateContract{
-			evmwriter.ContractAddress: &evmwriter.PreCompiledContract{},
-		},
-		Interpreter:           lfvmFactory,
-		InterpreterForTracing: gethFactory,
-
-		// Fantom/Sonic modifications
-		ChargeExcessGas:                 true,
-		IgnoreGasFeeCap:                 true,
-		InsufficientBalanceIsNotAnError: true,
-		SkipTipPaymentToCoinbase:        true,
-		Tracer:                          VmTracer,
-	}
-}()
 
 type RulesRLP struct {
 	Name      string
@@ -128,6 +91,13 @@ type GasPowerRules struct {
 }
 
 type GasRulesRLPV1 struct {
+	// MaxEventGas defines the upper bound for gas usage in a single event.
+	//
+	// Starting from Brio and later upgrades, this value is also used to calculate
+	// the maximum gas allowed for a single transaction in EvmStateReader.MaxGasLimit()
+	// https://github.com/0xsoniclabs/sonic/blob/main/gossip/evm_state_reader.go#L47
+	//
+	// This mechanism in Sonic serves as an equivalent to the limit described in EIP-7825.
 	MaxEventGas  uint64
 	EventGas     uint64
 	ParentGas    uint64
@@ -280,6 +250,20 @@ type Upgrades struct {
 	// It can be enabled or disabled at any time. Changes in the feature state
 	// become effective at the start of the next epoch.
 	GasSubsidies bool
+
+	// TransactionBundles enables the transaction bundles feature, allowing
+	// users to submit bundles of transactions that are executed atomically.
+	// This feature is introduced by V2.2 of the Sonic client. It thus
+	//
+	//    MUST ONLY BE ENABLED WHEN ALL NODES ARE RUNNING V2.2 OR LATER
+	//
+	// Any node not running V2.2 or later will ignore this flag, and
+	// transaction bundles will not be accepted.
+	//
+	// Given the conditions stated above, the feature is considered optional.
+	// It can be enabled or disabled at any time. Changes in the feature state
+	// become effective at the start of the next epoch.
+	TransactionBundles bool
 }
 
 // UpgradeHeight contains the information about the block height at which
@@ -369,25 +353,13 @@ func CreateTransientEvmChainConfig(
 	return &cfg
 }
 
-// GetSonicUpgrades contains the feature flags for the Sonic upgrade.
-func GetSonicUpgrades() Upgrades {
-	return Upgrades{
-		Berlin:  true,
-		London:  true,
-		Llr:     false,
-		Sonic:   true,
-		Allegro: false,
-	}
-}
-
-// GetAllegroUpgrades contains the feature flags for the Allegro upgrade.
-func GetAllegroUpgrades() Upgrades {
-	return Upgrades{
-		Berlin:  true,
-		London:  true,
-		Llr:     false,
-		Sonic:   true,
-		Allegro: true,
+// MakeUpgradeHeight constructs an UpgradeHeight instance from the given
+// Upgrades and block height.
+func MakeUpgradeHeight(upgrades Upgrades, height idx.Block) UpgradeHeight {
+	return UpgradeHeight{
+		Upgrades: upgrades,
+		Height:   height,
+		Time:     0, // ignored in Sonic
 	}
 }
 
@@ -512,12 +484,14 @@ func DefaultGasPowerRules() GasPowerRules {
 
 func (r Rules) Copy() Rules {
 	cp := r
-	cp.Economy.MinGasPrice = new(big.Int).Set(r.Economy.MinGasPrice)
+	if r.Economy.MinGasPrice != nil {
+		cp.Economy.MinGasPrice = new(big.Int).Set(r.Economy.MinGasPrice)
+	}
 
 	// there is a bug in pre-Allegro versions that MinBaseFee is not deep copied.
 	// Since switching to deep-copy is not possible in a network running combination
 	// of Allegro and pre-Allegro versions, we need to enable this fix only when Allegro is applied.
-	if cp.Upgrades.Allegro {
+	if cp.Upgrades.Allegro && r.Economy.MinBaseFee != nil {
 		cp.Economy.MinBaseFee = new(big.Int).Set(r.Economy.MinBaseFee)
 	}
 

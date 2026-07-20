@@ -18,13 +18,16 @@ package evmmodule
 
 import (
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 
 	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/evmcore/core_types"
 	"github.com/0xsoniclabs/sonic/gossip/blockproc"
 	"github.com/0xsoniclabs/sonic/gossip/gasprice"
 	"github.com/0xsoniclabs/sonic/inter/iblockproc"
@@ -44,17 +47,18 @@ func (p *EVMModule) Start(
 	block iblockproc.BlockCtx,
 	statedb state.StateDB,
 	reader evmcore.DummyChain,
-	onNewLog func(*types.Log),
+	onNewLog func(*core_types.Log),
 	rules opera.Rules,
 	evmCfg *params.ChainConfig,
 	prevrandao common.Hash,
+	metrics evmcore.BlockExecutionMetrics,
 ) blockproc.EVMProcessor {
 	var prevBlockHash common.Hash
 	var baseFee *big.Int
 	if block.Idx == 0 {
 		baseFee = gasprice.GetInitialBaseFee(rules.Economy)
 	} else {
-		header := reader.GetHeader(common.Hash{}, uint64(block.Idx-1))
+		header := reader.Header(common.Hash{}, uint64(block.Idx-1))
 		prevBlockHash = header.Hash
 		baseFee = gasprice.GetBaseFeeForNextBlock(gasprice.ParentBlockInfo{
 			BaseFee:  header.BaseFee,
@@ -78,6 +82,7 @@ func (p *EVMModule) Start(
 		prevRandao:       prevrandao,
 		gasBaseFee:       baseFee,
 		processorFactory: stateProcessorFactory{},
+		metrics:          metrics,
 	}
 }
 
@@ -85,7 +90,7 @@ type OperaEVMProcessor struct {
 	block    iblockproc.BlockCtx
 	reader   evmcore.DummyChain
 	statedb  state.StateDB
-	onNewLog func(*types.Log)
+	onNewLog func(*core_types.Log)
 	rules    opera.Rules
 	evmCfg   *params.ChainConfig
 
@@ -99,6 +104,8 @@ type OperaEVMProcessor struct {
 	prevRandao   common.Hash
 
 	processorFactory _stateProcessorFactory
+
+	metrics evmcore.BlockExecutionMetrics
 }
 
 func (p *OperaEVMProcessor) evmBlockWith(txs types.Transactions) *evmcore.EvmBlock {
@@ -139,31 +146,24 @@ func (p *OperaEVMProcessor) evmBlockWith(txs types.Transactions) *evmcore.EvmBlo
 	return evmcore.NewEvmBlock(h, txs)
 }
 
-func (p *OperaEVMProcessor) Execute(txs types.Transactions, gasLimit uint64) []evmcore.ProcessedTransaction {
-	evmProcessor := p.processorFactory.NewStateProcessor(p.evmCfg, p.reader, p.rules.Upgrades)
-	txsOffset := uint(len(p.processedTxs))
+func (p *OperaEVMProcessor) Execute(txs types.Transactions, gasLimit uint64, sizeLimit uint64) evmcore.ProcessSummary {
+	evmProcessor := p.processorFactory.NewStateProcessorForHeadState(p.evmCfg, p.reader, p.rules.Upgrades, p.metrics)
+	trueTxsOffset := int(0)
+	for _, tx := range p.processedTxs {
+		if tx.Receipt != nil {
+			trueTxsOffset++
+		}
+	}
 
 	vmConfig := opera.GetVmConfig(p.rules)
 
 	// Process txs
 	evmBlock := p.evmBlockWith(txs)
-	processed := evmProcessor.Process(evmBlock, p.statedb, vmConfig, gasLimit, &p.gasUsed, func(l *types.Log) {
-		// Note: l.Index is properly set before
-		l.TxIndex += txsOffset
-		p.onNewLog(l)
-	})
+	summary := evmProcessor.Process(evmBlock, p.statedb, vmConfig, gasLimit, &p.gasUsed, trueTxsOffset, p.onNewLog, sizeLimit)
 
-	if txsOffset > 0 {
-		for _, p := range processed {
-			if p.Receipt != nil {
-				p.Receipt.TransactionIndex += txsOffset
-			}
-		}
-	}
+	p.processedTxs = append(p.processedTxs, summary.ProcessedTransactions...)
 
-	p.processedTxs = append(p.processedTxs, processed...)
-
-	return processed
+	return summary
 }
 
 func (p *OperaEVMProcessor) Finalize() (evmBlock *evmcore.EvmBlock, numSkipped int, receipts types.Receipts) {
@@ -181,7 +181,18 @@ func (p *OperaEVMProcessor) Finalize() (evmBlock *evmcore.EvmBlock, numSkipped i
 	evmBlock = p.evmBlockWith(transactions)
 
 	// Commit block
-	p.statedb.EndBlock(evmBlock.Number.Uint64())
+	done := p.statedb.EndBlock(evmBlock.Number.Uint64())
+	// Use asynchronous commit for blocks older than one hour to speed up catching up.
+	// For recent blocks (within the last hour), wait for the commit to complete
+	// to ensure the latest state is available for both live and archive databases.
+	if time.Since(evmBlock.Time.Time()) < 1*time.Hour && done != nil {
+		if err := <-done; err != nil {
+			// the underlying database has collected an error during finalize or
+			// a previous operation. State consistency and its persistence my
+			// have been compromised.
+			log.Error("Failed to finalize block %v: %v", evmBlock.Number, err)
+		}
+	}
 
 	// Get state root
 	evmBlock.Root = p.statedb.GetStateHash()
@@ -192,7 +203,14 @@ func (p *OperaEVMProcessor) Finalize() (evmBlock *evmcore.EvmBlock, numSkipped i
 // _stateProcessorFactory is an internal interface to allow introducing mocked
 // state processors in tests.
 type _stateProcessorFactory interface {
-	NewStateProcessor(
+	NewStateProcessorForHeadState(
+		evmCfg *params.ChainConfig,
+		reader evmcore.DummyChain,
+		upgrades opera.Upgrades,
+		metrics evmcore.BlockExecutionMetrics,
+	) _stateProcessor
+
+	NewStateProcessorForReplay(
 		evmCfg *params.ChainConfig,
 		reader evmcore.DummyChain,
 		upgrades opera.Upgrades,
@@ -208,18 +226,29 @@ type _stateProcessor interface {
 		vmCfg vm.Config,
 		gasLimit uint64,
 		gasUsed *uint64,
-		onNewLog func(*types.Log),
-	) []evmcore.ProcessedTransaction
+		trueTxOffset int,
+		onNewLog func(*core_types.Log),
+		remainingSize uint64,
+	) evmcore.ProcessSummary
 }
 
 // stateProcessorFactory is the production implementation of the
 // _stateProcessorFactory using the real evmcore.StateProcessor.
 type stateProcessorFactory struct{}
 
-func (stateProcessorFactory) NewStateProcessor(
+func (stateProcessorFactory) NewStateProcessorForHeadState(
+	evmCfg *params.ChainConfig,
+	reader evmcore.DummyChain,
+	upgrades opera.Upgrades,
+	metrics evmcore.BlockExecutionMetrics,
+) _stateProcessor {
+	return evmcore.NewStateProcessorForHeadState(evmCfg, reader, upgrades, metrics)
+}
+
+func (stateProcessorFactory) NewStateProcessorForReplay(
 	evmCfg *params.ChainConfig,
 	reader evmcore.DummyChain,
 	upgrades opera.Upgrades,
 ) _stateProcessor {
-	return evmcore.NewStateProcessor(evmCfg, reader, upgrades)
+	return evmcore.NewStateProcessorForReplay(evmCfg, reader, upgrades)
 }

@@ -29,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/holiman/uint256"
 
 	"github.com/0xsoniclabs/sonic/evmcore"
 	"github.com/0xsoniclabs/sonic/integration/makegenesis"
@@ -62,17 +63,17 @@ func FakeKey(n idx.ValidatorID) *ecdsa.PrivateKey {
 	return evmcore.FakeKey(uint32(n))
 }
 
-func FakeGenesisStore(num idx.Validator, balance, stake *big.Int, upgrades opera.Upgrades) *genesisstore.Store {
+func FakeGenesisStore(num idx.Validator, balance, stake *uint256.Int, upgrades opera.Upgrades) *genesisstore.Store {
 	return FakeGenesisStoreWithRules(num, balance, stake, opera.FakeNetRules(upgrades))
 }
 
-func FakeGenesisStoreWithRules(num idx.Validator, balance, stake *big.Int, rules opera.Rules) *genesisstore.Store {
+func FakeGenesisStoreWithRules(num idx.Validator, balance, stake *uint256.Int, rules opera.Rules) *genesisstore.Store {
 	return FakeGenesisStoreWithRulesAndStart(num, balance, stake, rules, 2, 1)
 }
 
 func FakeGenesisStoreWithRulesAndStart(
 	num idx.Validator,
-	balance, stake *big.Int,
+	balance, stake *uint256.Int,
 	rules opera.Rules,
 	epoch idx.Epoch,
 	block idx.Block,
@@ -88,7 +89,7 @@ func FakeGenesisStoreWithRulesAndStart(
 		delegations = append(delegations, drivercall.Delegation{
 			Address:            val.Address,
 			ValidatorID:        val.ID,
-			Stake:              stake,
+			Stake:              stake.ToBig(),
 			LockedStake:        new(big.Int),
 			LockupFromEpoch:    0,
 			LockupEndTime:      0,
@@ -123,7 +124,7 @@ func FakeGenesisStoreWithRulesAndStart(
 		builder.SetNonce(params.HistoryStorageAddress, 1)
 	}
 
-	_, genesisStateRoot, err := builder.FinalizeBlockZero(rules, FakeGenesisTime)
+	blockHash, genesisStateRoot, err := builder.FinalizeBlockZero(rules, FakeGenesisTime)
 	if err != nil {
 		panic(err)
 	}
@@ -146,14 +147,17 @@ func FakeGenesisStoreWithRulesAndStart(
 				AdvanceEpochs:         0,
 			},
 			EpochState: iblockproc.EpochState{
-				Epoch:             epoch - 1,
-				EpochStart:        FakeGenesisTime,
-				PrevEpochStart:    FakeGenesisTime - 1,
-				EpochStateRoot:    hash.Hash(genesisStateRoot),
-				Validators:        pos.NewBuilder().Build(),
-				ValidatorStates:   make([]iblockproc.ValidatorEpochState, 0),
-				ValidatorProfiles: make(map[idx.ValidatorID]drivertype.Validator),
-				Rules:             rules,
+				Epoch:                          epoch - 1,
+				EpochStart:                     FakeGenesisTime,
+				PrevEpochStart:                 FakeGenesisTime - 1,
+				EpochStateRoot:                 hash.Hash(genesisStateRoot),
+				Validators:                     pos.NewBuilder().Build(),
+				ValidatorStates:                make([]iblockproc.ValidatorEpochState, 0),
+				ValidatorProfiles:              make(map[idx.ValidatorID]drivertype.Validator),
+				Rules:                          rules,
+				EpochEndBlockHash:              hash.Hash(blockHash),
+				EpochEndExecutionPlanChainHash: hash.Hash{}, // < zero, since no bundles in genesis
+				EpochSealingTxHashes:           nil,         // < no sealing transactions in genesis
 			},
 		},
 		Idx: epoch - 1,

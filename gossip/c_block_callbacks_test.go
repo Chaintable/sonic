@@ -22,10 +22,12 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"fmt"
+	"math"
 	"math/big"
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
@@ -34,16 +36,23 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
 	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/evmcore/core_types"
 	"github.com/0xsoniclabs/sonic/gossip/blockproc"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/bundle"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/evmmodule"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/subsidies"
 	"github.com/0xsoniclabs/sonic/gossip/emitter"
 	"github.com/0xsoniclabs/sonic/gossip/randao"
 	"github.com/0xsoniclabs/sonic/inter"
 	"github.com/0xsoniclabs/sonic/inter/iblockproc"
+	"github.com/0xsoniclabs/sonic/inter/state"
 	"github.com/0xsoniclabs/sonic/inter/validatorpk"
 	"github.com/0xsoniclabs/sonic/logger"
 	"github.com/0xsoniclabs/sonic/opera"
@@ -54,17 +63,13 @@ import (
 
 func TestConsensusCallback(t *testing.T) {
 
-	withSingleProposer := opera.GetAllegroUpgrades()
-	withSingleProposer.SingleProposerBlockFormation = true
-
-	features := map[string]opera.Upgrades{
-		"sonic":           opera.GetSonicUpgrades(),
-		"allegro":         opera.GetAllegroUpgrades(),
-		"single proposer": withSingleProposer,
-	}
-
-	for name, feature := range features {
-		t.Run(name, func(t *testing.T) {
+	for name, feature := range opera.GetAllHardForksInOrder() {
+		t.Run(name+"/single_proposer", func(t *testing.T) {
+			feature.SingleProposerBlockFormation = true
+			testConsensusCallback(t, feature)
+		})
+		t.Run(name+"/distributed_proposer", func(t *testing.T) {
+			feature.SingleProposerBlockFormation = false
 			testConsensusCallback(t, feature)
 		})
 	}
@@ -106,7 +111,7 @@ func testConsensusCallback(t *testing.T, upgrades opera.Upgrades) {
 		require.NoError(err)
 		// subtract fees
 		for i, r := range rr {
-			fee := uint256.NewInt(0).Mul(new(uint256.Int).SetUint64(r.GasUsed), utils.BigIntToUint256(txs[i].GasPrice()))
+			fee := uint256.NewInt(0).Mul(new(uint256.Int).SetUint64(r.GasUsed), utils.BigIntToUint256Clamped(txs[i].GasPrice()))
 			balances[i] = uint256.NewInt(0).Sub(balances[i], fee)
 		}
 		// balance movements
@@ -270,7 +275,7 @@ func TestConsensusCallback_SingleProposer_HandlesBlockSkippingCorrectly(t *testi
 				txListenerModule.EXPECT().Start(_any, _any, _any, _any).Return(txListener)
 
 				evmProcessor := blockproc.NewMockEVMProcessor(ctrl)
-				evmProcessor.EXPECT().Execute(_any, _any).Return(nil).MinTimes(1)
+				evmProcessor.EXPECT().Execute(_any, _any, _any).MinTimes(1)
 				evmProcessor.EXPECT().Finalize().Return(&evmcore.EvmBlock{
 					EvmHeader: evmcore.EvmHeader{
 						BaseFee: big.NewInt(0),
@@ -280,8 +285,8 @@ func TestConsensusCallback_SingleProposer_HandlesBlockSkippingCorrectly(t *testi
 
 				evmModule := blockproc.NewMockEVM(ctrl)
 				evmModule.EXPECT().
-					Start(_any, _any, _any, _any, _any, _any, _any).
-					DoAndReturn(func(block iblockproc.BlockCtx, _, _, _, _, _, _ any) blockproc.EVMProcessor {
+					Start(_any, _any, _any, _any, _any, _any, _any, _any).
+					DoAndReturn(func(block iblockproc.BlockCtx, _, _, _, _, _, _, _ any) blockproc.EVMProcessor {
 						require.Equal(t, test.blockTime, block.Time)
 						return evmProcessor
 					})
@@ -330,6 +335,342 @@ func TestConsensusCallback_SingleProposer_HandlesBlockSkippingCorrectly(t *testi
 			callbackWaitGroup.Wait()
 		})
 	}
+}
+
+// TestConsensusCallback_UsesBlockStartRulesAcrossEpochSealing verifies that a
+// block which seals an epoch is processed using the network rules that were in
+// effect at the start of the block, even though sealing the epoch installs a
+// different set of rules into the epoch state.
+//
+// This is a regression test for the fix that captures a copy of the rules at
+// the beginning of EndBlock (thisBlocksRules) instead of reading es.Rules
+// directly: after SealEpoch reassigns es, the body of the block (the blockFn
+// closure) must still observe the block's original rules.
+//
+// The observable signal is the size limit passed to EVMProcessor.Execute for
+// the user transactions: with the Brio upgrade enabled the limit is the finite
+// block-size budget, while without Brio it is math.MaxUint64. The block starts
+// with Brio enabled and the sealed epoch disables it; therefore observing the
+// finite, Brio-derived limit proves the start rules were used.
+func TestConsensusCallback_UsesBlockStartRulesAcrossEpochSealing(t *testing.T) {
+	t.Parallel()
+	require := require.New(t)
+
+	const maxEmptyBlockSkipPeriod = inter.Timestamp(10_000)
+	const lastBlockTime = inter.Timestamp(1000)
+	// Beyond the skip period so the block is produced rather than skipped.
+	const blockTime = lastBlockTime + maxEmptyBlockSkipPeriod + 1
+
+	// Start the block with the Brio rules enabled, using single-proposer mode.
+	upgrades := opera.GetBrioUpgrades()
+	upgrades.SingleProposerBlockFormation = true
+	store := newInMemoryStoreWithGenesisData(t, upgrades, 1, 2)
+
+	// Create an event carrying a (valid, empty) proposal for the next block,
+	// plus the atropos event of the block.
+	proposalBuilder := inter.MutableEventPayload{}
+	proposalBuilder.SetVersion(3)
+	proposalBuilder.SetEpoch(2)
+	proposalBuilder.SetMedianTime(blockTime)
+	proposalBuilder.SetPayload(inter.Payload{
+		Proposal: &inter.Proposal{
+			Number:     1,
+			ParentHash: store.GetBlock(0).Hash(),
+		},
+	})
+	proposalEvent := proposalBuilder.Build()
+
+	atroposBuilder := inter.MutableEventPayload{}
+	atroposBuilder.SetVersion(3)
+	atroposBuilder.SetEpoch(2)
+	atroposBuilder.SetMedianTime(blockTime)
+	atropos := atroposBuilder.Build()
+
+	events := []*inter.EventPayload{proposalEvent, atropos}
+	for _, event := range events {
+		store.SetEvent(event)
+	}
+
+	// Update block and epoch state to match the test conditions.
+	bs := store.GetBlockState()
+	bs.LastBlock = iblockproc.BlockCtx{Time: lastBlockTime}
+	es := store.GetEpochState()
+	es.Rules.Blocks.MaxEmptyBlockSkipPeriod = maxEmptyBlockSkipPeriod
+	store.SetBlockEpochState(bs, es)
+
+	// The epoch state installed by sealing the epoch deliberately uses a
+	// different set of rules than the block started with: Brio is disabled.
+	sealedEpochState := store.GetEpochState().Copy()
+	sealedEpochState.Rules.Upgrades.Brio = false
+
+	ctrl := gomock.NewController(t)
+	_any := gomock.Any()
+
+	confirmedEventProcessor := blockproc.NewMockConfirmedEventsProcessor(ctrl)
+	confirmedEventProcessor.EXPECT().Finalize(_any, _any).Return(iblockproc.BlockState{})
+	confirmedEventProcessor.EXPECT().ProcessConfirmedEvent(_any).AnyTimes()
+	eventsModule := blockproc.NewMockConfirmedEventsModule(ctrl)
+	eventsModule.EXPECT().Start(_any, _any).Return(confirmedEventProcessor)
+
+	// Record the size limit of every EVMProcessor.Execute call.
+	var mu sync.Mutex
+	var executeSizeLimits []uint64
+	evmProcessor := blockproc.NewMockEVMProcessor(ctrl)
+	evmProcessor.EXPECT().Execute(_any, _any, _any).
+		DoAndReturn(func(_ types.Transactions, _ uint64, sizeLimit uint64) evmcore.ProcessSummary {
+			mu.Lock()
+			defer mu.Unlock()
+			executeSizeLimits = append(executeSizeLimits, sizeLimit)
+			return evmcore.ProcessSummary{}
+		}).MinTimes(1)
+	evmProcessor.EXPECT().Finalize().Return(&evmcore.EvmBlock{
+		EvmHeader: evmcore.EvmHeader{
+			BaseFee: big.NewInt(0),
+			TxHash:  common.Hash{1, 2, 3},
+		},
+	}, 0, nil)
+	evmModule := blockproc.NewMockEVM(ctrl)
+	evmModule.EXPECT().Start(_any, _any, _any, _any, _any, _any, _any, _any).Return(evmProcessor)
+
+	// Sealer reports that this block seals the epoch and returns the sealed
+	// epoch state carrying the changed rules.
+	sealer := blockproc.NewMockSealerProcessor(ctrl)
+	sealer.EXPECT().EpochSealing().Return(true)
+	sealer.EXPECT().Update(_any, _any)
+	sealer.EXPECT().SealEpoch(_any, _any, _any).
+		Return(iblockproc.BlockState{}, sealedEpochState)
+	sealerModule := blockproc.NewMockSealerModule(ctrl)
+	sealerModule.EXPECT().Start(_any, _any, _any).Return(sealer)
+
+	txListener := blockproc.NewMockTxListener(ctrl)
+	txListener.EXPECT().Finalize().Return(iblockproc.BlockState{}).AnyTimes()
+	txListener.EXPECT().Update(_any, _any).AnyTimes()
+	txListener.EXPECT().OnNewReceipt(_any, _any, _any, _any, _any).AnyTimes()
+	txListenerModule := blockproc.NewMockTxListenerModule(ctrl)
+	txListenerModule.EXPECT().Start(_any, _any, _any, _any).Return(txListener)
+
+	txTransactor := blockproc.NewMockTxTransactor(ctrl)
+	txTransactor.EXPECT().PopInternalTxs(_any, _any, _any, _any, _any).
+		Return(types.Transactions{}).AnyTimes()
+
+	proc := BlockProc{
+		EventsModule:     eventsModule,
+		SealerModule:     sealerModule,
+		TxListenerModule: txListenerModule,
+		EVMModule:        evmModule,
+		PreTxTransactor:  txTransactor,
+		PostTxTransactor: txTransactor,
+	}
+
+	// Worker group running the (possibly asynchronous) block processing.
+	stop := make(chan struct{})
+	var workerWaitGroup sync.WaitGroup
+	workers := workers.New(&workerWaitGroup, stop, 1)
+	workers.Start(1)
+	defer func() {
+		close(stop)
+		workerWaitGroup.Wait()
+	}()
+
+	var callbackWaitGroup sync.WaitGroup
+	bootstrapping := false
+	blockBusyFlag := uint32(0)
+	emitters := []*emitter.Emitter{}
+	beginBlock := consensusCallbackBeginBlockFn(
+		workers, &callbackWaitGroup, &blockBusyFlag, store, proc, false, nil, &emitters, nil, &bootstrapping, nil,
+	)
+
+	callbacks := beginBlock(&lachesis.Block{Atropos: atropos.ID()})
+	for _, event := range events {
+		callbacks.ApplyEvent(event)
+	}
+	callbacks.EndBlock()
+	callbackWaitGroup.Wait()
+
+	// The user-transaction execution must use the Brio block-size limit derived
+	// from the block's start rules. With the buggy (post-seal) rules Brio would
+	// be disabled and every Execute call would use math.MaxUint64 instead.
+	mu.Lock()
+	defer mu.Unlock()
+	wantBrioSizeLimit := uint64(params.MaxBlockSize - rlpEncodedMaxHeaderSizeInBytes)
+	require.Contains(executeSizeLimits, wantBrioSizeLimit,
+		"user transactions must be executed with the block's start rules (Brio enabled), got size limits %v", executeSizeLimits)
+}
+
+// TestConsensusCallback_UsesBlockStartRulesForReceiptOriginTracking verifies
+// that the receipt origin tracking performed at the end of block processing
+// uses the network rules in effect at the start of the block, even though
+// sealing the epoch installs a different set of rules.
+//
+// This is a regression test for the same fix as
+// TestConsensusCallback_UsesBlockStartRulesAcrossEpochSealing, targeting the
+// other rule-dependent site inside the blockFn closure: origin tracking is only
+// performed when the Brio upgrade is enabled. With Brio, a receipt's transaction
+// is resolved to the transaction that caused it (via the CausedBy map), and the
+// originator reported to the TxListener is the creator of the event containing
+// that origin transaction. Without Brio, the receipt's own transaction is used.
+//
+// The block starts with Brio enabled and the sealed epoch disables it. The
+// origin transaction is carried by an event created by validator 1, while the
+// receipt's own transaction is not part of any event. Therefore observing
+// validator 1 as the reported originator proves the start rules were used; the
+// buggy (post-seal) behavior would report validator 0.
+func TestConsensusCallback_UsesBlockStartRulesForReceiptOriginTracking(t *testing.T) {
+	t.Parallel()
+	require := require.New(t)
+
+	const maxEmptyBlockSkipPeriod = inter.Timestamp(10_000)
+	const lastBlockTime = inter.Timestamp(1000)
+	const blockTime = lastBlockTime + maxEmptyBlockSkipPeriod + 1
+
+	const originCreator = idx.ValidatorID(1)
+
+	// Start the block with the Brio rules enabled, using single-proposer mode.
+	upgrades := opera.GetBrioUpgrades()
+	upgrades.SingleProposerBlockFormation = true
+	store := newInMemoryStoreWithGenesisData(t, upgrades, 1, 2)
+
+	// The origin transaction is carried (via the block proposal) by a confirmed
+	// event created by validator 1; the receipt's own transaction is not part of
+	// any event.
+	originTx := types.NewTx(&types.LegacyTx{Nonce: 1})
+	receiptTx := types.NewTx(&types.LegacyTx{Nonce: 2})
+
+	// An event carrying a proposal with the origin transaction, created by
+	// validator 1.
+	originBuilder := inter.MutableEventPayload{}
+	originBuilder.SetVersion(3)
+	originBuilder.SetEpoch(2)
+	originBuilder.SetMedianTime(blockTime)
+	originBuilder.SetCreator(originCreator)
+	originBuilder.SetPayload(inter.Payload{
+		Proposal: &inter.Proposal{
+			Number:       1,
+			ParentHash:   store.GetBlock(0).Hash(),
+			Transactions: types.Transactions{originTx},
+		},
+	})
+	originEvent := originBuilder.Build()
+
+	// The atropos event of the block.
+	atroposBuilder := inter.MutableEventPayload{}
+	atroposBuilder.SetVersion(3)
+	atroposBuilder.SetEpoch(2)
+	atroposBuilder.SetMedianTime(blockTime)
+	atropos := atroposBuilder.Build()
+
+	events := []*inter.EventPayload{originEvent, atropos}
+	for _, event := range events {
+		store.SetEvent(event)
+	}
+
+	bs := store.GetBlockState()
+	bs.LastBlock = iblockproc.BlockCtx{Time: lastBlockTime}
+	es := store.GetEpochState()
+	es.Rules.Blocks.MaxEmptyBlockSkipPeriod = maxEmptyBlockSkipPeriod
+	store.SetBlockEpochState(bs, es)
+
+	// Sealing the epoch installs rules with Brio disabled.
+	sealedEpochState := store.GetEpochState().Copy()
+	sealedEpochState.Rules.Upgrades.Brio = false
+
+	ctrl := gomock.NewController(t)
+	_any := gomock.Any()
+
+	confirmedEventProcessor := blockproc.NewMockConfirmedEventsProcessor(ctrl)
+	confirmedEventProcessor.EXPECT().Finalize(_any, _any).Return(iblockproc.BlockState{})
+	confirmedEventProcessor.EXPECT().ProcessConfirmedEvent(_any).AnyTimes()
+	eventsModule := blockproc.NewMockConfirmedEventsModule(ctrl)
+	eventsModule.EXPECT().Start(_any, _any).Return(confirmedEventProcessor)
+
+	// The user-transaction execution reports that receiptTx was caused by
+	// originTx. This mapping is only consulted when Brio is enabled.
+	evmProcessor := blockproc.NewMockEVMProcessor(ctrl)
+	evmProcessor.EXPECT().Execute(_any, _any, _any).
+		Return(evmcore.ProcessSummary{
+			CausedBy: map[common.Hash]common.Hash{
+				receiptTx.Hash(): originTx.Hash(),
+			},
+		}).AnyTimes()
+	evmProcessor.EXPECT().Finalize().Return(&evmcore.EvmBlock{
+		EvmHeader: evmcore.EvmHeader{
+			BaseFee: big.NewInt(0),
+			TxHash:  common.Hash{1, 2, 3},
+		},
+		Transactions: types.Transactions{receiptTx},
+	}, 0, types.Receipts{
+		&types.Receipt{TxHash: receiptTx.Hash(), Status: 1},
+	})
+	evmModule := blockproc.NewMockEVM(ctrl)
+	evmModule.EXPECT().Start(_any, _any, _any, _any, _any, _any, _any, _any).Return(evmProcessor)
+
+	sealer := blockproc.NewMockSealerProcessor(ctrl)
+	sealer.EXPECT().EpochSealing().Return(true)
+	sealer.EXPECT().Update(_any, _any)
+	sealer.EXPECT().SealEpoch(_any, _any, _any).
+		Return(iblockproc.BlockState{}, sealedEpochState)
+	sealerModule := blockproc.NewMockSealerModule(ctrl)
+	sealerModule.EXPECT().Start(_any, _any, _any).Return(sealer)
+
+	// Capture the originator reported to the TxListener for the single receipt.
+	var mu sync.Mutex
+	var reportedOriginators []idx.ValidatorID
+	txListener := blockproc.NewMockTxListener(ctrl)
+	txListener.EXPECT().Finalize().Return(iblockproc.BlockState{}).AnyTimes()
+	txListener.EXPECT().Update(_any, _any).AnyTimes()
+	txListener.EXPECT().OnNewReceipt(_any, _any, _any, _any, _any).
+		Do(func(_ *types.Transaction, _ *types.Receipt, originator idx.ValidatorID, _, _ *big.Int) {
+			mu.Lock()
+			defer mu.Unlock()
+			reportedOriginators = append(reportedOriginators, originator)
+		}).AnyTimes()
+	txListenerModule := blockproc.NewMockTxListenerModule(ctrl)
+	txListenerModule.EXPECT().Start(_any, _any, _any, _any).Return(txListener)
+
+	txTransactor := blockproc.NewMockTxTransactor(ctrl)
+	txTransactor.EXPECT().PopInternalTxs(_any, _any, _any, _any, _any).
+		Return(types.Transactions{}).AnyTimes()
+
+	proc := BlockProc{
+		EventsModule:     eventsModule,
+		SealerModule:     sealerModule,
+		TxListenerModule: txListenerModule,
+		EVMModule:        evmModule,
+		PreTxTransactor:  txTransactor,
+		PostTxTransactor: txTransactor,
+	}
+
+	stop := make(chan struct{})
+	var workerWaitGroup sync.WaitGroup
+	workers := workers.New(&workerWaitGroup, stop, 1)
+	workers.Start(1)
+	defer func() {
+		close(stop)
+		workerWaitGroup.Wait()
+	}()
+
+	var callbackWaitGroup sync.WaitGroup
+	bootstrapping := false
+	blockBusyFlag := uint32(0)
+	emitters := []*emitter.Emitter{}
+	beginBlock := consensusCallbackBeginBlockFn(
+		workers, &callbackWaitGroup, &blockBusyFlag, store, proc, false, nil, &emitters, nil, &bootstrapping, nil,
+	)
+
+	callbacks := beginBlock(&lachesis.Block{Atropos: atropos.ID()})
+	for _, event := range events {
+		callbacks.ApplyEvent(event)
+	}
+	callbacks.EndBlock()
+	callbackWaitGroup.Wait()
+
+	// With the block's start rules (Brio enabled), the receipt is attributed to
+	// the origin transaction's event creator. With the buggy (post-seal) rules,
+	// Brio would be disabled, origin tracking skipped, and validator 0 reported.
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal([]idx.ValidatorID{originCreator}, reportedOriginators,
+		"receipt origin must be tracked using the block's start rules (Brio enabled)")
 }
 
 func TestExtractProposalForNextBlock_NoEvents_ReturnsNoProposal(t *testing.T) {
@@ -634,13 +975,13 @@ func TestFilterNonPermissibleTransactions_InactiveWithoutAllegro(t *testing.T) {
 	valid := types.NewTx(&types.LegacyTx{})
 	invalid := types.NewTx(&types.SetCodeTx{})
 
-	require.NoError(isPermissible(valid, &withAllegro))
-	require.Error(isPermissible(invalid, &withAllegro))
+	require.NoError(isPermissible(valid, &withAllegro, nil))
+	require.Error(isPermissible(invalid, &withAllegro, nil))
 
 	txs := []*types.Transaction{valid, invalid}
 
-	require.Equal(txs, filterNonPermissibleTransactions(txs, &withoutAllegro, nil, nil))
-	require.Equal([]*types.Transaction{valid}, filterNonPermissibleTransactions(txs, &withAllegro, nil, nil))
+	require.Equal(txs, filterNonPermissibleTransactions(txs, &withoutAllegro, nil, nil, nil))
+	require.Equal([]*types.Transaction{valid}, filterNonPermissibleTransactions(txs, &withAllegro, nil, nil, nil))
 }
 
 func TestFilterNonPermissibleTransactions_FiltersNonPermissibleTransactions(t *testing.T) {
@@ -658,7 +999,7 @@ func TestFilterNonPermissibleTransactions_FiltersNonPermissibleTransactions(t *t
 
 	txs := []*types.Transaction{invalid, valid1, invalid, valid2, invalid, invalid, valid3, invalid}
 	want := []*types.Transaction{valid1, valid2, valid3}
-	require.Equal(t, want, filterNonPermissibleTransactions(txs, &rules, nil, nil))
+	require.Equal(t, want, filterNonPermissibleTransactions(txs, &rules, nil, nil, nil))
 }
 
 func TestFilterNonPermissibleTransactions_LogsIssuesOfNonPermissibleTransactions(t *testing.T) {
@@ -679,18 +1020,19 @@ func TestFilterNonPermissibleTransactions_LogsIssuesOfNonPermissibleTransactions
 	log.EXPECT().Warn(
 		"Non-permissible transaction in the proposal",
 		"tx", gomock.Any(),
-		"issue", isPermissible(invalid1, &rules),
+		"issue", isPermissible(invalid1, &rules, nil),
 	)
 
 	log.EXPECT().Warn(
 		"Non-permissible transaction in the proposal",
 		"tx", gomock.Any(),
-		"issue", isPermissible(invalid2, &rules),
+		"issue", isPermissible(invalid2, &rules, nil),
 	)
 
 	filterNonPermissibleTransactions(
 		[]*types.Transaction{invalid1, invalid2},
 		&rules,
+		nil,
 		log,
 		nil,
 	)
@@ -717,11 +1059,16 @@ func TestFilterNonPermissibleTransactions_ReportsNonPermissibleTransactionsToMon
 		[]*types.Transaction{valid, invalid, valid, invalid},
 		&rules,
 		nil,
+		nil,
 		counter,
 	)
 }
 
 func TestIsPermissible_AcceptsPermissibleTransactions(t *testing.T) {
+	signer := types.LatestSignerForChainID(big.NewInt(1))
+	key, err := crypto.GenerateKey()
+	require.NoError(t, err)
+
 	tests := map[string]*types.Transaction{
 		"legacy":      types.NewTx(&types.LegacyTx{}),
 		"access list": types.NewTx(&types.AccessListTx{}),
@@ -730,42 +1077,240 @@ func TestIsPermissible_AcceptsPermissibleTransactions(t *testing.T) {
 		"set code": types.NewTx(&types.SetCodeTx{
 			AuthList: []types.SetCodeAuthorization{{}},
 		}),
+		"empty all-of bundle": bundle.AllOf().Build(),
+		"empty one-of bundle": bundle.OneOf().Build(),
+		"non-empty bundle": bundle.AllOf(
+			bundle.Step(key, &types.AccessListTx{}),
+			bundle.Step(key, &types.AccessListTx{}),
+		).Build(),
+		"composed bundle": bundle.OneOf(
+			bundle.AllOf(
+				bundle.Step(key, &types.AccessListTx{}),
+			),
+		).Build(),
+		"nested bundle": bundle.AllOf(
+			bundle.Step(key, bundle.AllOf(
+				bundle.Step(key, &types.AccessListTx{}),
+			).Build()),
+		).Build(),
 	}
 
 	rules := opera.Rules{
 		Upgrades: opera.Upgrades{
-			Allegro: true,
+			Allegro:            true,
+			Brio:               true,
+			TransactionBundles: true,
 		},
 	}
 	for name, tx := range tests {
 		t.Run(name, func(t *testing.T) {
-			require.NoError(t, isPermissible(tx, &rules))
+			require.NoError(t, isPermissible(tx, &rules, signer))
 		})
 	}
 }
 
-func TestIsPermissible_AcceptsSetCodeTransactionsOnlyInAllegro(t *testing.T) {
+func TestIsPermissible_AcceptsSetCodeTransactionsInAllegroAndBeyond(t *testing.T) {
 	tx := types.NewTx(&types.SetCodeTx{
 		AuthList: []types.SetCodeAuthorization{{}},
 	})
 
-	for _, enabled := range []bool{false, true} {
-		t.Run(fmt.Sprintf("allegro=%t", enabled), func(t *testing.T) {
-			rules := opera.Rules{
-				Upgrades: opera.Upgrades{
-					Allegro: enabled,
-				},
-			}
-			if enabled {
-				require.NoError(t, isPermissible(tx, &rules))
+	for name, updates := range opera.GetAllHardForksInOrder() {
+		t.Run(name, func(t *testing.T) {
+			rules := opera.Rules{Upgrades: updates}
+			if updates.Allegro {
+				require.NoError(t, isPermissible(tx, &rules, nil))
 			} else {
 				require.ErrorContains(t,
-					isPermissible(tx, &rules),
+					isPermissible(tx, &rules, nil),
 					"unsupported transaction type",
 				)
 			}
 		})
 	}
+}
+
+func TestIsPermissible_WithBrio_RejectsTransactionsFailingStaticChecks(t *testing.T) {
+
+	invalidTx := types.NewTx(&types.DynamicFeeTx{
+		GasFeeCap: big.NewInt(-1), // Invalid gas price
+	})
+
+	issue := evmcore.ValidateTxStatic(invalidTx)
+	require.Error(t, issue)
+
+	// Before Brio, static checks are ignored for permissibility.
+	rules := opera.Rules{Upgrades: opera.Upgrades{Brio: false}}
+	require.NoError(t, isPermissible(invalidTx, &rules, nil))
+
+	// With Brio, transactions failing static checks are not permissible.
+	rules = opera.Rules{Upgrades: opera.Upgrades{Brio: true}}
+	require.ErrorIs(t, isPermissible(invalidTx, &rules, nil), issue)
+}
+
+func TestIsPermissible_WithBrio_DetectsInvalidTransactionsInBundles(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	require.NoError(t, err)
+
+	invalidInnerTx := types.NewTx(&types.DynamicFeeTx{
+		GasFeeCap: new(big.Int).Lsh(big.NewInt(1), 256), // Invalid fee cap
+	})
+	issue := evmcore.ValidateTxStatic(invalidInnerTx)
+	require.Error(t, issue)
+
+	signer := types.LatestSignerForChainID(big.NewInt(1))
+
+	tests := map[string]*types.Transaction{
+		"invalid transaction in bundle": bundle.NewBuilder().AllOf(
+			bundle.Step(key, invalidInnerTx),
+		).WithSigner(signer).Build(),
+		"invalid nested transaction in bundle": bundle.NewBuilder().OneOf(
+			bundle.Step(key, bundle.NewBuilder().AllOf(
+				bundle.Step(key, invalidInnerTx),
+			).WithSigner(signer).Build()),
+		).WithSigner(signer).Build(),
+	}
+
+	for name, tx := range tests {
+		t.Run(name, func(t *testing.T) {
+			rules := opera.Rules{Upgrades: opera.Upgrades{
+				Brio:               true,
+				TransactionBundles: true,
+			}}
+			got := isPermissible(tx, &rules, signer)
+			require.ErrorIs(t, got, issue)
+		})
+	}
+}
+
+func TestIsPermissible_WithBrio_RejectsBundleOnlyTransactions(t *testing.T) {
+	require := require.New(t)
+	tx := types.NewTx(&types.AccessListTx{
+		AccessList: []types.AccessTuple{{
+			Address: bundle.BundleOnly,
+		}},
+	})
+
+	require.True(bundle.IsBundleOnly(tx))
+
+	// Before Brio, this transaction should be permissible.
+	rules := opera.Rules{Upgrades: opera.Upgrades{Brio: false}}
+	require.NoError(isPermissible(tx, &rules, nil))
+
+	// With Brio, this transaction should not be permissible.
+	rules.Upgrades.Brio = true
+	require.ErrorContains(isPermissible(tx, &rules, nil), "bundle-only transactions are not supported")
+}
+
+func TestIsPermissible_WithBrio_BundlesDisabled_RejectsBundleEnvelopes(t *testing.T) {
+	require := require.New(t)
+	signer := types.LatestSignerForChainID(big.NewInt(1))
+	tx := bundle.AllOf().Build()
+
+	require.True(bundle.IsEnvelope(tx))
+
+	// Before Brio, envelopes are accepted, but not interpreted as such.
+	rules := opera.Rules{Upgrades: opera.Upgrades{Brio: false}}
+	require.NoError(isPermissible(tx, &rules, signer))
+
+	// With Brio, envelopes are rejected if bundles are disabled.
+	rules.Upgrades.Brio = true
+	rules.Upgrades.TransactionBundles = false
+	require.ErrorContains(isPermissible(tx, &rules, signer), "bundle transactions are disabled")
+
+	// If bundles are enabled, envelopes should be accepted.
+	rules.Upgrades.TransactionBundles = true
+	require.NoError(isPermissible(tx, &rules, signer))
+}
+
+func TestIsPermissible_NonOpenableEnvelope_IsRejectedWithBrio(t *testing.T) {
+	require := require.New(t)
+	tx := types.NewTx(&types.LegacyTx{
+		To:   &bundle.BundleProcessor,
+		Data: []byte("not a valid encoding"),
+	})
+
+	require.True(bundle.IsEnvelope(tx))
+
+	// Before Brio, this is accepted.
+	rules := opera.Rules{Upgrades: opera.Upgrades{Brio: false}}
+	require.NoError(isPermissible(tx, &rules, nil))
+
+	// With Brio, and bundles disabled, this is rejected for being an envelope.
+	rules.Upgrades.Brio = true
+	rules.Upgrades.TransactionBundles = false
+	require.ErrorContains(isPermissible(tx, &rules, nil), "bundle transactions are disabled")
+
+	// With Brio and bundles enabled, this should be rejected as it's an invalid envelope.
+	rules.Upgrades.Brio = true
+	rules.Upgrades.TransactionBundles = true
+	require.ErrorContains(isPermissible(tx, &rules, nil), "invalid bundle envelope")
+}
+
+func TestIsPermissible_BundlesWithInvalidContent_Rejected(t *testing.T) {
+	require := require.New(t)
+	signer := types.LatestSignerForChainID(big.NewInt(1))
+
+	key, err := crypto.GenerateKey()
+	require.NoError(err)
+
+	tx, txBundle, _ := bundle.NewBuilder().
+		With(bundle.Step(key, &types.SetCodeTx{
+			// Invalid, since there are no authorizations.
+		})).
+		BuildEnvelopeBundleAndPlan()
+
+	rules := opera.Rules{Upgrades: opera.Upgrades{
+		Allegro:            true,
+		Brio:               true,
+		TransactionBundles: true,
+	}}
+
+	txs := txBundle.GetTransactionsInReferencedOrder()
+
+	// The first transaction in the bundle is not permissible.
+	issue := isPermissible(txs[0], &rules, signer)
+	require.Error(issue)
+
+	// Thus, the bundle should be rejected.
+	got := isPermissible(tx, &rules, signer)
+	require.ErrorContains(got, "bundle contains non-permissible transaction")
+	require.ErrorContains(got, issue.Error())
+}
+
+func TestIsPermissible_BundlesWithInvalidNestedContent_Rejected(t *testing.T) {
+	require := require.New(t)
+	signer := types.LatestSignerForChainID(big.NewInt(1))
+
+	key, err := crypto.GenerateKey()
+	require.NoError(err)
+
+	// Issues in nested bundles are also detected.
+	inner, txBundle, _ := bundle.NewBuilder().
+		With(bundle.Step(key, &types.SetCodeTx{
+			// Invalid, since there are no authorizations.
+		})).
+		BuildEnvelopeBundleAndPlan()
+
+	outer := bundle.NewBuilder().
+		With(bundle.Step(key, inner)).
+		Build()
+
+	rules := opera.Rules{Upgrades: opera.Upgrades{
+		Allegro:            true,
+		Brio:               true,
+		TransactionBundles: true,
+	}}
+
+	txs := txBundle.GetTransactionsInReferencedOrder()
+
+	// The first transaction in the bundle is not permissible.
+	issue := isPermissible(txs[0], &rules, signer)
+	require.Error(issue)
+
+	// Thus, the bundle should be rejected.
+	got := isPermissible(outer, &rules, signer)
+	require.ErrorContains(got, "bundle contains non-permissible transaction")
+	require.ErrorContains(got, issue.Error())
 }
 
 func TestMergeCheaters_CanMergeLists(t *testing.T) {
@@ -858,8 +1403,502 @@ func TestIsPermissible_DetectsNonPermissibleTransactions(t *testing.T) {
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			err := isPermissible(test.transaction, &rules)
+			err := isPermissible(test.transaction, &rules, nil)
 			require.ErrorContains(t, err, test.issue)
+		})
+	}
+}
+
+func TestRlpEncodedMaxHeaderSizeInBytes_IsAnUpperBound(t *testing.T) {
+	setToMax := func(size int) []byte {
+		b := bytes.Repeat([]byte{0xFF}, size)
+		return b
+	}
+
+	maxHash := common.Hash(setToMax(32))
+	maxAddress := common.Address(setToMax(20))
+	maxBloom := types.Bloom(setToMax(2048))
+	maxBlock := types.BlockNonce(setToMax(8))
+	maxUint64 := uint64(math.MaxUint64)
+
+	// The sanity checks for the extra field inside of geth define an upper bound
+	// of 100 * 1024 bytes. Sonic uses the extra field to store time and duration.
+	extra := inter.EncodeExtraData(
+		time.Unix(math.MaxInt64, math.MaxInt64),
+		time.Duration(math.MaxInt64)*time.Nanosecond,
+	)
+
+	header := &types.Header{
+		ParentHash:       maxHash,
+		UncleHash:        maxHash,
+		Coinbase:         maxAddress,
+		Root:             maxHash,
+		TxHash:           maxHash,
+		ReceiptHash:      maxHash,
+		Bloom:            maxBloom,
+		Difficulty:       big.NewInt(math.MaxInt64),
+		Number:           big.NewInt(math.MaxInt64),
+		GasLimit:         math.MaxUint64,
+		GasUsed:          math.MaxUint64,
+		Time:             math.MaxUint64,
+		Extra:            extra,
+		MixDigest:        maxHash,
+		Nonce:            maxBlock,
+		BaseFee:          big.NewInt(math.MaxInt64),
+		WithdrawalsHash:  &maxHash,
+		BlobGasUsed:      &maxUint64,
+		ExcessBlobGas:    &maxUint64,
+		ParentBeaconRoot: &maxHash,
+		RequestsHash:     &maxHash,
+	}
+
+	data, err := rlp.EncodeToBytes(header)
+	require.NoError(t, err)
+	require.Less(t, len(data), rlpEncodedMaxHeaderSizeInBytes, "header exceeds maximum size")
+}
+
+func TestProcessUserTransactions_ForwardsBlockGasLimitToEVMProcessor(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	evmProcessor := blockproc.NewMockEVMProcessor(ctrl)
+	blockBuilder := inter.NewBlockBuilder()
+
+	// Create some dummy transactions with gas usage
+	tx1 := types.NewTx(&types.LegacyTx{Nonce: 1, Gas: 1000})
+	tx2 := types.NewTx(&types.LegacyTx{Nonce: 2, Gas: 1000})
+	tx3 := types.NewTx(&types.LegacyTx{Nonce: 3, Gas: 1000})
+
+	// Set up receipts for each transaction
+	receipt1 := &types.Receipt{GasUsed: 1000}
+	receipt2 := &types.Receipt{GasUsed: 1000}
+	receipt3 := &types.Receipt{GasUsed: 1000}
+
+	userTransactionGasLimit := uint64(3000)
+
+	orderedTxs := []*types.Transaction{tx1, tx2, tx3}
+
+	// Mock EVMProcessor.Execute to be called once with all txs and the full gas limit
+	evmProcessor.EXPECT().
+		Execute(orderedTxs, userTransactionGasLimit, gomock.Any()).
+		Return(evmcore.ProcessSummary{ProcessedTransactions: []evmcore.ProcessedTransaction{
+			{Transaction: tx1, Receipt: receipt1},
+			{Transaction: tx2, Receipt: receipt2},
+			{Transaction: tx3, Receipt: receipt3},
+		}})
+
+	upgrades := opera.Upgrades{Brio: true}
+	processUserTransactions(evmProcessor, blockBuilder, orderedTxs, userTransactionGasLimit, upgrades)
+
+	// All transactions should be included
+	gotTxs := blockBuilder.GetTransactions()
+	require.Equal(t, types.Transactions{tx1, tx2, tx3}, gotTxs)
+}
+
+func TestProcessUserTransactions_TransactionsWithNoReceiptAreNotIncluded(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	evmProcessor := blockproc.NewMockEVMProcessor(ctrl)
+	blockBuilder := inter.NewBlockBuilder()
+
+	tx := types.NewTx(&types.LegacyTx{Nonce: 1})
+
+	// Simulate skipped transaction (no receipt)
+	evmProcessor.EXPECT().
+		Execute([]*types.Transaction{tx}, gomock.Any(), gomock.Any()).
+		Return(evmcore.ProcessSummary{ProcessedTransactions: []evmcore.ProcessedTransaction{{Transaction: tx, Receipt: nil}}})
+
+	upgrades := opera.Upgrades{Brio: true}
+	processUserTransactions(evmProcessor, blockBuilder, []*types.Transaction{tx}, 10000, upgrades)
+
+	// Should not be added to blockBuilder
+	gotTxs := blockBuilder.GetTransactions()
+	require.Empty(t, gotTxs)
+}
+
+func TestProcessUserTransactions_DeductsInternalTxsSize(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	evmProcessor := blockproc.NewMockEVMProcessor(ctrl)
+	blockBuilder := inter.NewBlockBuilder()
+
+	// Add an internal tx to blockBuilder
+	internalTx := types.NewTx(&types.LegacyTx{Data: make([]byte, 1000)})
+	blockBuilder.AddTransaction(internalTx, &types.Receipt{})
+
+	// Create a user tx
+	userTx := types.NewTx(&types.LegacyTx{Data: make([]byte, 1000)})
+
+	// Ensure the evmProcessor is called with the correct remaining size after accounting for the internal transaction.
+	orderedTxs := []*types.Transaction{userTx}
+	evmProcessor.EXPECT().
+		Execute(orderedTxs, uint64(10000), params.MaxBlockSize-rlpEncodedMaxHeaderSizeInBytes-internalTx.Size()).
+		Return(evmcore.ProcessSummary{ProcessedTransactions: []evmcore.ProcessedTransaction{
+			{Transaction: userTx, Receipt: &types.Receipt{}},
+		}})
+
+	upgrades := opera.Upgrades{Brio: true}
+	processUserTransactions(evmProcessor, blockBuilder, orderedTxs, 10000, upgrades)
+
+	// Ensure both internal and user transactions are included.
+	gotTxs := blockBuilder.GetTransactions()
+	require.Equal(t, types.Transactions{internalTx, userTx}, gotTxs)
+}
+
+func TestProcessUserTransactions_SkipsTxsExceedingSizeLimit(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	evmProcessor := blockproc.NewMockEVMProcessor(ctrl)
+	blockBuilder := inter.NewBlockBuilder()
+
+	// Create a tx that exceeds the size limit
+	largeTx := types.NewTx(&types.LegacyTx{Data: make([]byte, params.MaxBlockSize)})
+
+	// Following txs are not skipped
+	tx0 := types.NewTx(&types.LegacyTx{Data: []byte{0x01}})
+	tx1 := types.NewTx(&types.LegacyTx{Data: []byte{0x01}})
+
+	orderedTxs := []*types.Transaction{largeTx, tx0, tx1}
+
+	// All txs are passed to Execute; the EVMProcessor handles size-based skipping
+	evmProcessor.EXPECT().
+		Execute(orderedTxs, uint64(10000), gomock.Any()).
+		Return(evmcore.ProcessSummary{ProcessedTransactions: []evmcore.ProcessedTransaction{
+			{Transaction: largeTx, Receipt: nil}, // skipped due to size
+			{Transaction: tx0, Receipt: &types.Receipt{}},
+			{Transaction: tx1, Receipt: &types.Receipt{}},
+		}})
+
+	upgrades := opera.Upgrades{Brio: true}
+	processUserTransactions(evmProcessor, blockBuilder, orderedTxs, 10000, upgrades)
+
+	// Huge transactions should not be added
+	gotTxs := blockBuilder.GetTransactions()
+	require.Equal(t, types.Transactions{tx0, tx1}, gotTxs)
+}
+
+func TestProcessUserTransactions_InternalTransactionsHaveNoImpactOnTheUserTransactionGas(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	statedb := state.NewMockStateDB(ctrl)
+
+	statedb.EXPECT().BeginBlock(gomock.Any())
+	statedb.EXPECT().SetTxContext(gomock.Any(), gomock.Any()).AnyTimes()
+	statedb.EXPECT().GetBalance(gomock.Any()).Return(uint256.NewInt(0)).AnyTimes()
+	statedb.EXPECT().SubBalance(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+	statedb.EXPECT().Prepare(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+	statedb.EXPECT().GetNonce(gomock.Any()).Return(uint64(0)).AnyTimes()
+	statedb.EXPECT().SetNonce(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+	statedb.EXPECT().GetCode(gomock.Any()).AnyTimes()
+	statedb.EXPECT().Snapshot().AnyTimes()
+	statedb.EXPECT().Exist(gomock.Any()).Return(true).AnyTimes()
+	statedb.EXPECT().SubBalance(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+	statedb.EXPECT().AddBalance(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+	statedb.EXPECT().GetCode(gomock.Any()).AnyTimes()
+	statedb.EXPECT().GetRefund().AnyTimes()
+	statedb.EXPECT().GetRefund().AnyTimes()
+	statedb.EXPECT().AddBalance(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+	statedb.EXPECT().GetLogs(gomock.Any(), gomock.Any()).AnyTimes()
+	statedb.EXPECT().EndTransaction().AnyTimes()
+	statedb.EXPECT().TxIndex().AnyTimes()
+
+	evmModule := evmmodule.New()
+	evmProcessor := evmModule.Start(
+		iblockproc.BlockCtx{},
+		statedb,
+		&EvmStateReader{},
+		func(l *core_types.Log) {},
+		opera.Rules{},
+		&params.ChainConfig{},
+		common.Hash{},
+		nil,
+	)
+	blockBuilder := inter.NewBlockBuilder()
+
+	internalTx := types.NewTx(&types.LegacyTx{To: &common.Address{0x41}, Gas: 21_000})
+	internalTxGasLimit := uint64(30_000)
+	internalProcessedTxs := evmProcessor.Execute([]*types.Transaction{internalTx}, internalTxGasLimit, math.MaxUint64).ProcessedTransactions
+	require.Len(t, internalProcessedTxs, 1)
+
+	userTx0 := types.NewTx(&types.LegacyTx{To: &common.Address{0x42}, Gas: 21_000})
+	skippedTx := types.NewTx(&types.LegacyTx{To: &common.Address{0x44}, Gas: 21_000})
+
+	// the user transaction only fits into the user transaction gas limit if
+	// the internal transaction gas is not counted towards it
+	userTransactionGasLimit := uint64(30_000)
+	upgrades := opera.Upgrades{Brio: true}
+	processUserTransactions(evmProcessor, blockBuilder, []*types.Transaction{userTx0, skippedTx}, userTransactionGasLimit, upgrades)
+
+	gotTxs := blockBuilder.GetTransactions()
+	require.Equal(t, types.Transactions{userTx0}, gotTxs)
+}
+
+func TestProcessUserTransactions_MetricsAreForwardedToStateProcessor(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	statedb := state.NewMockStateDB(ctrl)
+	mockMetrics := evmcore.NewMockBlockExecutionMetrics(ctrl)
+
+	statedb.EXPECT().BeginBlock(gomock.Any())
+	statedb.EXPECT().SetTxContext(gomock.Any(), gomock.Any()).AnyTimes()
+	statedb.EXPECT().GetBalance(gomock.Any()).Return(uint256.NewInt(0)).AnyTimes()
+	statedb.EXPECT().SubBalance(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+	statedb.EXPECT().Prepare(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+	statedb.EXPECT().GetNonce(gomock.Any()).Return(uint64(0)).AnyTimes()
+	statedb.EXPECT().SetNonce(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+	statedb.EXPECT().GetCode(gomock.Any()).AnyTimes()
+	statedb.EXPECT().Snapshot().AnyTimes()
+	statedb.EXPECT().RevertToSnapshot(gomock.Any()).AnyTimes()
+	statedb.EXPECT().Exist(gomock.Any()).Return(true).AnyTimes()
+	statedb.EXPECT().AddBalance(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+	statedb.EXPECT().GetRefund().AnyTimes()
+	statedb.EXPECT().GetLogs(gomock.Any(), gomock.Any()).AnyTimes()
+	statedb.EXPECT().EndTransaction().AnyTimes()
+	statedb.EXPECT().TxIndex().AnyTimes()
+
+	evmModule := evmmodule.New()
+	evmProcessor := evmModule.Start(
+		iblockproc.BlockCtx{},
+		statedb,
+		&EvmStateReader{},
+		func(l *core_types.Log) {},
+		opera.Rules{Upgrades: opera.Upgrades{Brio: true, GasSubsidies: true}},
+		&params.ChainConfig{},
+		common.Hash{},
+		mockMetrics,
+	)
+	blockBuilder := inter.NewBlockBuilder()
+
+	// A sponsored transaction (gas price 0) will be skipped because there is
+	// no subsidies registry contract deployed. This should trigger the
+	// SkippedSponsoredTxs counter via the metrics forwarded to the state processor.
+	key, err := crypto.GenerateKey()
+	require.NoError(t, err)
+	signer := types.LatestSignerForChainID(nil)
+	sponsoredTx := types.MustSignNewTx(key, signer, &types.LegacyTx{To: &common.Address{0x42}, Gas: 21_000})
+	require.True(t, subsidies.IsSponsorshipRequest(sponsoredTx))
+
+	mockMetrics.EXPECT().IncSkippedSponsoredTx()
+
+	upgrades := opera.Upgrades{Brio: true, GasSubsidies: true}
+	processUserTransactions(evmProcessor, blockBuilder, []*types.Transaction{sponsoredTx}, 30_000, upgrades)
+
+	// The sponsored tx is skipped (no receipt) so it should not appear in the block.
+	require.Empty(t, blockBuilder.GetTransactions())
+}
+
+func TestProcessUserTransactions_SponsoredTxSizeIsAccountedCorrectly(t *testing.T) {
+	tests := map[string]struct {
+		gasPrice      int64
+		isSponsoredTx bool
+	}{
+		"normal tx": {
+			gasPrice:      10,
+			isSponsoredTx: false,
+		},
+		"sponsored tx": {
+			gasPrice:      0,
+			isSponsoredTx: true,
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			evmProcessor := blockproc.NewMockEVMProcessor(ctrl)
+			blockBuilder := inter.NewBlockBuilder()
+
+			tx0 := types.NewTx(&types.LegacyTx{
+				Data: make([]byte, params.MaxBlockSize-5000),
+			})
+			tx1 := types.NewTx(&types.LegacyTx{
+				To:       &common.Address{0x42},
+				GasPrice: big.NewInt(test.gasPrice),
+				V:        big.NewInt(1),
+			})
+			remainingSize := params.MaxBlockSize - tx0.Size() - tx1.Size() - rlpEncodedMaxHeaderSizeInBytes
+			tx2 := types.NewTx(&types.LegacyTx{
+				Data: make([]byte, remainingSize-100), // leave some room for other fields in tx
+			})
+
+			var processedTxs []evmcore.ProcessedTransaction
+			var feeChargingTransaction *types.Transaction
+			if test.gasPrice == 0 {
+				feeChargingTransaction = subsidies.NewPostTxBuilder().BuildForTesting()
+				processedTxs = []evmcore.ProcessedTransaction{
+					{Transaction: tx0, Receipt: &types.Receipt{}},
+					{Transaction: tx1, Receipt: &types.Receipt{}},
+					{Transaction: feeChargingTransaction, Receipt: &types.Receipt{}},
+					{Transaction: tx2, Receipt: nil}, // skipped due to size
+				}
+			} else {
+				processedTxs = []evmcore.ProcessedTransaction{
+					{Transaction: tx0, Receipt: &types.Receipt{}},
+					{Transaction: tx1, Receipt: &types.Receipt{}},
+					{Transaction: tx2, Receipt: &types.Receipt{}},
+				}
+			}
+
+			orderedTxs := []*types.Transaction{tx0, tx1, tx2}
+			evmProcessor.EXPECT().
+				Execute(orderedTxs, uint64(10000), gomock.Any()).
+				Return(evmcore.ProcessSummary{
+					ProcessedTransactions: processedTxs,
+				})
+
+			upgrades := opera.Upgrades{Brio: true}
+			processUserTransactions(evmProcessor, blockBuilder, orderedTxs, 10000, upgrades)
+
+			gotTxs := blockBuilder.GetTransactions()
+			require.Contains(t, gotTxs, tx0)
+			require.Contains(t, gotTxs, tx1)
+
+			if test.isSponsoredTx {
+				// ensure the sponsored transaction is followed by the gas paying transaction
+				require.Equal(t, tx1, gotTxs[1])
+				require.Equal(t, feeChargingTransaction, gotTxs[2])
+
+				require.NotContains(t, gotTxs, tx2)
+			} else {
+				require.Contains(t, gotTxs, tx2)
+			}
+		})
+	}
+}
+
+func TestProcessUserTransactions_SkipUserTransactionIfInternalTransactionsExceedBlockSizeLimit(t *testing.T) {
+	tests := map[string][]*types.Transaction{
+		"single huge internal tx": {
+			types.NewTx(&types.LegacyTx{Data: make([]byte, params.MaxBlockSize)}),
+		},
+		"multiple internal txs exceeding block size": {
+			types.NewTx(&types.LegacyTx{Data: make([]byte, params.MaxBlockSize/4)}),
+			types.NewTx(&types.LegacyTx{Data: make([]byte, params.MaxBlockSize/4)}),
+			types.NewTx(&types.LegacyTx{Data: make([]byte, params.MaxBlockSize/4)}),
+			types.NewTx(&types.LegacyTx{Data: make([]byte, params.MaxBlockSize/4)}),
+		},
+	}
+
+	for name, internalTxs := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			evmProcessor := blockproc.NewMockEVMProcessor(ctrl)
+			blockBuilder := inter.NewBlockBuilder()
+
+			for _, internalTx := range internalTxs {
+				// Add internal txs to blockBuilder
+				blockBuilder.AddTransaction(internalTx, &types.Receipt{})
+			}
+
+			// Create a user tx that would only fit without the internal tx
+			userTx := types.NewTx(&types.LegacyTx{})
+			upgrades := opera.Upgrades{Brio: true}
+
+			evmProcessor.EXPECT().Execute(gomock.Any(), gomock.Any(), gomock.Any()).Return(evmcore.ProcessSummary{})
+			processUserTransactions(evmProcessor, blockBuilder, []*types.Transaction{userTx}, 10000, upgrades)
+
+			// Only internal tx should be present
+			gotTxs := blockBuilder.GetTransactions()
+			require.Equal(t, types.Transactions(internalTxs), gotTxs)
+		})
+	}
+}
+
+func TestProcessUserTransactions_InternalTxsExceedingBlockSizePassesZeroRemainingSize(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	evmProcessor := blockproc.NewMockEVMProcessor(ctrl)
+	blockBuilder := inter.NewBlockBuilder()
+
+	// Add two internal transactions: one that nearly fills the block, and one that exceeds the remaining size.
+	smallTx := types.NewTx(&types.LegacyTx{Data: make([]byte, params.MaxBlockSize-rlpEncodedMaxHeaderSizeInBytes-100)})
+	overflowTx := types.NewTx(&types.LegacyTx{Data: make([]byte, 200)})
+	blockBuilder.AddTransaction(smallTx, &types.Receipt{})
+	blockBuilder.AddTransaction(overflowTx, &types.Receipt{})
+
+	userTx := types.NewTx(&types.LegacyTx{})
+	orderedTxs := []*types.Transaction{userTx}
+	upgrades := opera.Upgrades{Brio: true}
+
+	// After the overflow is detected, remainingSize is set to 0
+	evmProcessor.EXPECT().
+		Execute(orderedTxs, uint64(10000), gomock.Any()).
+		DoAndReturn(func(txs []*types.Transaction, gas uint64, size uint64) evmcore.ProcessSummary {
+			require.Equal(t, uint64(0), size) // Ensure the user transactions are processed with zero remaining size
+			return evmcore.ProcessSummary{}
+		})
+
+	processUserTransactions(evmProcessor, blockBuilder, orderedTxs, 10000, upgrades)
+}
+
+func TestProcessUserTransactions_RecordsOriginTransactionForAcceptedProcessedTransactions(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	evmProcessor := blockproc.NewMockEVMProcessor(ctrl)
+
+	transactions := []*types.Transaction{
+		types.NewTx(&types.LegacyTx{Nonce: 0}),
+		types.NewTx(&types.LegacyTx{Nonce: 1}),
+		types.NewTx(&types.LegacyTx{Nonce: 2}),
+	}
+
+	extras := []*types.Transaction{
+		types.NewTx(&types.LegacyTx{Nonce: 11}),
+		types.NewTx(&types.LegacyTx{Nonce: 21}),
+		types.NewTx(&types.LegacyTx{Nonce: 22}),
+		types.NewTx(&types.LegacyTx{Nonce: 23}),
+	}
+
+	wantCausedBy := map[common.Hash]common.Hash{
+		transactions[0].Hash(): transactions[0].Hash(),
+		transactions[1].Hash(): transactions[1].Hash(),
+		extras[0].Hash():       transactions[1].Hash(),
+		extras[1].Hash():       transactions[2].Hash(),
+		extras[2].Hash():       transactions[2].Hash(),
+		// no entry for extras[3] since it has no receipt
+	}
+
+	evmProcessor.EXPECT().
+		Execute(transactions, gomock.Any(), gomock.Any()).
+		Return(evmcore.ProcessSummary{
+			ProcessedTransactions: []evmcore.ProcessedTransaction{
+				{Transaction: transactions[0], Receipt: &types.Receipt{}},
+				{Transaction: transactions[1], Receipt: &types.Receipt{}},
+				{Transaction: extras[0], Receipt: &types.Receipt{}},
+				{Transaction: extras[1], Receipt: &types.Receipt{}},
+				{Transaction: extras[2], Receipt: &types.Receipt{}},
+				{Transaction: extras[3], Receipt: nil},
+			},
+			CausedBy: wantCausedBy,
+		})
+
+	gotCausedBy := processUserTransactions(
+		evmProcessor,
+		inter.NewBlockBuilder(),
+		transactions,
+		math.MaxUint64,
+		opera.Upgrades{Brio: true},
+	)
+	require.Equal(t, wantCausedBy, gotCausedBy)
+}
+
+func TestProcessUserTransactions_BlockSizeLimitIsEnforcedStartingFromBrio(t *testing.T) {
+	tests := map[string]struct {
+		upgrades          opera.Upgrades
+		expectedSizeLimit uint64
+	}{
+		"before Brio, no size limit is enforced": {
+			upgrades:          opera.Upgrades{Brio: false},
+			expectedSizeLimit: math.MaxUint64,
+		},
+		"with Brio, block size limit is enforced": {
+			upgrades:          opera.Upgrades{Brio: true},
+			expectedSizeLimit: uint64(params.MaxBlockSize - rlpEncodedMaxHeaderSizeInBytes),
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			evmProcessor := blockproc.NewMockEVMProcessor(ctrl)
+			blockBuilder := inter.NewBlockBuilder()
+
+			// Ensure the evmProcessor is called with the expected size limit
+			evmProcessor.EXPECT().Execute(gomock.Any(), gomock.Any(), test.expectedSizeLimit)
+
+			processUserTransactions(
+				evmProcessor, blockBuilder, []*types.Transaction{}, math.MaxUint64, test.upgrades)
 		})
 	}
 }
@@ -959,6 +1998,168 @@ func TestSpillBlockEvents(t *testing.T) {
 				foundSignatures = append(foundSignatures, event.Sig())
 			}
 			require.Equal(t, test.expectedSignatures, foundSignatures)
+		})
+	}
+}
+
+func TestConsensusCallback_TxCausedBy_UsesOriginTxForCreatorLookupWithBrio(t *testing.T) {
+	tests := map[string]struct {
+		upgrades             opera.Upgrades
+		wantDerivedTxCreator idx.ValidatorID
+	}{
+		"with Brio, derived tx uses origin tx's event creator": {
+			upgrades:             opera.GetBrioUpgrades(),
+			wantDerivedTxCreator: idx.ValidatorID(1),
+		},
+		"without Brio, derived tx uses its own txPosition (zero, not in any event)": {
+			upgrades:             opera.GetAllegroUpgrades(),
+			wantDerivedTxCreator: idx.ValidatorID(0),
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			// Store has 1 validator (ValidatorID 1).
+			store := newInMemoryStoreWithGenesisData(t, test.upgrades, 1, 2)
+
+			// originTx is the sponsored transaction included in validator 1's event.
+			// derivedTx (payment tx) only appears in the EVM execution output, not in any event.
+			originTx := types.NewTx(&types.LegacyTx{Nonce: 1})
+			derivedTx := types.NewTx(&types.LegacyTx{Nonce: 2})
+
+			originReceipt := &types.Receipt{TxHash: originTx.Hash()}
+			derivedReceipt := &types.Receipt{TxHash: derivedTx.Hash()}
+
+			causedBy := map[common.Hash]common.Hash{
+				originTx.Hash():  originTx.Hash(),
+				derivedTx.Hash(): originTx.Hash(),
+			}
+
+			// Create a version-1 event from validator 1 containing originTx.
+			// Version-3 events cannot carry transactions directly (they use proposals),
+			// so version 1 is used here. The payload hash must be set explicitly.
+			var txEventBuilder inter.MutableEventPayload
+			txEventBuilder.SetVersion(1)
+			txEventBuilder.SetEpoch(2)
+			txEventBuilder.SetCreator(idx.ValidatorID(1))
+			txEventBuilder.SetMedianTime(inter.Timestamp(1500))
+			txEventBuilder.SetTxs(types.Transactions{originTx})
+			txEventBuilder.SetPayloadHash(inter.CalcPayloadHash(&txEventBuilder))
+			txEvent := txEventBuilder.Build()
+
+			// Create the atropos event.
+			var atroposBuilder inter.MutableEventPayload
+			atroposBuilder.SetVersion(3)
+			atroposBuilder.SetEpoch(2)
+			atroposBuilder.SetMedianTime(inter.Timestamp(2000))
+			atropos := atroposBuilder.Build()
+
+			// Publish events in the store.
+			store.SetEvent(txEvent)
+			store.SetEvent(atropos)
+
+			// Update the block state to a known time.
+			blockState := store.GetBlockState()
+			blockState.LastBlock = iblockproc.BlockCtx{Time: inter.Timestamp(1000)}
+			epochState := store.GetEpochState()
+			store.SetBlockEpochState(blockState, epochState)
+
+			ctrl := gomock.NewController(t)
+			_any := gomock.Any()
+
+			confirmedEventProcessor := blockproc.NewMockConfirmedEventsProcessor(ctrl)
+			confirmedEventProcessor.EXPECT().Finalize(_any, _any).Return(iblockproc.BlockState{})
+			confirmedEventProcessor.EXPECT().ProcessConfirmedEvent(_any).AnyTimes()
+
+			eventsModule := blockproc.NewMockConfirmedEventsModule(ctrl)
+			eventsModule.EXPECT().Start(_any, _any).Return(confirmedEventProcessor)
+
+			sealer := blockproc.NewMockSealerProcessor(ctrl)
+			sealer.EXPECT().EpochSealing().Return(false)
+
+			sealerModule := blockproc.NewMockSealerModule(ctrl)
+			sealerModule.EXPECT().Start(_any, _any, _any).Return(sealer)
+
+			// Capture the creator argument passed to OnNewReceipt for each receipt.
+			capturedCreators := map[common.Hash]idx.ValidatorID{}
+			txListener := blockproc.NewMockTxListener(ctrl)
+			txListener.EXPECT().Finalize().Return(iblockproc.BlockState{}).AnyTimes()
+			txListener.EXPECT().OnNewReceipt(_any, _any, _any, _any, _any).
+				DoAndReturn(func(_ *types.Transaction, r *types.Receipt, creator idx.ValidatorID, _, _ *big.Int) {
+					capturedCreators[r.TxHash] = creator
+				}).Times(2)
+
+			txListenerModule := blockproc.NewMockTxListenerModule(ctrl)
+			txListenerModule.EXPECT().Start(_any, _any, _any, _any).Return(txListener)
+
+			// EVM processor: 3 Execute calls in order (pre-internal, post-internal, user txs).
+			evmProcessor := blockproc.NewMockEVMProcessor(ctrl)
+			userSummary := evmcore.ProcessSummary{
+				ProcessedTransactions: []evmcore.ProcessedTransaction{
+					{Transaction: originTx, Receipt: originReceipt},
+					{Transaction: derivedTx, Receipt: derivedReceipt},
+				},
+				CausedBy: causedBy,
+			}
+			preInternal := evmProcessor.EXPECT().Execute(_any, _any, _any).Return(evmcore.ProcessSummary{})
+			postInternal := evmProcessor.EXPECT().Execute(_any, _any, _any).Return(evmcore.ProcessSummary{})
+			userTxs := evmProcessor.EXPECT().Execute(_any, _any, _any).Return(userSummary)
+			gomock.InOrder(preInternal, postInternal, userTxs)
+
+			evmProcessor.EXPECT().Finalize().Return(&evmcore.EvmBlock{
+				EvmHeader: evmcore.EvmHeader{
+					BaseFee: big.NewInt(0),
+					TxHash:  common.Hash{1, 2, 3},
+				},
+				Transactions: types.Transactions{originTx, derivedTx},
+			}, 0, types.Receipts{originReceipt, derivedReceipt})
+
+			evmModule := blockproc.NewMockEVM(ctrl)
+			evmModule.EXPECT().Start(_any, _any, _any, _any, _any, _any, _any, _any).Return(evmProcessor)
+
+			txTransactor := blockproc.NewMockTxTransactor(ctrl)
+			txTransactor.EXPECT().PopInternalTxs(_any, _any, _any, _any, _any).Return(types.Transactions{}).AnyTimes()
+
+			proc := BlockProc{
+				EventsModule:     eventsModule,
+				SealerModule:     sealerModule,
+				TxListenerModule: txListenerModule,
+				EVMModule:        evmModule,
+				PreTxTransactor:  txTransactor,
+				PostTxTransactor: txTransactor,
+			}
+
+			stop := make(chan struct{})
+			var workerWaitGroup sync.WaitGroup
+			workers := workers.New(&workerWaitGroup, stop, 1)
+			workers.Start(1)
+			defer func() {
+				close(stop)
+				workerWaitGroup.Wait()
+			}()
+
+			var callbackWaitGroup sync.WaitGroup
+			bootstrapping := false
+			blockBusyFlag := uint32(0)
+			emitters := []*emitter.Emitter{}
+			beginBlock := consensusCallbackBeginBlockFn(
+				workers, &callbackWaitGroup, &blockBusyFlag, store, proc, false, nil, &emitters, nil, &bootstrapping, nil,
+			)
+
+			callbacks := beginBlock(&lachesis.Block{Atropos: atropos.ID()})
+			callbacks.ApplyEvent(txEvent)
+			callbacks.ApplyEvent(atropos)
+			callbacks.EndBlock()
+			callbackWaitGroup.Wait()
+
+			// The origin tx's creator is always resolved from its event.
+			require.Equal(t, idx.ValidatorID(1), capturedCreators[originTx.Hash()],
+				"origin tx should use its own event creator")
+			// The derived tx's creator depends on whether Brio is enabled.
+			require.Equal(t, test.wantDerivedTxCreator, capturedCreators[derivedTx.Hash()],
+				"derived tx creator should match expected")
 		})
 	}
 }

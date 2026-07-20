@@ -31,6 +31,45 @@ import (
 	"github.com/0xsoniclabs/sonic/opera"
 )
 
+//go:generate mockgen -source=evm_state_reader.go -destination=evm_state_reader_mock.go -package=gossip
+
+// StateReader defines methods to access EVM state.
+type StateReader interface {
+	// CurrentBaseFee returns the base fee charged in the most recent block.
+	CurrentBaseFee() *big.Int
+	// CurrentMaxGasLimit returns the maximum gas limit of the most recent epoch.
+	CurrentMaxGasLimit() uint64
+	// CurrentConfig returns the chain config applicable to the most recent block.
+	CurrentConfig() *params.ChainConfig
+	// CurrentRules returns the rules applicable to the most recent epoch.
+	CurrentRules() opera.Rules
+	// CurrentBlock returns the most recent block.
+	// This method is the recommended option for fast access to the latest block
+	CurrentBlock() *evmcore.EvmBlock
+	// LastBlockWithArchiveState returns the most recent block with archive state.
+	// This method shall be the preferable way to get the latest block for
+	// operations that require access to the full block (e.g., RPC calls),
+	LastBlockWithArchiveState(withTxs bool) (*evmcore.EvmBlock, error)
+	// Header returns the header of the block with the given number.
+	// If the block is not found, nil is returned.
+	// If the hash provided is not zero and does not match the hash of the
+	// block found, nil is returned.
+	Header(verificationHash common.Hash, number uint64) *evmcore.EvmHeader
+	// Block returns the block with the given number.
+	// If the block is not found, nil is returned.
+	// If the hash provided is not zero and does not match the hash of the
+	// block found, nil is returned.
+	Block(verificationHash common.Hash, number uint64) *evmcore.EvmBlock
+	// CurrentStateDB returns a read-only access to stateDB.
+	CurrentStateDB() (state.StateDB, error)
+	// BlockStateDB returns stateDB for the given block number.
+	// An error is returned if the live state is not initialized, it failed to
+	// find the block in the archive, or the state root of the block found
+	// does not match the given state root.
+	BlockStateDB(blockNum *big.Int, stateRoot common.Hash) (state.StateDB, error)
+}
+
+// EvmStateReader implements StateReader interface.
 type EvmStateReader struct {
 	*ServiceFeed
 
@@ -38,13 +77,14 @@ type EvmStateReader struct {
 	gpo   *gasprice.Oracle
 }
 
-// GetCurrentBaseFee returns the base fee charged in the most recent block.
-func (r *EvmStateReader) GetCurrentBaseFee() *big.Int {
+// CurrentBaseFee returns the base fee of the most recent block.
+func (r *EvmStateReader) CurrentBaseFee() *big.Int {
 	res := r.store.GetBlock(r.store.GetLatestBlockIndex()).BaseFee
 	return new(big.Int).Set(res)
 }
 
-func (r *EvmStateReader) MaxGasLimit() uint64 {
+// CurrentMaxGasLimit returns the maximum gas limit of the most recent epoch.
+func (r *EvmStateReader) CurrentMaxGasLimit() uint64 {
 	rules := r.store.GetRules()
 	maxEmptyEventGas := rules.Economy.Gas.EventGas +
 		uint64(rules.Dag.MaxParents-rules.Dag.MaxFreeParents)*rules.Economy.Gas.ParentGas +
@@ -55,28 +95,28 @@ func (r *EvmStateReader) MaxGasLimit() uint64 {
 	return rules.Economy.Gas.MaxEventGas - maxEmptyEventGas
 }
 
-func (r *EvmStateReader) Config() *params.ChainConfig {
-	blockNumber := r.CurrentBlock().Number
-	return r.store.GetEvmChainConfig(idx.Block(blockNumber.Uint64()))
+// CurrentConfig returns the chain config applicable to the most recent block.
+func (r *EvmStateReader) CurrentConfig() *params.ChainConfig {
+	return r.store.GetEvmChainConfig(r.store.GetLatestBlockIndex())
 }
 
-func (r *EvmStateReader) GetCurrentRules() opera.Rules {
+// CurrentRules returns the rules applicable to the most recent epoch.
+func (r *EvmStateReader) CurrentRules() opera.Rules {
 	return r.store.GetRules()
 }
 
+// CurrentBlock returns the most recent block.
+// This method is the recommended option for fast access to the latest block.
 func (r *EvmStateReader) CurrentBlock() *evmcore.EvmBlock {
 	n := r.store.GetLatestBlockIndex()
 
 	return r.getBlock(common.Hash{}, n, true)
 }
 
-func (r *EvmStateReader) CurrentHeader() *evmcore.EvmHeader {
-	n := r.store.GetLatestBlockIndex()
-
-	return r.getBlock(common.Hash{}, n, false).Header()
-}
-
-func (r *EvmStateReader) LastHeaderWithArchiveState() (*evmcore.EvmHeader, error) {
+// LastBlockWithArchiveState returns the most recent block with archive.
+// This method shall be the preferable way to get the latest block for
+// operations that require access to the full state (e.g., RPC calls).
+func (r *EvmStateReader) LastBlockWithArchiveState(withTxs bool) (*evmcore.EvmBlock, error) {
 	latestBlock := r.store.GetLatestBlockIndex()
 
 	// make sure the block is present in the archive
@@ -88,27 +128,34 @@ func (r *EvmStateReader) LastHeaderWithArchiveState() (*evmcore.EvmHeader, error
 		latestBlock = idx.Block(latestArchiveBlock)
 	}
 
-	return r.getBlock(common.Hash{}, latestBlock, false).Header(), nil
+	return r.getBlock(common.Hash{}, latestBlock, withTxs), nil
 }
 
-func (r *EvmStateReader) GetHeaderByNumber(n uint64) *evmcore.EvmHeader {
-	return r.GetHeader(common.Hash{}, n)
+// Header returns the header of the block with the given number.
+// If the block is not found, nil is returned.
+// If the hash provided is not zero and does not match the hash of the
+// block found, nil is returned.
+func (r *EvmStateReader) Header(verificationHash common.Hash, number uint64) *evmcore.EvmHeader {
+	return r.getBlock(verificationHash, idx.Block(number), false).Header()
 }
 
-func (r *EvmStateReader) GetHeader(h common.Hash, n uint64) *evmcore.EvmHeader {
-	return r.getBlock(h, idx.Block(n), false).Header()
+// Block returns the block with the given number.
+// If the block is not found, nil is returned.
+// If the hash provided is not zero and does not match the hash of the block
+// found, nil is returned.
+func (r *EvmStateReader) Block(verificationHash common.Hash, number uint64) *evmcore.EvmBlock {
+	return r.getBlock(verificationHash, idx.Block(number), true)
 }
 
-func (r *EvmStateReader) GetBlock(h common.Hash, n uint64) *evmcore.EvmBlock {
-	return r.getBlock(h, idx.Block(n), true)
-}
-
-func (r *EvmStateReader) getBlock(h common.Hash, n idx.Block, readTxs bool) *evmcore.EvmBlock {
+// getBlock is an internal method to get a block by number.
+// If the hash provided is not zero and does not match the hash of the block
+// found, nil is returned.
+func (r *EvmStateReader) getBlock(verificationHash common.Hash, n idx.Block, readTxs bool) *evmcore.EvmBlock {
 	block := r.store.GetBlock(n)
 	if block == nil {
 		return nil
 	}
-	if (h != common.Hash{}) && (h != block.Hash()) {
+	if (verificationHash != common.Hash{}) && (verificationHash != block.Hash()) {
 		return nil
 	}
 	if readTxs {
@@ -165,12 +212,15 @@ func (r *EvmStateReader) getBlock(h common.Hash, n idx.Block, readTxs bool) *evm
 	return evmBlock
 }
 
-// GetTxPoolStateDB obtains StateDB for TxPool
-func (r *EvmStateReader) GetTxPoolStateDB() (state.StateDB, error) {
-	return r.store.evm.GetTxPoolStateDB()
+// CurrentStateDB returns a read-only StateDB for the current state.
+func (r *EvmStateReader) CurrentStateDB() (state.StateDB, error) {
+	return r.store.evm.GetCurrentStateDb()
 }
 
-// GetRpcStateDB obtains archive StateDB for RPC requests evaluation
-func (r *EvmStateReader) GetRpcStateDB(blockNum *big.Int, stateRoot common.Hash) (state.StateDB, error) {
-	return r.store.evm.GetRpcStateDb(blockNum, stateRoot)
+// BlockStateDB returns stateDB for the given block number and state root.
+// An error is returned if the live state is not initialized, it failed to
+// find the block in the archive, or the state root of the block found
+// does not match the given state root.
+func (r *EvmStateReader) BlockStateDB(blockNum *big.Int, stateRoot common.Hash) (state.StateDB, error) {
+	return r.store.evm.GetBlockStateDb(blockNum, stateRoot)
 }

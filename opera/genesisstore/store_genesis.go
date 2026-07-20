@@ -23,6 +23,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/bundle"
 	"github.com/0xsoniclabs/sonic/inter/ibr"
 	"github.com/0xsoniclabs/sonic/inter/ier"
 	"github.com/0xsoniclabs/sonic/opera/genesis"
@@ -56,6 +57,9 @@ type (
 	SignatureSection struct {
 		fMap FilesMap
 	}
+	RawProcessedBundles struct {
+		fMap FilesMap
+	}
 )
 
 func (s *Store) Genesis() genesis.Genesis {
@@ -69,6 +73,7 @@ func (s *Store) Genesis() genesis.Genesis {
 		FwsLiveSection:        s.FwsLiveSection(),
 		FwsArchiveSection:     s.FwsArchiveSection(),
 		SignatureSection:      s.SignatureSection(),
+		ProcessedBundles:      s.ProcessedBundles(),
 	}
 }
 
@@ -210,6 +215,53 @@ func (s RawBlockCertificates) ForEach(fn func(cert.Certificate[cert.BlockStateme
 				log.Crit("Failed to decode block certificate genesis section", "err", err)
 			}
 			if !fn(cur) {
+				break
+			}
+		}
+	}
+}
+
+func (s *Store) ProcessedBundles() genesis.ProcessedBundles {
+	return RawProcessedBundles{s.fMap}
+}
+
+func (s RawProcessedBundles) GetHistoryHashes() (bundle.BundleGenesisHistoryHashes, bool) {
+	for i := range 1000 {
+		f, err := s.fMap(BundleHashSection(i))
+		if err != nil {
+			continue
+		}
+		stream := rlp.NewStream(f, 0)
+		var hh bundle.BundleGenesisHistoryHashes
+		err = stream.Decode(&hh)
+		if err == io.EOF {
+			return bundle.BundleGenesisHistoryHashes{}, false
+		}
+		if err != nil {
+			log.Crit("Failed to decode Processed Bundles history hash", "err", err)
+		}
+		return hh, true
+	}
+	return bundle.BundleGenesisHistoryHashes{}, false
+}
+
+func (s RawProcessedBundles) ForEach(fn func(bundle.ExecutionInfo) bool) {
+	for i := range 1000 {
+		f, err := s.fMap(BundlesSection(i))
+		if err != nil {
+			continue
+		}
+		stream := rlp.NewStream(f, 0)
+		for {
+			var info bundle.ExecutionInfo
+			err := stream.Decode(&info)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				log.Crit("Failed to decode ProcessedBundles genesis section", "err", err)
+			}
+			if !fn(info) {
 				break
 			}
 		}

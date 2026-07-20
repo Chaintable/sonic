@@ -20,23 +20,11 @@ import (
 	"github.com/0xsoniclabs/sonic/gossip/blockproc/subsidies"
 	"github.com/0xsoniclabs/sonic/inter/state"
 	"github.com/0xsoniclabs/sonic/opera"
+	"github.com/0xsoniclabs/sonic/utils"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/log"
 )
-
-//go:generate mockgen -source=subsidies_integration.go -destination=subsidies_integration_mock.go -package=evmcore
-
-// subsidiesChecker is an interface for checking if a transaction is sponsored
-// by the subsidies contract.
-// it does not include [subsidies.IsCovered] directly to avoid creating dependencies
-// on state for an operation which is pure.
-//
-// This interface facilitates testing and decouples the subsidies integration
-// logic from the transaction pool.
-type subsidiesChecker interface {
-	isSponsored(tx *types.Transaction) bool
-}
 
 // SubsidiesIntegrationImplementation uses the subsidies contract to determine
 // if a transaction is sponsored.
@@ -55,29 +43,30 @@ func newSubsidiesChecker(
 	chain StateReader,
 	state state.StateDB,
 	signer types.Signer,
-) subsidiesChecker {
-	return &SubsidiesIntegrationImplementation{
+) utils.TransactionCheckFunc {
+	impl := &SubsidiesIntegrationImplementation{
 		rules:  rules,
 		chain:  chain,
 		state:  state,
 		signer: signer,
 	}
+	return impl.isSponsored
 }
 
 func (s *SubsidiesIntegrationImplementation) isSponsored(tx *types.Transaction) bool {
 	currentBlock := s.chain.CurrentBlock()
-	baseFee := s.chain.GetCurrentBaseFee()
+	baseFee := s.chain.CurrentBaseFee()
 
 	// Create a EVM processor instance to run the IsCovered query.
 	blockContext := NewEVMBlockContext(currentBlock.Header(), s.chain, nil)
 	vmConfig := opera.GetVmConfig(s.rules)
-	vm := vm.NewEVM(blockContext, s.state, s.chain.Config(), vmConfig)
+	vm := vm.NewEVM(blockContext, s.state, s.chain.CurrentConfig(), vmConfig)
 
 	// Query the subsidies registry contract to determine if the transaction is sponsored.
-	isSponsored, _, _, err := subsidies.IsCovered(s.rules.Upgrades, vm, s.signer, tx, baseFee)
+	result, err := subsidies.IsCovered(s.rules.Upgrades, vm, s.signer, tx, baseFee)
 	if err != nil {
 		log.Warn("Error checking if tx is sponsored", "tx", tx.Hash(), "err", err)
 		return false
 	}
-	return isSponsored
+	return result.IsSponsored()
 }

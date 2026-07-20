@@ -22,14 +22,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"os"
 	"path/filepath"
 
+	"github.com/0xsoniclabs/sonic/evmcore/core_types"
 	"github.com/0xsoniclabs/sonic/inter"
 	"github.com/0xsoniclabs/sonic/scc/cert"
 	"github.com/0xsoniclabs/sonic/utils/objstream"
 	"github.com/ethereum/go-ethereum/core/tracing"
+	"github.com/holiman/uint256"
 
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
@@ -52,7 +55,6 @@ import (
 	"github.com/0xsoniclabs/sonic/opera"
 	"github.com/0xsoniclabs/sonic/opera/genesis"
 	"github.com/0xsoniclabs/sonic/opera/genesisstore"
-	"github.com/0xsoniclabs/sonic/utils"
 
 	mptIo "github.com/0xsoniclabs/carmen/go/database/mpt/io"
 	carmen "github.com/0xsoniclabs/carmen/go/state"
@@ -63,7 +65,7 @@ type GenesisBuilder struct {
 	carmenDir     string
 	carmenStateDb carmen.StateDB
 
-	totalSupply *big.Int
+	totalSupply *uint256.Int
 
 	blocks       []ibr.LlrIdxFullBlockRecord
 	epochs       []ier.LlrIdxFullEpochRecord
@@ -93,11 +95,11 @@ func DefaultBlockProc() BlockProc {
 	}
 }
 
-func (b *GenesisBuilder) AddBalance(acc common.Address, balance *big.Int) {
+func (b *GenesisBuilder) AddBalance(acc common.Address, balance *uint256.Int) {
 	if len(b.blocks) > 0 {
 		panic("cannot add balance after block zero is finalized")
 	}
-	b.tmpStateDB.AddBalance(acc, utils.BigIntToUint256(balance), tracing.BalanceIncreaseGenesisBalance)
+	b.tmpStateDB.AddBalance(acc, balance, tracing.BalanceIncreaseGenesisBalance)
 	b.totalSupply.Add(b.totalSupply, balance)
 }
 
@@ -127,7 +129,7 @@ func (b *GenesisBuilder) SetCurrentEpoch(er ier.LlrIdxFullEpochRecord) {
 }
 
 func (b *GenesisBuilder) TotalSupply() *big.Int {
-	return b.totalSupply
+	return b.totalSupply.ToBig()
 }
 
 func (b *GenesisBuilder) CurrentHash() hash.Hash {
@@ -153,12 +155,12 @@ func NewGenesisBuilder() *GenesisBuilder {
 	}
 	// Set cache size to lowest value possible
 	carmenStateDb := carmen.CreateCustomStateDBUsing(carmenState, 1024)
-	tmpStateDB := evmstore.CreateCarmenStateDb(carmenStateDb)
+	tmpStateDB := evmstore.CreateCarmenStateDb(carmenStateDb, nil)
 	return &GenesisBuilder{
 		tmpStateDB:    tmpStateDB,
 		carmenDir:     carmenDir,
 		carmenStateDb: carmenStateDb,
-		totalSupply:   new(big.Int),
+		totalSupply:   new(uint256.Int),
 	}
 }
 
@@ -166,9 +168,10 @@ type dummyHeaderReturner struct {
 	blocks []ibr.LlrIdxFullBlockRecord
 }
 
-func (d dummyHeaderReturner) GetHeader(_ common.Hash, position uint64) *evmcore.EvmHeader {
+func (d dummyHeaderReturner) Header(_ common.Hash, position uint64) *evmcore.EvmHeader {
 	if position < uint64(len(d.blocks)) {
 		return &evmcore.EvmHeader{
+			Hash:    common.Hash(d.blocks[position].BlockHash),
 			BaseFee: d.blocks[position].BaseFee,
 		}
 	}
@@ -260,29 +263,34 @@ func (b *GenesisBuilder) ExecuteGenesisTxs(blockProc BlockProc, genesisTxs types
 	)
 	evmProcessor := blockProc.EVMModule.Start(
 		blockCtx, b.tmpStateDB, dummyHeaderReturner{b.blocks},
-		func(l *types.Log) { txListener.OnNewLog(l) },
+		func(l *core_types.Log) { txListener.OnNewLog(l) },
 		es.Rules,
 		chainConfig,
 		common.Hash{0x01}, // non-zero PrevRandao necessary to enable Cancun
+		nil,
 	)
 
 	// Execute genesis transactions
-	evmProcessor.Execute(genesisTxs, es.Rules.Blocks.MaxBlockGas)
+	evmProcessor.Execute(genesisTxs, es.Rules.Blocks.MaxBlockGas, math.MaxUint64)
 	bs = txListener.Finalize()
 
 	// Execute pre-internal transactions
 	preInternalTxs := blockProc.PreTxTransactor.PopInternalTxs(blockCtx, bs, es, true, b.tmpStateDB)
-	evmProcessor.Execute(preInternalTxs, es.Rules.Blocks.MaxBlockGas)
+	evmProcessor.Execute(preInternalTxs, es.Rules.Blocks.MaxBlockGas, math.MaxUint64)
 	bs = txListener.Finalize()
 
 	// Seal epoch
 	sealer.Update(bs, es)
-	bs, es = sealer.SealEpoch()
+	bs, es = sealer.SealEpoch(
+		hash.Hash(b.blocks[len(b.blocks)-1].BlockHash),
+		hash.Hash{},
+		preInternalTxs,
+	)
 	txListener.Update(bs, es)
 
 	// Execute post-internal transactions
 	internalTxs := blockProc.PostTxTransactor.PopInternalTxs(blockCtx, bs, es, true, b.tmpStateDB)
-	evmProcessor.Execute(internalTxs, es.Rules.Blocks.MaxBlockGas)
+	evmProcessor.Execute(internalTxs, es.Rules.Blocks.MaxBlockGas, math.MaxUint64)
 
 	evmBlock, numSkippedTxs, receipts := evmProcessor.Finalize()
 	for i, r := range receipts {

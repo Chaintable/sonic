@@ -17,10 +17,13 @@
 package tests
 
 import (
+	"context"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/0xsoniclabs/sonic/opera"
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/stretchr/testify/require"
@@ -29,62 +32,74 @@ import (
 func TestRandao_randaoIntegrationTest(t *testing.T) {
 	const NumNodes = 3
 
-	tests := map[string]opera.Upgrades{
-		"dag proposal": opera.GetSonicUpgrades(),
-		"single proposal": {
-			Berlin:                       true,
-			London:                       true,
-			Llr:                          false,
-			Allegro:                      true,
-			Sonic:                        true,
-			SingleProposerBlockFormation: true,
-		},
+	modes := map[string]bool{
+		"single proposer":      true,
+		"distributed proposer": false,
 	}
 
-	for name, test := range tests {
-		t.Run(name, func(t *testing.T) {
-			net := StartIntegrationTestNet(t,
-				IntegrationTestNetOptions{
-					NumNodes: NumNodes,
-					Upgrades: &test,
-				},
-			)
-			defer net.Stop()
+	for name, test := range opera.GetAllHardForksInOrder() {
 
-			// issue one transaction to trigger one block
-			receipt, err := net.EndowAccount(common.Address{0xFE}, big.NewInt(1))
-			require.NoError(t, err)
-			require.Equal(t, types.ReceiptStatusSuccessful, receipt.Status)
+		for modeName, singleProposer := range modes {
+			test.SingleProposerBlockFormation = singleProposer
 
-			// Ensure that the block has been processed and randao is set
-			randaoList := make([]common.Hash, NumNodes)
-			for i := range NumNodes {
-				client, err := net.GetClientConnectedToNode(i)
+			t.Run(name+"/"+modeName, func(t *testing.T) {
+				net := StartIntegrationTestNet(t,
+					IntegrationTestNetOptions{
+						NumNodes: NumNodes,
+						Upgrades: &test,
+					},
+				)
+				defer net.Stop()
+
+				// issue one transaction to trigger one block
+				receipt, err := net.EndowAccount(common.Address{0xFE}, big.NewInt(1))
+				require.NoError(t, err)
+				require.Equal(t, types.ReceiptStatusSuccessful, receipt.Status)
+
+				// Ensure that the block has been processed and randao is set
+				randaoList := make([]common.Hash, NumNodes)
+				for i := range NumNodes {
+					client, err := net.GetClientConnectedToNode(i)
+					require.NoError(t, err)
+					defer client.Close()
+
+					// The receipt was obtained from node 0, but other
+					// nodes may not have synced the block yet.
+					block := WaitForBlock(t, client, int(receipt.BlockNumber.Int64()))
+					require.NotZero(t, block.Header().MixDigest)
+					randaoList[i] = block.Header().MixDigest
+				}
+
+				// Verify that all nodes have the same randao value
+				for i := range NumNodes - 1 {
+					require.Equal(t, randaoList[i], randaoList[i+1], "Randao values should match across nodes")
+				}
+
+				// Verify that the randao value is different int the next block
+				receipt, err = net.EndowAccount(common.Address{0xFE}, big.NewInt(1))
+				require.NoError(t, err)
+				require.Equal(t, types.ReceiptStatusSuccessful, receipt.Status)
+				client, err := net.GetClientConnectedToNode(0)
 				require.NoError(t, err)
 				defer client.Close()
 
-				block, err := client.BlockByNumber(t.Context(), receipt.BlockNumber)
+				var block *types.Block
+				timeout, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+				defer cancel()
+				err = WaitFor(timeout, func(ctx context.Context) (bool, error) {
+					block, err = client.BlockByNumber(ctx, receipt.BlockNumber)
+					if err == ethereum.NotFound {
+						return false, nil
+					}
+					if err != nil {
+						return false, err
+					}
+					return true, nil
+				})
 				require.NoError(t, err)
 				require.NotZero(t, block.Header().MixDigest)
-				randaoList[i] = block.Header().MixDigest
-			}
-
-			// Verify that all nodes have the same randao value
-			for i := range NumNodes - 1 {
-				require.Equal(t, randaoList[i], randaoList[i+1], "Randao values should match across nodes")
-			}
-
-			// Verify that the randao value is different int the next block
-			receipt, err = net.EndowAccount(common.Address{0xFE}, big.NewInt(1))
-			require.NoError(t, err)
-			require.Equal(t, types.ReceiptStatusSuccessful, receipt.Status)
-			client, err := net.GetClientConnectedToNode(0)
-			require.NoError(t, err)
-			defer client.Close()
-			block, err := client.BlockByNumber(t.Context(), receipt.BlockNumber)
-			require.NoError(t, err)
-			require.NotZero(t, block.Header().MixDigest)
-			require.NotEqual(t, randaoList[0], block.Header().MixDigest, "Randao value should change in the next block")
-		})
+				require.NotEqual(t, randaoList[0], block.Header().MixDigest, "Randao value should change in the next block")
+			})
+		}
 	}
 }

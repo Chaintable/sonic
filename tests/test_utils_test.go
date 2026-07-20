@@ -295,45 +295,53 @@ func TestSetTransactionDefaults_CanInitializeAllTransactionTypes(t *testing.T) {
 		session := session.SpawnSession(t)
 		t.Parallel()
 
-		// endowments modify the account nonce
-		var receipt *types.Receipt
-		var err error
-		for range 2 {
-			receipt, err = session.EndowAccount(common.Address{}, big.NewInt(1))
-			require.NoError(t, err)
-			require.Equal(t, types.ReceiptStatusSuccessful, receipt.Status)
-		}
+		client, err := session.GetClient()
+		require.NoError(t, err)
+		defer client.Close()
 
-		err = waitUntilTransactionIsRetiredFromPoolByHash(t, client, receipt.TxHash, session.GetSessionSponsor().Address())
+		sender := MakeAccountWithBalance(t, session, big.NewInt(1e18))
+		nonce, err := client.NonceAt(t.Context(), sender.Address(), nil)
 		require.NoError(t, err)
 
-		tx := CreateTransaction(t, session, &types.LegacyTx{Nonce: 1}, session.GetSessionSponsor())
+		tx := CreateTransaction(t, session, &types.LegacyTx{Nonce: nonce + 1}, sender)
 
-		// the filled values suffice to get the transaction accepted and executed
-		_, err = session.Run(tx)
-		require.ErrorContains(t, err, "nonce too low")
+		// the filled values suffice to get the transaction accepted but it wont be executed
+		// because of the gapped nonce
+		err = client.SendTransaction(t.Context(), tx)
+		require.NoError(t, err)
 	})
 
 	t.Run("non-zero gas is not defaulted ", func(t *testing.T) {
 		session := session.SpawnSession(t)
 		t.Parallel()
 
+		client, err := session.GetClient()
+		require.NoError(t, err)
+		defer client.Close()
+
 		tx := CreateTransaction(t, session, &types.LegacyTx{Gas: 1}, session.GetSessionSponsor())
 
-		// the filled values suffice to get the transaction accepted and executed
-		_, err := session.Run(tx)
-		require.ErrorContains(t, err, " intrinsic gas too low")
+		err = client.SendTransaction(t.Context(), tx)
+		require.ErrorContains(t, err, "intrinsic gas too low")
 	})
 
 	t.Run("non-zero gas-price is not defaulted ", func(t *testing.T) {
 		session := session.SpawnSession(t)
 		t.Parallel()
 
-		tx := CreateTransaction(t, session, &types.LegacyTx{GasPrice: big.NewInt(1)}, session.GetSessionSponsor())
+		client, err := session.GetClient()
+		require.NoError(t, err)
+		defer client.Close()
+
+		price, err := client.SuggestGasPrice(t.Context())
+		require.NoError(t, err)
+
+		tx := CreateTransaction(t, session, &types.LegacyTx{GasPrice: price}, session.GetSessionSponsor())
 
 		// the filled values suffice to get the transaction accepted and executed
-		_, err := session.Run(tx)
-		require.ErrorContains(t, err, "underpriced")
+		receipt, err := session.Run(tx)
+		require.NoError(t, err)
+		require.Equal(t, types.ReceiptStatusSuccessful, receipt.Status)
 	})
 }
 
@@ -369,7 +377,7 @@ func TestSetTransactionDefaults_IsCorrectAfterUpgradesChange(t *testing.T) {
 		Upgrades: struct{ Allegro bool }{Allegro: true},
 	}
 	UpdateNetworkRules(t, net, rulesDiff)
-	AdvanceEpochAndWaitForBlocks(t, net)
+	net.AdvanceEpoch(t, 1)
 
 	// Wait until tx pool updates
 	tx2 := SignTransaction(t, net.GetChainId(),
@@ -418,7 +426,7 @@ func TestWaitUntilTransactionIsRetiredFromPool_waitsFromCompletion(t *testing.T)
 	// Because nonce is set to current nonce + 1, the transaction will not be executed
 	// waiting must time out
 	err = WaitUntilTransactionIsRetiredFromPool(t, client, txInvalidNonce)
-	require.ErrorContains(t, err, "wait timeout")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 
 	txData.Nonce = 0
 	txCorrectNonce := SignTransaction(t, chainId, txData, account)
@@ -462,7 +470,7 @@ func TestWaitFor_EventuallyTimesOut(t *testing.T) {
 	err := WaitFor(t.Context(), func(ctx context.Context) (bool, error) {
 		return false, nil
 	})
-	require.ErrorContains(t, err, "wait timeout")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestWaitFor_ForwardsErrors(t *testing.T) {
@@ -481,4 +489,42 @@ func TestWaitFor_ForwardsErrors(t *testing.T) {
 		return count == 10, fmt.Errorf("some error")
 	})
 	require.ErrorContains(t, err, "some error")
+}
+
+func TestUtils_MakeAccountWithBalance_EndowsExpectedBalance(t *testing.T) {
+	session := getIntegrationTestNetSession(t, opera.GetAllegroUpgrades())
+	t.Parallel()
+
+	client, err := session.GetClient()
+	require.NoError(t, err)
+	defer client.Close()
+
+	for _, expectedBalance := range []*big.Int{big.NewInt(0), big.NewInt(1), big.NewInt(1e18)} {
+		account := MakeAccountWithBalance(t, session, expectedBalance)
+
+		balance, err := client.BalanceAt(t.Context(), account.Address(), nil)
+		require.NoError(t, err)
+		require.Zero(t, balance.Cmp(expectedBalance), "balance mismatch: expected %s, got %s", expectedBalance.String(), balance.String())
+	}
+}
+
+func TestUtils_MakeAccountsWithBalance_EndowsExpectedBalance(t *testing.T) {
+	session := getIntegrationTestNetSession(t, opera.GetAllegroUpgrades())
+	t.Parallel()
+
+	client, err := session.GetClient()
+	require.NoError(t, err)
+	defer client.Close()
+
+	for _, expectedBalance := range []*big.Int{big.NewInt(0), big.NewInt(1), big.NewInt(200)} {
+		for count := range 10 {
+			accounts := MakeAccountsWithBalance(t, session, count, expectedBalance)
+
+			for _, account := range accounts {
+				balance, err := client.BalanceAt(t.Context(), account.Address(), nil)
+				require.NoError(t, err)
+				require.Zero(t, balance.Cmp(expectedBalance), "balance mismatch: expected %s, got %s", expectedBalance.String(), balance.String())
+			}
+		}
+	}
 }

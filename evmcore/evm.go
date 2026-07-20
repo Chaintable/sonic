@@ -19,10 +19,12 @@ package evmcore
 //go:generate mockgen -source=evm.go -destination=evm_mock.go -package=evmcore
 
 import (
+	"fmt"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/tracing"
+	"github.com/ethereum/go-ethereum/params"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -32,17 +34,33 @@ import (
 // DummyChain supports retrieving headers and consensus parameters from the
 // current blockchain to be used during transaction processing.
 type DummyChain interface {
-	// GetHeader returns the hash corresponding to their hash.
-	GetHeader(common.Hash, uint64) *EvmHeader
+	// Header returns the header of the block with the given number.
+	// If the block is not found, nil is returned.
+	// If the hash provided is not zero and does not match, nil is returned.
+	Header(hash common.Hash, number uint64) *EvmHeader
 }
 
 // NewEVMBlockContext creates a new context for use in the EVM.
 func NewEVMBlockContext(header *EvmHeader, chain DummyChain, author *common.Address) vm.BlockContext {
+	// For legacy Sonic network, the difficulty is always 1
+	difficulty := big.NewInt(1)
+	return NewEVMBlockContextWithDifficulty(header, chain, author, difficulty)
+}
+
+// NewEVMBlockContextWithDifficulty creates a new context for use in the EVM
+// with a specified difficulty.
+func NewEVMBlockContextWithDifficulty(
+	header *EvmHeader,
+	chain DummyChain,
+	author *common.Address,
+	difficulty *big.Int,
+) vm.BlockContext {
 	var (
 		beneficiary common.Address
 		baseFee     *big.Int
 		random      *common.Hash
 	)
+
 	// If we don't have an explicit author (i.e. not mining), extract from the header
 	if author == nil {
 		beneficiary = header.Coinbase
@@ -53,13 +71,18 @@ func NewEVMBlockContext(header *EvmHeader, chain DummyChain, author *common.Addr
 		baseFee = new(big.Int).Set(header.BaseFee)
 	}
 
-	// For legacy Sonic network, the difficulty is always 1 and random nil
-	difficulty := big.NewInt(1)
 	if header.PrevRandao.Cmp(common.Hash{}) != 0 {
-		// Difficulty must be set to 0 when PREVRANDAO is enabled.
 		random = &header.PrevRandao
+		// Difficulty must be set to 0 when PREVRANDAO is enabled.
 		difficulty.SetUint64(0)
 	}
+
+	// default for Sonic networks, overridden by header if present
+	blobBaseFee := GetBlobBaseFee().ToBig()
+	if header.BlobBaseFee != nil {
+		blobBaseFee = new(big.Int).Set(header.BlobBaseFee)
+	}
+
 	return vm.BlockContext{
 		CanTransfer: CanTransfer,
 		Transfer:    Transfer,
@@ -71,17 +94,33 @@ func NewEVMBlockContext(header *EvmHeader, chain DummyChain, author *common.Addr
 		BaseFee:     baseFee,
 		GasLimit:    header.GasLimit,
 		Random:      random,
-		BlobBaseFee: big.NewInt(1), // TODO issue #147
+		BlobBaseFee: blobBaseFee,
 	}
 }
 
 // NewEVMTxContext creates a new transaction context for a single transaction.
-func NewEVMTxContext(msg *core.Message) vm.TxContext {
-	return vm.TxContext{
-		Origin:     msg.From,
-		GasPrice:   new(big.Int).Set(msg.GasPrice),
-		BlobFeeCap: msg.BlobGasFeeCap,
+// This is a wrapper around core.NewEVMTxContext to ensure that the gas price is
+// valid. If the gas price is invalid, an error is returned.
+func NewEVMTxContext(msg *core.Message) (vm.TxContext, error) {
+	if msg == nil {
+		return vm.TxContext{}, fmt.Errorf("message cannot be nil")
 	}
+	_, overflow := uint256.FromBig(msg.GasPrice)
+	if msg.GasPrice.Sign() < 0 || overflow {
+		return vm.TxContext{}, fmt.Errorf("invalid gas price %v", msg.GasPrice)
+	}
+	return core.NewEVMTxContext(msg), nil
+}
+
+// MustNewEVMTxContext is a helper function that wraps NewEVMTxContext and
+// panics if an error occurs. Use this with care, when you are sure that the
+// input message is valid.
+func MustNewEVMTxContext(msg *core.Message) vm.TxContext {
+	txContext, err := NewEVMTxContext(msg)
+	if err != nil {
+		panic(fmt.Sprintf("failed to create EVM transaction context: %v", err))
+	}
+	return txContext
 }
 
 // GetHashFn returns a GetHashFunc which retrieves header hashes by number
@@ -103,7 +142,7 @@ func GetHashFn(ref *EvmHeader, chain DummyChain) func(n uint64) common.Hash {
 		lastKnownNumber := ref.Number.Uint64() - uint64(len(cache))
 
 		for {
-			header := chain.GetHeader(lastKnownHash, lastKnownNumber)
+			header := chain.Header(lastKnownHash, lastKnownNumber)
 			if header == nil {
 				break
 			}
@@ -125,7 +164,7 @@ func CanTransfer(db vm.StateDB, addr common.Address, amount *uint256.Int) bool {
 }
 
 // Transfer subtracts amount from sender and adds amount to recipient using the given Db
-func Transfer(db vm.StateDB, sender, recipient common.Address, amount *uint256.Int) {
+func Transfer(db vm.StateDB, sender, recipient common.Address, amount *uint256.Int, _ *params.Rules) {
 	db.SubBalance(sender, amount, tracing.BalanceChangeTransfer)
 	db.AddBalance(recipient, amount, tracing.BalanceChangeTransfer)
 }

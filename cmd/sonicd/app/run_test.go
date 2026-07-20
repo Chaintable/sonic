@@ -30,8 +30,8 @@ import (
 	"github.com/0xsoniclabs/sonic/opera"
 	futils "github.com/0xsoniclabs/sonic/utils"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
-	"github.com/docker/docker/pkg/reexec"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/moby/sys/reexec"
 
 	"github.com/0xsoniclabs/sonic/cmd/cmdtest"
 )
@@ -43,8 +43,8 @@ func tmpdir(t *testing.T) string {
 func initFakenetDatadir(dataDir string, validatorsNum idx.Validator) {
 	genesisStore := makefakegenesis.FakeGenesisStore(
 		validatorsNum,
-		futils.ToFtm(1000000000),
-		futils.ToFtm(5000000),
+		futils.ToFtmU256(1000000000),
+		futils.ToFtmU256(5000000),
 		opera.GetSonicUpgrades(),
 	)
 	defer func() {

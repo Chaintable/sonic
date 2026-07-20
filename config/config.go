@@ -253,6 +253,12 @@ func gossipConfigWithFlags(ctx *cli.Context, src gossip.Config) gossip.Config {
 	if ctx.IsSet(flags.StructLogLimitFlag.Name) {
 		cfg.StructLogLimit = ctx.GlobalInt(flags.StructLogLimitFlag.Name)
 	}
+	if ctx.GlobalIsSet(flags.RPCLogQueryParameterLimit.Name) {
+		cfg.FilterAPI.LogQueryParameterLimit = ctx.GlobalUint(flags.RPCLogQueryParameterLimit.Name)
+	}
+	if ctx.GlobalIsSet(flags.RPCLogQueryResultLimit.Name) {
+		cfg.FilterAPI.LogQueryResultLimit = ctx.GlobalUint(flags.RPCLogQueryResultLimit.Name)
+	}
 	return cfg
 }
 
@@ -397,6 +403,10 @@ func MakeAllConfigsFromFile(ctx *cli.Context, configFile string) (*Config, error
 	if ctx.IsSet(flags.TEST_ONLY_DisableTransactionPoolValidation.Name) {
 		cfg.TxPool.DisableTxPoolValidation = true
 	}
+	if ctx.IsSet(flags.TEST_ONLY_EnableTestOnlyApi.Name) {
+		cfg.Opera.EnableTestOnlyApi = true
+		cfg.Emitter.AllowForcedEmission = true
+	}
 	if err := setTxPool(ctx, &cfg.TxPool); err != nil {
 		return nil, err
 	}
@@ -411,13 +421,15 @@ func MakeAllConfigsFromFile(ctx *cli.Context, configFile string) (*Config, error
 		return nil, err
 	}
 
-	if ctx.GlobalBool(flags.EnableThrottlingFlag.Name) {
-		cfg.Emitter.ThrottlerConfig = emitter_config.ThrottlerConfig{
-			Enabled:                true,
-			DominantStakeThreshold: ctx.GlobalFloat64(flags.ThrottlingDominantThresholdFlag.Name),
-			DominatingTimeout:      emitter_config.Attempt(ctx.GlobalUint64(flags.ThrottlingDominatingTimeout.Name)),
-			NonDominatingTimeout:   emitter_config.Attempt(ctx.GlobalUint64(flags.ThrottlingNonDominatingTimeout.Name)),
-		}
+	cfg.Emitter.ThrottlerConfig.Enabled = ctx.GlobalBoolT(flags.EnableThrottlingFlag.Name)
+	if ctx.GlobalIsSet(flags.ThrottlingDominantThresholdFlag.Name) {
+		cfg.Emitter.ThrottlerConfig.DominantStakeThreshold = ctx.GlobalFloat64(flags.ThrottlingDominantThresholdFlag.Name)
+	}
+	if ctx.GlobalIsSet(flags.ThrottlingDominatingTimeout.Name) {
+		cfg.Emitter.ThrottlerConfig.DominatingTimeout = emitter_config.Attempt(ctx.GlobalUint64(flags.ThrottlingDominatingTimeout.Name))
+	}
+	if ctx.GlobalIsSet(flags.ThrottlingNonDominatingTimeout.Name) {
+		cfg.Emitter.ThrottlerConfig.NonDominatingTimeout = emitter_config.Attempt(ctx.GlobalUint64(flags.ThrottlingNonDominatingTimeout.Name))
 	}
 
 	if err := cfg.Emitter.Validate(); err != nil {
@@ -447,8 +459,8 @@ func DefaultNodeConfig() node.Config {
 	cfg := NodeDefaultConfig
 	cfg.Name = ClientIdentifier
 	cfg.Version = version.StringWithCommit()
-	cfg.HTTPModules = append(cfg.HTTPModules, "eth", "dag", "abft", "web3")
-	cfg.WSModules = append(cfg.WSModules, "eth", "dag", "abft", "web3")
+	cfg.HTTPModules = append(cfg.HTTPModules, "eth", "dag", "abft", "web3", "sonic")
+	cfg.WSModules = append(cfg.WSModules, "eth", "dag", "abft", "web3", "sonic")
 	cfg.IPCPath = "sonic.ipc"
 	return cfg
 }

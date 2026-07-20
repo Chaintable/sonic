@@ -19,12 +19,14 @@ package blockproc
 import (
 	"math/big"
 
+	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
 
 	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/evmcore/core_types"
 	"github.com/0xsoniclabs/sonic/inter"
 	"github.com/0xsoniclabs/sonic/inter/iblockproc"
 	"github.com/0xsoniclabs/sonic/inter/state"
@@ -34,7 +36,7 @@ import (
 //go:generate mockgen -source=interface.go -package=blockproc -destination=interface_mock.go
 
 type TxListener interface {
-	OnNewLog(*types.Log)
+	OnNewLog(*core_types.Log)
 	OnNewReceipt(tx *types.Transaction, r *types.Receipt, originator idx.ValidatorID, baseFee *big.Int, blobBaseFee *big.Int)
 	Finalize() iblockproc.BlockState
 	Update(bs iblockproc.BlockState, es iblockproc.EpochState)
@@ -50,7 +52,11 @@ type TxTransactor interface {
 
 type SealerProcessor interface {
 	EpochSealing() bool
-	SealEpoch() (iblockproc.BlockState, iblockproc.EpochState)
+	SealEpoch(
+		lastBlockHash hash.Hash,
+		lastExecPlanChainHash hash.Hash,
+		sealingTxs []*types.Transaction,
+	) (iblockproc.BlockState, iblockproc.EpochState)
 	Update(bs iblockproc.BlockState, es iblockproc.EpochState)
 }
 
@@ -68,7 +74,7 @@ type ConfirmedEventsModule interface {
 }
 
 type EVMProcessor interface {
-	Execute(txs types.Transactions, gasLimit uint64) []evmcore.ProcessedTransaction
+	Execute(txs types.Transactions, gasLimit uint64, sizeLimit uint64) evmcore.ProcessSummary
 	Finalize() (evmBlock *evmcore.EvmBlock, numSkipped int, receipts types.Receipts)
 }
 
@@ -77,9 +83,10 @@ type EVM interface {
 		block iblockproc.BlockCtx,
 		statedb state.StateDB,
 		reader evmcore.DummyChain,
-		onNewLog func(*types.Log),
+		onNewLog func(*core_types.Log),
 		net opera.Rules,
 		evmCfg *params.ChainConfig,
 		prevrandao common.Hash,
+		metrics evmcore.BlockExecutionMetrics,
 	) EVMProcessor
 }

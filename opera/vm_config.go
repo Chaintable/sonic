@@ -20,8 +20,14 @@ import (
 	"github.com/0xsoniclabs/sonic/opera/contracts/evmwriter"
 	"github.com/0xsoniclabs/tosca/go/geth_adapter"
 	"github.com/0xsoniclabs/tosca/go/interpreter/lfvm"
+	"github.com/0xsoniclabs/tosca/go/interpreter/sfvm"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/vm"
+)
+
+const (
+	SonicPostAllegroMaxCodeSize     = 1<<15 + 1<<14                   // 48 KiB
+	SonicPostAllegroMaxInitCodeSize = SonicPostAllegroMaxCodeSize * 2 // 96 KiB
 )
 
 // sonicVmConfig is the initial Ethereum VM configuration used for processing
@@ -55,6 +61,22 @@ var sonicVmConfig = func() vm.Config {
 	}
 }()
 
+// sfvmFactory is a factory for creating a SFVM interpreter,
+// starting from the Brio upgrade it is used as the default interpreter.
+var sfvmFactory = func() vm.InterpreterFactory {
+	config := sfvm.Config{
+		WithShaCache:      true,
+		WithAnalysisCache: true,
+		AnalysisCacheSize: 1 << 28, // 256 MiB
+		MaxCachedCodeSize: SonicPostAllegroMaxCodeSize,
+	}
+	interpreter, err := sfvm.NewInterpreter(config)
+	if err != nil {
+		panic(err)
+	}
+	return geth_adapter.NewGethInterpreterFactory(interpreter)
+}()
+
 // GetVmConfig returns the VM configuration to be used for processing
 // transactions under the given network rules.
 func GetVmConfig(rules Rules) vm.Config {
@@ -63,6 +85,21 @@ func GetVmConfig(rules Rules) vm.Config {
 	// don't charge excess gas in single proposer mode
 	if rules.Upgrades.SingleProposerBlockFormation {
 		res.ChargeExcessGas = false
+	}
+
+	if rules.Upgrades.Brio {
+		// make a copy of the rules value to avoid changing the original
+		rulesMaxTxGas := rules.Economy.Gas.MaxEventGas
+		res.MaxTxGas = &rulesMaxTxGas
+
+		// use the SFVM interpreter starting from the Brio upgrade
+		res.Interpreter = sfvmFactory
+
+		// Starting from Brio, sonic enforces its own code size limits.
+		maxCodeSize := SonicPostAllegroMaxCodeSize
+		maxInitCodeSize := SonicPostAllegroMaxInitCodeSize
+		res.MaxCodeSize = &maxCodeSize
+		res.MaxInitCodeSize = &maxInitCodeSize
 	}
 
 	return res

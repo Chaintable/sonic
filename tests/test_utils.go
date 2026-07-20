@@ -23,18 +23,21 @@ import (
 	"iter"
 	"math/big"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/0xsoniclabs/sonic/ethapi"
+	"github.com/0xsoniclabs/sonic/api/ethapi"
 	"github.com/0xsoniclabs/sonic/gossip/contract/driverauth100"
 	"github.com/0xsoniclabs/sonic/opera"
 	"github.com/0xsoniclabs/sonic/opera/contracts/driverauth"
+	"github.com/0xsoniclabs/sonic/tests/contracts/revert"
+
 	"github.com/Fantom-foundation/lachesis-base/hash"
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -55,7 +58,7 @@ import (
 //     minimum gas required to execute the transaction
 //     Filled gas is a static minimum value, it does not account for the gas
 //     costs of the contract opcodes.
-func CreateTransaction(t *testing.T, session IntegrationTestNetSession, tx types.TxData, account *Account) *types.Transaction {
+func CreateTransaction(t testing.TB, session IntegrationTestNetSession, tx types.TxData, account *Account) *types.Transaction {
 	t.Helper()
 	signedTx := SignTransaction(
 		t,
@@ -69,7 +72,7 @@ func CreateTransaction(t *testing.T, session IntegrationTestNetSession, tx types
 // SignTransaction is a testing helper that signs a transaction with the
 // key from the provided account
 func SignTransaction(
-	t *testing.T,
+	t testing.TB,
 	chainId *big.Int,
 	payload types.TxData,
 	from *Account,
@@ -97,7 +100,7 @@ func SignTransaction(
 // Notice that this function is generic, returning the same type as the input, this
 // allows further manual configuration of the transaction fields after the defaults are set.
 func SetTransactionDefaults[T types.TxData](
-	t *testing.T,
+	t testing.TB,
 	net IntegrationTestNetSession,
 	txPayload T,
 	sender *Account,
@@ -124,88 +127,57 @@ func SetTransactionDefaults[T types.TxData](
 
 	gas := tmpTx.Gas()
 	if gas == 0 {
-		gas = computeMinimumGas(t, net, txPayload)
+		gas, err = client.EstimateGas(t.Context(), ethereum.CallMsg{
+			From:          sender.Address(),
+			To:            tmpTx.To(),
+			GasPrice:      gasPrice,
+			Value:         tmpTx.Value(),
+			Data:          tmpTx.Data(),
+			AccessList:    tmpTx.AccessList(),
+			BlobGasFeeCap: tmpTx.BlobGasFeeCap(),
+			// NOTE: blob hashes are intentionally not included, as
+			// the sonic network rejects transactions with blob hashes.
+			// And therefore estimation returns an error.
+			AuthorizationList: tmpTx.SetCodeAuthorizations(),
+		})
+		require.NoError(t, err, "failed to estimate gas for transaction")
 	}
 
 	switch tx := types.TxData(txPayload).(type) {
 	case *types.LegacyTx:
-		tx.Nonce = nonce
-		tx.Gas = gas
-		tx.GasPrice = gasPrice
+		copied := *tx
+		copied.Nonce = nonce
+		copied.Gas = gas
+		copied.GasPrice = gasPrice
+		return any(&copied).(T)
 	case *types.AccessListTx:
-		tx.Nonce = nonce
-		tx.Gas = gas
-		tx.GasPrice = big.NewInt(500e9)
+		copied := *tx
+		copied.Nonce = nonce
+		copied.Gas = gas
+		copied.GasPrice = gasPrice
+		return any(&copied).(T)
 	case *types.DynamicFeeTx:
-		tx.Nonce = nonce
-		tx.Gas = gas
-		tx.GasFeeCap = gasPrice
+		copied := *tx
+		copied.Nonce = nonce
+		copied.Gas = gas
+		copied.GasFeeCap = gasPrice
+		return any(&copied).(T)
 	case *types.BlobTx:
-		tx.Nonce = nonce
-		tx.Gas = gas
-		tx.GasFeeCap = uint256.MustFromBig(gasPrice)
+		copied := *tx
+		copied.Nonce = nonce
+		copied.Gas = gas
+		copied.GasFeeCap = uint256.MustFromBig(gasPrice)
+		return any(&copied).(T)
 	case *types.SetCodeTx:
-		tx.Nonce = nonce
-		tx.Gas = gas
-		tx.GasFeeCap = uint256.MustFromBig(gasPrice)
+		copied := *tx
+		copied.Nonce = nonce
+		copied.Gas = gas
+		copied.GasFeeCap = uint256.MustFromBig(gasPrice)
+		return any(&copied).(T)
 	default:
 		t.Fatalf("unexpected transaction type: %T", tx)
+		return txPayload
 	}
-
-	return txPayload
-}
-
-// ComputeMinimumGas computes the minimum gas required to execute a transaction,
-// this accounts for all gas costs except for the contract opcodes gas costs.
-func computeMinimumGas(t *testing.T, session IntegrationTestNetSession, tx types.TxData) uint64 {
-
-	var data []byte
-	var accessList []types.AccessTuple
-	var authorizations []types.SetCodeAuthorization
-	var isCreate bool
-	switch tx := tx.(type) {
-	case *types.LegacyTx:
-		data = tx.Data
-		isCreate = tx.To == nil
-	case *types.AccessListTx:
-		data = tx.Data
-		accessList = tx.AccessList
-		isCreate = tx.To == nil
-	case *types.DynamicFeeTx:
-		data = tx.Data
-		accessList = tx.AccessList
-		isCreate = tx.To == nil
-	case *types.BlobTx:
-		data = tx.Data
-		accessList = tx.AccessList
-		isCreate = false
-	case *types.SetCodeTx:
-		data = tx.Data
-		accessList = tx.AccessList
-		authorizations = tx.AuthList
-		isCreate = false
-	default:
-		t.Fatalf("unexpected transaction type: %T", tx)
-	}
-
-	minimumGas, err := core.IntrinsicGas(data, accessList, authorizations, isCreate, true, true, true)
-	require.NoError(t, err)
-
-	client, err := session.GetClient()
-	require.NoError(t, err)
-	defer client.Close()
-
-	var currentRules opera.Rules
-	err = client.Client().Call(&currentRules, "eth_getRules", "latest")
-	require.NoError(t, err)
-
-	if currentRules.Upgrades.Allegro {
-		floorDataGas, err := core.FloorDataGas(data)
-		require.NoError(t, err)
-		minimumGas = max(minimumGas, floorDataGas)
-	}
-
-	return minimumGas
 }
 
 // WaitUntilTransactionIsRetiredFromPool waits until the transaction no longer exists in the transaction pool.
@@ -325,13 +297,34 @@ func GetEpochOfBlock(t *testing.T, client *PooledEhtClient, blockNumber int) int
 // Creating the account this way allows to get access to the private key to sign transactions.
 func MakeAccountWithBalance(t *testing.T, net IntegrationTestNetSession, balance *big.Int) *Account {
 	t.Helper()
-	account := NewAccount()
-	receipt, err := net.EndowAccount(account.Address(), balance)
+	return MakeAccountsWithBalance(t, net, 1, balance)[0]
+}
+
+// MakeAccountsWithBalance creates multiple new accounts and endows them with the given balance.
+// Creating the accounts this way allows to get access to the private keys to sign transactions.
+func MakeAccountsWithBalance(t testing.TB, net IntegrationTestNetSession, count int, balance *big.Int) []*Account {
+	t.Helper()
+
+	accounts := make([]*Account, count)
+	addresses := make([]common.Address, count)
+	wg := sync.WaitGroup{}
+	for i := range count {
+		wg.Go(func() {
+			accounts[i] = NewAccount()
+			addresses[i] = accounts[i].Address()
+		})
+	}
+	wg.Wait()
+
+	receipts, err := net.EndowAccounts(addresses, balance)
 	require.NoError(t, err)
-	require.Equal(t,
-		receipt.Status, types.ReceiptStatusSuccessful,
-		"endowing account failed")
-	return account
+	for _, receipt := range receipts {
+		require.Equal(t,
+			types.ReceiptStatusSuccessful,
+			receipt.Status,
+			"endowing account failed")
+	}
+	return accounts
 }
 
 // GenerateTestDataBasedOnModificationCombinations generates all possible versions of a
@@ -402,6 +395,7 @@ func WaitFor(ctx context.Context, predicate func(context.Context) (bool, error))
 	// implement some backoff strategy: sleeps get longer the longer it
 	// takes to receive the event
 	backoff := 5 * time.Millisecond
+	maxWaitTime := 100 * time.Millisecond
 
 	for {
 		ok, err := predicate(timedContext)
@@ -410,41 +404,12 @@ func WaitFor(ctx context.Context, predicate func(context.Context) (bool, error))
 		}
 		select {
 		case <-timedContext.Done():
-			return fmt.Errorf("wait timeout")
+			return timedContext.Err()
 		case <-time.After(backoff):
 			// The predicate was not satisfied, backoff and try again.
-			backoff = backoff * 2
+			backoff = min(maxWaitTime, backoff*2)
 		}
 	}
-}
-
-// AdvanceEpochAndWaitForBlocks sends a transaction to advance to the next epoch.
-// It also waits until the new epoch is really reached and the next two blocks are produced.
-// It is useful to test a situation when the rule change is applied to the next block after the epoch change.
-func AdvanceEpochAndWaitForBlocks(t *testing.T, net *IntegrationTestNet) {
-	t.Helper()
-
-	require := require.New(t)
-
-	net.AdvanceEpoch(t, 1)
-
-	client, err := net.GetClient()
-	require.NoError(err)
-	defer client.Close()
-
-	currentBlock, err := client.BlockByNumber(t.Context(), nil)
-	require.NoError(err)
-
-	// wait the next two blocks as some rules (such as min base fee) are applied
-	// to the next block after the epoch change becomes effective
-	err = WaitFor(t.Context(), func(ctx context.Context) (bool, error) {
-		newBlock, err := client.BlockByNumber(t.Context(), nil)
-		if err != nil {
-			return false, err
-		}
-		return newBlock.Number().Int64() > currentBlock.Number().Int64()+1, nil
-	})
-	require.NoError(err, "failed to wait for the next two blocks after epoch change")
 }
 
 // getProofFor retrieves the account proof for the given block number.
@@ -478,12 +443,36 @@ func GetStateRoot(t *testing.T, client *PooledEhtClient, blockNumber int) common
 	return common.BytesToHash(crypto.Keccak256(data))
 }
 
+// WaitForBlock waits until the block with the given number is available in the node, it errors
+// if the block is not available after a timeout.
+// It can be used to wait in multiple nodes for the same block, to ensure they have all processed it.
+func WaitForBlock(t *testing.T, client *PooledEhtClient, blockNumber int) *types.Block {
+	var block *types.Block
+	err := WaitFor(t.Context(), func(ctx context.Context) (bool, error) {
+		var err error
+		block, err = client.BlockByNumber(ctx, big.NewInt(int64(blockNumber)))
+		if err != nil {
+			if err == ethereum.NotFound {
+				return false, nil
+			}
+			return false, err
+		}
+		return true, nil
+	})
+	require.NoError(t, err, "failed to wait for block %d", blockNumber)
+	return block
+}
+
 func WaitForProofOf(t *testing.T, client *PooledEhtClient, blockNumber int) {
 	err := WaitFor(context.Background(), func(ctx context.Context) (bool, error) {
 		_, err := getProofFor(t, client, blockNumber)
-		if err != nil && strings.Contains(err.Error(), "not present") {
-			// wait a bit to give the DB a chance to catch up
-			return false, nil
+		if err != nil {
+			for _, ignoredIssue := range []string{"not present", "header not found"} {
+				if strings.Contains(err.Error(), ignoredIssue) {
+					// wait a bit to give the DB a chance to catch up
+					return false, nil
+				}
+			}
 		}
 		// any other error is considered a failure
 		if err != nil {
@@ -520,4 +509,47 @@ func GetCurrentEpoch(t *testing.T, client *PooledEhtClient) uint64 {
 	err := client.Client().Call(&epoch, "eth_currentEpoch")
 	require.NoError(t, err)
 	return uint64(epoch)
+}
+
+// MustDeployContract deploys a contract using the provided deploy function and
+// returns its address.
+func MustDeployContract[T any](
+	t testing.TB,
+	session IntegrationTestNetSession,
+	deployFunc ContractDeployer[T],
+) common.Address {
+	t.Helper()
+
+	_, receipt, err := DeployContract(session, deployFunc)
+	require.NoError(t, err, "failed to deploy contract; %v", err)
+	require.Equal(t, receipt.Status, types.ReceiptStatusSuccessful)
+
+	return receipt.ContractAddress
+}
+
+// MustGetMethodParameters retrieves the ABI of a contract and packs the input
+// parameters for a specified method and returns the packed input data.
+func MustGetMethodParameters(
+	t testing.TB,
+	bindMetadata *bind.MetaData,
+	methodName string,
+	args ...any,
+) []byte {
+	t.Helper()
+
+	abi, err := bindMetadata.GetAbi()
+	require.NoError(t, err, "failed to get counter abi; %v", err)
+	input, err := abi.Pack(methodName, args...)
+	require.NoError(t, err, "failed to pack input for method %s; %v", methodName, err)
+
+	return input
+}
+
+// MustDeployRevertContractAndGetMethodCallParameters deploys the Revert
+// contract and prepares the input for calling the doCrash method, which always
+// reverts. It returns the address of the deployed contract and the input data.
+func MustDeployRevertContractAndGetMethodCallParameters(t testing.TB, session IntegrationTestNetSession) (common.Address, []byte) {
+	addr := MustDeployContract(t, session, revert.DeployRevert)
+	input := MustGetMethodParameters(t, revert.RevertMetaData, "doCrash")
+	return addr, input
 }

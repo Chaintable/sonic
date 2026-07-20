@@ -146,6 +146,7 @@ func TestUpgradesRLP_CanBeEncodedAndDecoded(t *testing.T) {
 		func(u *Upgrades) { u.SingleProposerBlockFormation = true },
 		func(u *Upgrades) { u.Brio = true },
 		func(u *Upgrades) { u.GasSubsidies = true },
+		func(u *Upgrades) { u.TransactionBundles = true },
 	}
 
 	for mask := range 1 << len(setUpgrade) {
@@ -206,4 +207,22 @@ func TestGasRulesLLRCompatibilityRLP(t *testing.T) {
 	require.NoError(err)
 
 	require.Equal(b2, b1)
+}
+
+func TestUpdateRules_RuleValidationIsPerformedStartingFromAllegro(t *testing.T) {
+	hardforks := []string{"Sonic", "Allegro", "Brio"}
+
+	for _, hardfork := range hardforks {
+		base := FakeNetRules(GetSonicUpgrades())
+
+		// send an invalid update and enable the hardfork
+		update := fmt.Sprintf(`{"Dag":{"MaxParents":1}, "Upgrades":{"%s":true}}`, hardfork)
+
+		_, err := UpdateRules(base, []byte(update))
+		if hardfork == "Sonic" {
+			require.NoError(t, err, "should not validate rules for Sonic hardfork")
+		} else {
+			require.Error(t, err, "should validate rules for %s hardfork", hardfork)
+		}
+	}
 }

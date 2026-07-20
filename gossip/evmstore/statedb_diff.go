@@ -61,27 +61,27 @@ func (s *Store) ArchiveStateDiffByNumber(number uint64) (diff mpt.Diff, err erro
 func carmenArchiveDiffProviderFromArchiveState(archiveState carmen.State) (carmenArchiveDiffProvider, error) {
 	value := reflect.ValueOf(archiveState)
 	if value.Kind() != reflect.Pointer || value.IsNil() {
-		return nil, fmt.Errorf("Carmen archive state %T cannot provide block diffs", archiveState)
+		return nil, fmt.Errorf("carmen archive state %T cannot provide block diffs", archiveState)
 	}
 	elem := value.Elem()
 	if elem.Kind() != reflect.Struct {
-		return nil, fmt.Errorf("Carmen archive state %T cannot provide block diffs", archiveState)
+		return nil, fmt.Errorf("carmen archive state %T cannot provide block diffs", archiveState)
 	}
 	field := elem.FieldByName("archive")
 	if !field.IsValid() {
-		return nil, fmt.Errorf("Carmen archive state %T does not expose an archive handle", archiveState)
+		return nil, fmt.Errorf("carmen archive state %T does not expose an archive handle", archiveState)
 	}
 	if !field.CanAddr() {
-		return nil, fmt.Errorf("Carmen archive state %T archive handle is not addressable", archiveState)
+		return nil, fmt.Errorf("carmen archive state %T archive handle is not addressable", archiveState)
 	}
 	if field.Kind() == reflect.Interface && field.IsNil() {
-		return nil, fmt.Errorf("Carmen archive state %T has no archive handle", archiveState)
+		return nil, fmt.Errorf("carmen archive state %T has no archive handle", archiveState)
 	}
 
 	archive := reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Interface()
 	provider, ok := archive.(carmenArchiveDiffProvider)
 	if !ok {
-		return nil, fmt.Errorf("Carmen archive %T does not expose block diffs", archive)
+		return nil, fmt.Errorf("carmen archive %T does not expose block diffs", archive)
 	}
 	return provider, nil
 }

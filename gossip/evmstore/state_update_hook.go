@@ -50,7 +50,7 @@ func newCarmenStateUpdateRecorder(state carmen.State, hook func() StateUpdateHoo
 	}
 }
 
-func (r *carmenStateUpdateRecorder) Apply(block uint64, update cc.Update) error {
+func (r *carmenStateUpdateRecorder) Apply(block uint64, update cc.Update) (<-chan error, error) {
 	var hook StateUpdateHook
 	if r.hook != nil {
 		hook = r.hook()
@@ -59,20 +59,21 @@ func (r *carmenStateUpdateRecorder) Apply(block uint64, update cc.Update) error 
 		return r.State.Apply(block, update)
 	}
 
-	parentRoot, err := r.State.GetHash()
+	parentRoot, err := r.GetHash()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	canonicalUpdate := cloneCarmenUpdate(update)
-	if err := r.State.Apply(block, update); err != nil {
-		return err
-	}
-	newRoot, err := r.State.GetHash()
+	archiveDone, err := r.State.Apply(block, update)
 	if err != nil {
-		return err
+		return archiveDone, err
+	}
+	newRoot, err := r.GetHash()
+	if err != nil {
+		return archiveDone, err
 	}
 	hook(block, parentRoot, newRoot, canonicalUpdate)
-	return nil
+	return archiveDone, nil
 }
 
 func cloneCarmenUpdate(update cc.Update) cc.Update {

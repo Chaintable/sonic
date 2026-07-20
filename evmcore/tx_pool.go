@@ -36,6 +36,7 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/bundle"
 	"github.com/0xsoniclabs/sonic/gossip/blockproc/subsidies"
 	"github.com/0xsoniclabs/sonic/inter/state"
 	"github.com/0xsoniclabs/sonic/opera"
@@ -86,10 +87,6 @@ var (
 	// maximum allowance of the current block.
 	ErrGasLimit = errors.New("exceeds block gas limit")
 
-	// ErrNegativeValue is a sanity error to ensure no one is able to specify a
-	// transaction with a negative value.
-	ErrNegativeValue = errors.New("negative value")
-
 	// ErrOversizedData is returned if the input data of a transaction is greater
 	// than some meaningful limit a user might use. This is not a consensus error
 	// making the transaction invalid, rather a DOS protection.
@@ -106,6 +103,19 @@ var (
 	// ErrSponsoredTransactionsDisabled is returned when validating a sponsorship
 	// request if gas subsidies are disabled in the current network rules.
 	ErrSponsoredTransactionsDisabled = errors.New("sponsored transactions are disabled")
+
+	// ErrBundleTransactionsDisabled is returned when validating a transaction
+	// bundle if transaction bundles are disabled in the current network rules.
+	ErrBundleTransactionsDisabled = errors.New("bundled transactions are disabled")
+
+	// ErrBundleTransactionInvalid is returned when a bundle envelope is ill-formed
+	ErrBundleTransactionInvalid = errors.New("invalid bundle transaction")
+
+	// ErrBundleAlreadyProcessed is returned when a bundle transaction is rejected because the same bundle has already been processed recently.
+	ErrBundleAlreadyProcessed = errors.New("bundle has already been processed recently")
+
+	// ErrBundleNonExecutable is returned when a bundle transaction is rejected because it is not executable.
+	ErrBundleNonExecutable = errors.New("bundle is not executable")
 )
 
 var (
@@ -165,24 +175,23 @@ const (
 // some pre checks in tx pool and event subscribers.
 type StateReader interface {
 	CurrentBlock() *EvmBlock
-	GetBlock(hash common.Hash, number uint64) *EvmBlock
-	GetTxPoolStateDB() (state.StateDB, error)
-	GetCurrentBaseFee() *big.Int
-	MaxGasLimit() uint64
+	Block(hash common.Hash, number uint64) *EvmBlock
+	CurrentStateDB() (state.StateDB, error)
+	CurrentBaseFee() *big.Int
+	CurrentMaxGasLimit() uint64
 	SubscribeNewBlock(ch chan<- ChainHeadNotify) notify.Subscription
-	Config() *params.ChainConfig
-	GetCurrentRules() opera.Rules
-	GetHeader(common.Hash, uint64) *EvmHeader
+	CurrentConfig() *params.ChainConfig
+	CurrentRules() opera.Rules
+	Header(hash common.Hash, number uint64) *EvmHeader
 }
 
-// subsidiesCheckerFactory is a factory method to create a subsidies checker instance.
-// This facilitates testing of the TxPool by using injected mock implementations.
-type subsidiesCheckerFactory func(
+// subsidiesCheckFuncFactory is a factory method to create a subsidies checker instance.
+type subsidiesCheckFuncFactory func(
 	rules opera.Rules,
 	chain StateReader,
 	state state.StateDB,
 	signer types.Signer,
-) subsidiesChecker
+) utils.TransactionCheckFunc
 
 // TxPoolConfig are the configuration parameters of the transaction pool.
 type TxPoolConfig struct {
@@ -293,6 +302,7 @@ type TxPool struct {
 
 	istanbul bool // Fork indicator whether we are in the istanbul stage.
 	shanghai bool // Fork indicator whether we are in the shanghai stage.
+	osaka    bool // Fork indicator whether we are in the osaka stage.
 	eip2718  bool // Fork indicator whether we are using EIP-2718 type transactions.
 	eip1559  bool // Fork indicator whether we are using EIP-1559 type transactions.
 	eip4844  bool // Fork indicator whether we are using EIP-4844 type transactions.
@@ -324,8 +334,10 @@ type TxPool struct {
 	waitForIdleReorgLoopRequestCh  chan struct{} // requests to wait for reorg completion
 	waitForIdleReorgLoopResponseCh chan struct{} // responses to waitForReorgDoneRequestCh
 
-	subsidiesCheckerFactory subsidiesCheckerFactory // Factory to create a subsidies checker instance
-	subsidiesCheckerCache   *subsidiesCheckerCache  // Cache for subsidies check results
+	subsidiesCheckerFactory subsidiesCheckFuncFactory    // Factory to create a subsidies checker instance
+	subsidiesCheckerCache   *utils.TransactionCheckCache // Cache for heavy subsidies check results
+
+	bundleEvaluationCache BundleEvaluator // Cache for bundle evaluation results
 }
 
 type txpoolResetRequest struct {
@@ -337,15 +349,24 @@ type txpoolResetRequest struct {
 func NewTxPool(
 	config TxPoolConfig,
 	chainconfig *params.ChainConfig,
-	chain StateReader) *TxPool {
-	return newTxPool(config, chainconfig, chain, newSubsidiesChecker)
+	chain StateReader,
+	bundlesCache BundleEvaluator,
+) *TxPool {
+	return newTxPool(
+		config,
+		chainconfig,
+		chain,
+		newSubsidiesChecker,
+		bundlesCache,
+	)
 }
 
 func newTxPool(
 	config TxPoolConfig,
 	chainconfig *params.ChainConfig,
 	chain StateReader,
-	subsidiesCheckerFactory subsidiesCheckerFactory,
+	subsidiesCheckerFactory subsidiesCheckFuncFactory,
+	bundlesCache BundleEvaluator,
 ) *TxPool {
 	// Sanitize the input to ensure no vulnerable gas prices are set
 	config = (&config).sanitize()
@@ -372,7 +393,9 @@ func newTxPool(
 		waitForIdleReorgLoopResponseCh: make(chan struct{}),
 
 		subsidiesCheckerFactory: subsidiesCheckerFactory,
-		subsidiesCheckerCache:   newSubsidiesCheckerCache(-1), // use default size
+		subsidiesCheckerCache:   utils.NewCheckerCache(-1), // use default size
+
+		bundleEvaluationCache: bundlesCache,
 	}
 	pool.locals = newAccountSet(pool.signer)
 	for _, addr := range config.Locals {
@@ -703,16 +726,24 @@ func (pool *TxPool) validateTx(tx *types.Transaction, local bool) error {
 	netRules := NetworkRules{
 		istanbul: pool.istanbul,
 		shanghai: pool.shanghai,
+		osaka:    pool.osaka,
 		eip1559:  pool.eip1559,
 		eip2718:  pool.eip2718,
 		eip4844:  pool.eip4844,
 		eip7623:  pool.eip7623,
 		eip7702:  pool.eip7702,
 
-		gasSubsidies: pool.chain.GetCurrentRules().Upgrades.GasSubsidies,
+		gasSubsidies:       pool.chain.CurrentRules().Upgrades.GasSubsidies,
+		brio:               pool.chain.CurrentRules().Upgrades.Brio,
+		transactionBundles: pool.chain.CurrentRules().Upgrades.TransactionBundles,
 	}
 
-	subsidiesChecker := pool.createSubsidiesChecker()
+	subsidiesChecker := pool.subsidiesCheckerFactory(
+		pool.chain.CurrentRules(),
+		pool.chain,
+		pool.currentState,
+		pool.signer,
+	)
 
 	err := validateTx(
 		tx,
@@ -721,6 +752,7 @@ func (pool *TxPool) validateTx(tx *types.Transaction, local bool) error {
 		pool.chain,
 		pool.currentState,
 		subsidiesChecker,
+		pool.bundleEvaluationCache,
 		pool.signer,
 	)
 	if err != nil {
@@ -1336,7 +1368,7 @@ func (pool *TxPool) runReorg(done chan struct{}, reset *txpoolResetRequest, dirt
 	// because of another transaction (e.g. higher gas price).
 	if reset != nil {
 		pool.demoteUnexecutables()
-		if baseFee := pool.chain.GetCurrentBaseFee(); baseFee != nil {
+		if baseFee := pool.chain.CurrentBaseFee(); baseFee != nil {
 			// Sonic-specific base fee
 			pool.priced.SetBaseFee(baseFee)
 		} else {
@@ -1380,7 +1412,7 @@ func (pool *TxPool) runReorg(done chan struct{}, reset *txpoolResetRequest, dirt
 // of the transaction pool is valid with regard to the chain state.
 func (pool *TxPool) reset(oldHead, newHead *EvmHeader) {
 	// update chain config (Sonic-specific)
-	if newConfig := pool.chain.Config(); newConfig != nil {
+	if newConfig := pool.chain.CurrentConfig(); newConfig != nil {
 		pool.chainconfig = newConfig
 	}
 
@@ -1398,8 +1430,8 @@ func (pool *TxPool) reset(oldHead, newHead *EvmHeader) {
 			// Reorg seems shallow enough to pull in all transactions into memory
 			var discarded, included types.Transactions
 			var (
-				rem = pool.chain.GetBlock(oldHead.Hash, oldHead.Number.Uint64())
-				add = pool.chain.GetBlock(newHead.Hash, newHead.Number.Uint64())
+				rem = pool.chain.Block(oldHead.Hash, oldHead.Number.Uint64())
+				add = pool.chain.Block(newHead.Hash, newHead.Number.Uint64())
 			)
 			if rem == nil {
 				// This can happen if a setHead is performed, where we simply discard the old
@@ -1419,26 +1451,26 @@ func (pool *TxPool) reset(oldHead, newHead *EvmHeader) {
 			} else {
 				for rem.NumberU64() > add.NumberU64() {
 					discarded = append(discarded, rem.Transactions...)
-					if rem = pool.chain.GetBlock(rem.ParentHash, rem.NumberU64()-1); rem == nil {
+					if rem = pool.chain.Block(rem.ParentHash, rem.NumberU64()-1); rem == nil {
 						log.Error("Unrooted old chain seen by tx pool", "block", oldHead.Number, "hash", oldHead.Hash)
 						return
 					}
 				}
 				for add.NumberU64() > rem.NumberU64() {
 					included = append(included, add.Transactions...)
-					if add = pool.chain.GetBlock(add.ParentHash, add.NumberU64()-1); add == nil {
+					if add = pool.chain.Block(add.ParentHash, add.NumberU64()-1); add == nil {
 						log.Error("Unrooted new chain seen by tx pool", "block", newHead.Number, "hash", newHead.Hash)
 						return
 					}
 				}
 				for rem.Hash != add.Hash {
 					discarded = append(discarded, rem.Transactions...)
-					if rem = pool.chain.GetBlock(rem.ParentHash, rem.NumberU64()-1); rem == nil {
+					if rem = pool.chain.Block(rem.ParentHash, rem.NumberU64()-1); rem == nil {
 						log.Error("Unrooted old chain seen by tx pool", "block", oldHead.Number, "hash", oldHead.Hash)
 						return
 					}
 					included = append(included, add.Transactions...)
-					if add = pool.chain.GetBlock(add.ParentHash, add.NumberU64()-1); add == nil {
+					if add = pool.chain.Block(add.ParentHash, add.NumberU64()-1); add == nil {
 						log.Error("Unrooted new chain seen by tx pool", "block", newHead.Number, "hash", newHead.Hash)
 						return
 					}
@@ -1451,7 +1483,7 @@ func (pool *TxPool) reset(oldHead, newHead *EvmHeader) {
 	if newHead == nil {
 		newHead = pool.chain.CurrentBlock().Header() // Special case during testing
 	}
-	statedb, err := pool.chain.GetTxPoolStateDB()
+	statedb, err := pool.chain.CurrentStateDB()
 	if err != nil {
 		log.Error("Failed to get TxPool StateDB", "block", newHead.Number, "root", newHead.Root, "err", err)
 		return
@@ -1461,7 +1493,7 @@ func (pool *TxPool) reset(oldHead, newHead *EvmHeader) {
 	}
 	pool.currentState = statedb
 	pool.pendingNonces = newTxNoncer(statedb)
-	pool.currentMaxGas = pool.chain.MaxGasLimit()
+	pool.currentMaxGas = pool.chain.CurrentMaxGasLimit()
 
 	// Inject any transactions discarded due to reorgs
 	log.Debug("Reinjecting stale transactions", "count", len(reinject))
@@ -1477,19 +1509,7 @@ func (pool *TxPool) reset(oldHead, newHead *EvmHeader) {
 	pool.eip4844 = pool.chainconfig.IsCancun(next, uint64(newHead.Time.Unix()))
 	pool.eip7623 = pool.chainconfig.IsPrague(next, uint64(newHead.Time.Unix()))
 	pool.eip7702 = pool.chainconfig.IsPrague(next, uint64(newHead.Time.Unix()))
-}
-
-func (pool *TxPool) createSubsidiesChecker() subsidiesChecker {
-	return pool.subsidiesCheckerFactory(
-		pool.chain.GetCurrentRules(),
-		pool.chain,
-		pool.currentState,
-		pool.signer,
-	)
-}
-
-func (pool *TxPool) createCachedSubsidiesChecker() subsidiesChecker {
-	return pool.subsidiesCheckerCache.wrap(pool.createSubsidiesChecker())
+	pool.osaka = pool.chainconfig.IsOsaka(next, uint64(newHead.Time.Unix()))
 }
 
 // promoteExecutables moves transactions that have become processable from the
@@ -1499,7 +1519,16 @@ func (pool *TxPool) promoteExecutables(accounts []common.Address) []*types.Trans
 	// Track the promoted transactions to broadcast them at once
 	var promoted []*types.Transaction
 
-	subsidiesChecker := pool.createCachedSubsidiesChecker()
+	isSponsored := pool.getSubsidiesCheckerForReorg()
+	evaluateBundleStatus := newBundlesChecker(pool.bundleEvaluationCache, pool.chain, pool.currentState)
+	canPromote := func(tx *types.Transaction) bool {
+		if pool.chain.CurrentRules().Upgrades.Brio {
+			if bundle.IsEnvelope(tx) {
+				return evaluateBundleStatus(tx) == bundlePending
+			}
+		}
+		return true
+	}
 
 	// Iterate over all accounts and promote any executable transactions
 	for _, addr := range accounts {
@@ -1514,8 +1543,20 @@ func (pool *TxPool) promoteExecutables(accounts []common.Address) []*types.Trans
 			pool.all.Remove(hash)
 		}
 		log.Trace("Removed old queued transactions", "count", len(forwards))
-		// Drop all transactions that are too costly (low balance or out of gas)
-		drops, _ := list.Filter(utils.Uint256ToBigInt(pool.currentState.GetBalance(addr)), pool.currentMaxGas, subsidiesChecker)
+
+		// Drop transactions that cannot be executed anymore
+		// - too low balance
+		// - too high gas cost for the current rules
+		// - not sponsored anymore
+		// - bundle has been executed
+		// queue is not strict, transactions cannot be demoted, "invalid" return unused
+		drops, _ := list.Filter(
+			utils.Uint256ToBigInt(pool.currentState.GetBalance(addr)),
+			pool.currentMaxGas,
+			isSponsored,
+			evaluateBundleStatus,
+			pool.chain.CurrentRules().Upgrades,
+		)
 		for _, tx := range drops {
 			hash := tx.Hash()
 			pool.all.Remove(hash)
@@ -1524,7 +1565,7 @@ func (pool *TxPool) promoteExecutables(accounts []common.Address) []*types.Trans
 		queuedNofundsMeter.Mark(int64(len(drops)))
 
 		// Gather all executable transactions and promote them
-		readies := list.Ready(pool.pendingNonces.get(addr))
+		readies := list.Ready(pool.pendingNonces.get(addr), canPromote)
 		for _, tx := range readies {
 			hash := tx.Hash()
 			if pool.promoteTx(addr, hash, tx) {
@@ -1559,6 +1600,16 @@ func (pool *TxPool) promoteExecutables(accounts []common.Address) []*types.Trans
 	}
 	promotedTxsCounter.Inc(int64(len(promoted)))
 	return promoted
+}
+
+func (pool *TxPool) getSubsidiesCheckerForReorg() utils.TransactionCheckFunc {
+	return utils.WrapCheck(pool.subsidiesCheckerCache,
+		pool.subsidiesCheckerFactory(
+			pool.chain.CurrentRules(),
+			pool.chain,
+			pool.currentState,
+			pool.signer,
+		))
 }
 
 // truncatePending removes transactions from the pending queue if the pool is above the
@@ -1700,7 +1751,8 @@ func (pool *TxPool) truncateQueue() {
 // to trigger a re-heap is this function
 func (pool *TxPool) demoteUnexecutables() {
 
-	subsidiesChecker := pool.createCachedSubsidiesChecker()
+	isSponsored := pool.getSubsidiesCheckerForReorg()
+	evaluateBundle := newBundlesChecker(pool.bundleEvaluationCache, pool.chain, pool.currentState)
 
 	// Iterate over all accounts and demote any non-executable transactions
 	for addr, list := range pool.pending {
@@ -1713,8 +1765,22 @@ func (pool *TxPool) demoteUnexecutables() {
 			pool.all.Remove(hash)
 			log.Trace("Removed old pending transaction", "hash", hash)
 		}
-		// Drop all transactions that are too costly (low balance or out of gas), and queue any invalids back for later
-		drops, invalids := list.Filter(utils.Uint256ToBigInt(pool.currentState.GetBalance(addr)), pool.currentMaxGas, subsidiesChecker)
+
+		// Drop transactions that cannot be executed anymore
+		// - too low balance
+		// - too high gas cost for the current rules
+		// - not sponsored anymore
+		// - bundle is not executable (final)
+		// the pending list is strict, invalid transactions are returned to be re-queued
+		// - gapped nonces
+		// - temporarily not executable bundles
+		drops, invalids := list.Filter(
+			utils.Uint256ToBigInt(pool.currentState.GetBalance(addr)),
+			pool.currentMaxGas,
+			isSponsored,
+			evaluateBundle,
+			pool.chain.CurrentRules().Upgrades,
+		)
 		for _, tx := range drops {
 			hash := tx.Hash()
 			log.Trace("Removed unpayable pending transaction", "hash", hash)

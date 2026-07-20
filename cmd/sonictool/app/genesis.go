@@ -172,14 +172,16 @@ func fakeGenesisImport(ctx *cli.Context) (err error) {
 		upgrades = opera.GetSonicUpgrades()
 	case "allegro":
 		upgrades = opera.GetAllegroUpgrades()
+	case "brio":
+		upgrades = opera.GetBrioUpgrades()
 	default:
-		return fmt.Errorf("invalid profile %v - must be 'sonic' or 'allegro'", upgradesString)
+		return fmt.Errorf("invalid profile %v - must be 'sonic', 'allegro', or 'brio'", upgradesString)
 	}
 
 	genesisStore := makefakegenesis.FakeGenesisStore(
 		idx.Validator(validatorsNumber),
-		futils.ToFtm(1_000_000_000),
-		futils.ToFtm(5_000_000),
+		futils.ToFtmU256(1_000_000_000),
+		futils.ToFtmU256(5_000_000),
 		upgrades,
 	)
 	defer caution.CloseAndReportError(&err, genesisStore, "failed to close the genesis store")

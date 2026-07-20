@@ -55,7 +55,8 @@ func TestArchiveStateDiffByNumberUsesS5Archive(t *testing.T) {
 	update.AppendCodeUpdate(addr, code)
 	update.AppendSlotUpdate(addr, key, value)
 	require.NoError(t, update.Normalize())
-	require.NoError(t, carmenState.Apply(0, update))
+	_, err = carmenState.Apply(0, update)
+	require.NoError(t, err)
 	require.NoError(t, carmenState.Flush())
 
 	diff, err := store.ArchiveStateDiffByNumber(0)
@@ -129,7 +130,8 @@ func TestStateUpdateHookRunsAfterSuccessfulApply(t *testing.T) {
 	update.AppendCodeUpdate(addr, code)
 	require.NoError(t, update.Normalize())
 
-	require.NoError(t, recorder.Apply(3, update))
+	_, err = recorder.Apply(3, update)
+	require.NoError(t, err)
 	newRoot, err := carmenState.GetHash()
 	require.NoError(t, err)
 

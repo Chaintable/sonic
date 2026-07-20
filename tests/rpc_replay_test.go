@@ -18,14 +18,14 @@ package tests
 
 import (
 	"math/big"
+	"slices"
 	"testing"
 
-	"github.com/0xsoniclabs/sonic/ethapi"
+	"github.com/0xsoniclabs/sonic/api/ethapi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/exp/slices"
 )
 
 func TestRpcReplay_IsConsistentWithUpgradesAtBlockHeight(t *testing.T) {
@@ -72,7 +72,7 @@ func TestRpcReplay_IsConsistentWithUpgradesAtBlockHeight(t *testing.T) {
 		Upgrades: struct{ Allegro bool }{Allegro: true},
 	}
 	UpdateNetworkRules(t, net, rulesDiff)
-	AdvanceEpochAndWaitForBlocks(t, net)
+	net.AdvanceEpoch(t, 1)
 
 	tx2 := SignTransaction(t, net.GetChainId(),
 		SetTransactionDefaults(

@@ -18,11 +18,15 @@ package evmstore
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
+	"slices"
 
 	cc "github.com/0xsoniclabs/carmen/go/common"
 	"github.com/0xsoniclabs/carmen/go/common/amount"
 	"github.com/0xsoniclabs/carmen/go/common/witness"
 	carmen "github.com/0xsoniclabs/carmen/go/state"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/bundle"
 	"github.com/0xsoniclabs/sonic/inter/state"
 	"github.com/ethereum/go-ethereum/common"
 	geth_state "github.com/ethereum/go-ethereum/core/state"
@@ -30,23 +34,34 @@ import (
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/ethereum/go-ethereum/trie/utils"
 	"github.com/holiman/uint256"
 )
 
-const (
-	// Number of address->curve point associations to keep.
-	pointCacheSize = 4096
-)
-
-func CreateCarmenStateDb(carmenStateDb carmen.VmStateDB) state.StateDB {
+func CreateCarmenStateDb(
+	carmenStateDb carmen.StateDB,
+	processedBundleStore ProcessedBundleStore,
+) *CarmenStateDB {
 	return &CarmenStateDB{
-		db: carmenStateDb,
+		db:                     carmenStateDb,
+		processedExecPlanStore: processedBundleStore,
+		committable:            true,
+	}
+}
+
+func CreateNonCommittableCarmenStateDb(
+	carmenStateDb carmen.NonCommittableStateDB,
+	processedBundleStore ProcessedBundleStore,
+) *CarmenStateDB {
+	return &CarmenStateDB{
+		db:                     carmenStateDb,
+		processedExecPlanStore: processedBundleStore,
+		committable:            false,
 	}
 }
 
 type CarmenStateDB struct {
-	db carmen.VmStateDB
+	db          carmen.VmStateDB
+	committable bool
 
 	// current block - set by BeginBlock
 	blockNum uint64
@@ -57,6 +72,23 @@ type CarmenStateDB struct {
 
 	// collecting all events accessing state information
 	accessEvents *geth_state.AccessEvents
+
+	// collect all processed execution plans for bundles
+	processedExecPlanStore ProcessedBundleStore
+	processedExecPlans     []processedExecPlan
+	interTxSnapshots       []interTxSnapshots
+
+	// an error recorded during the interactions
+	issue error
+}
+
+type processedExecPlan struct {
+	execPlanHash common.Hash
+	position     bundle.PositionInBlock
+}
+
+func (c *CarmenStateDB) EmitLogsForBurnAccounts() {
+	// TODO: implement eip-7708 for Amsterdam hard fork.
 }
 
 func (c *CarmenStateDB) Error() error {
@@ -274,15 +306,8 @@ func (c *CarmenStateDB) SetStorage(addr common.Address, storage map[common.Hash]
 	c.db.AddBalance(cc.Address(addr), origBalance)
 }
 
-func (c *CarmenStateDB) SelfDestruct(addr common.Address) uint256.Int {
-	prevBalance := *c.GetBalance(addr)
+func (c *CarmenStateDB) SelfDestruct(addr common.Address) {
 	c.db.Suicide(cc.Address(addr))
-	return prevBalance
-}
-
-func (c *CarmenStateDB) SelfDestruct6780(addr common.Address) (uint256.Int, bool) {
-	prevBalance := *c.GetBalance(addr)
-	return prevBalance, c.db.SuicideNewContract(cc.Address(addr))
 }
 
 func (c *CarmenStateDB) CreateAccount(addr common.Address) {
@@ -293,9 +318,23 @@ func (c *CarmenStateDB) CreateContract(addr common.Address) {
 	c.db.CreateContract(cc.Address(addr))
 }
 
+func (c *CarmenStateDB) IsNewContract(addr common.Address) bool {
+	return c.db.IsNewContract(cc.Address(addr))
+}
+
 func (c *CarmenStateDB) Copy() state.StateDB {
-	if db, ok := c.db.(carmen.NonCommittableStateDB); ok {
-		return CreateCarmenStateDb(db.Copy())
+	if db, ok := c.db.(carmen.NonCommittableStateDB); !c.committable && ok {
+		return &CarmenStateDB{
+			db:                     db.Copy(),
+			committable:            false,
+			blockNum:               c.blockNum,
+			txHash:                 c.txHash,
+			txIndex:                c.txIndex,
+			processedExecPlanStore: c.processedExecPlanStore,
+			processedExecPlans:     slices.Clone(c.processedExecPlans),
+			interTxSnapshots:       slices.Clone(c.interTxSnapshots),
+			issue:                  c.issue,
+		}
 	} else {
 		panic("unable to copy committable (live) StateDB")
 	}
@@ -317,6 +356,27 @@ func (c *CarmenStateDB) EndTransaction() {
 	c.db.EndTransaction()
 }
 
+func (c *CarmenStateDB) InterTxSnapshot() int {
+	c.interTxSnapshots = append(c.interTxSnapshots, interTxSnapshots{
+		stateDbSnapshotId:     c.db.InterTxSnapshot(),
+		numProcessedExecPlans: len(c.processedExecPlans),
+	})
+	return len(c.interTxSnapshots) - 1
+}
+
+func (c *CarmenStateDB) RevertToInterTxSnapshot(id int) {
+	if id < 0 || id >= len(c.interTxSnapshots) {
+		c.issue = errors.Join(
+			c.issue, fmt.Errorf("failed to revert to invalid snapshot id %d", id),
+		)
+		return
+	}
+	snapshot := c.interTxSnapshots[id]
+	c.db.RevertToInterTxSnapshot(snapshot.stateDbSnapshotId)
+	c.processedExecPlans = c.processedExecPlans[:snapshot.numProcessedExecPlans]
+	c.interTxSnapshots = c.interTxSnapshots[:id]
+}
+
 func (c *CarmenStateDB) Finalise(bool) {
 	// ignored
 }
@@ -330,18 +390,32 @@ func (c *CarmenStateDB) SetTxContext(txHash common.Hash, txIndex int) {
 }
 
 func (c *CarmenStateDB) BeginBlock(number uint64) {
-	utils.NewPointCache(pointCacheSize)
-	c.accessEvents = geth_state.NewAccessEvents(nil)
+	c.accessEvents = geth_state.NewAccessEvents()
 	c.blockNum = number
 	if db, ok := c.db.(carmen.StateDB); ok {
 		db.BeginBlock()
 	}
 }
 
-func (c *CarmenStateDB) EndBlock(number uint64) {
-	if db, ok := c.db.(carmen.StateDB); ok {
-		db.EndBlock(number)
+func (c *CarmenStateDB) EndBlock(number uint64) <-chan error {
+	// clear snapshot list since the block-sealing invalidates all snapshots
+	c.interTxSnapshots = c.interTxSnapshots[:0]
+
+	// forward processed bundles to the store and clear the internal list of processed bundles
+	if c.committable && c.processedExecPlanStore != nil {
+		execInfos := make(map[common.Hash]bundle.PositionInBlock, len(c.processedExecPlans))
+		for _, plan := range c.processedExecPlans {
+			execInfos[plan.execPlanHash] = plan.position
+		}
+		c.processedExecPlanStore.AddProcessedBundles(number, execInfos)
 	}
+	c.processedExecPlans = c.processedExecPlans[:0]
+
+	// finish the block in the underlying StateDB
+	if db, ok := c.db.(carmen.StateDB); c.committable && ok {
+		return db.EndBlock(number)
+	}
+	return nil
 }
 
 //func (c *CarmenStateDB) SetOnCommit(onCommit tracing.CommitHook) {
@@ -389,11 +463,6 @@ func (c *CarmenStateDB) SlotInAccessList(addr common.Address, slot common.Hash) 
 	return c.db.IsSlotInAccessList(cc.Address(addr), cc.Key(slot))
 }
 
-// PointCache returns the point cache used in computations of verkle trees
-func (c *CarmenStateDB) PointCache() *utils.PointCache {
-	return nil // used only when IsEIP4762 (verkle trees) enabled
-}
-
 // Witness retrieves the current state witness being collected
 func (c *CarmenStateDB) Witness() *stateless.Witness {
 	return nil // set to not-nil only when vmConfig.EnableWitnessCollection
@@ -409,4 +478,58 @@ func (c *CarmenStateDB) Release() {
 // collect the accessed states for the stateless client.
 func (c *CarmenStateDB) AccessEvents() *geth_state.AccessEvents {
 	return c.accessEvents
+}
+
+// --- Sonic Extensions ---
+
+func (c *CarmenStateDB) AddProcessedBundle(
+	execPlanHash common.Hash,
+	positionInBlock bundle.PositionInBlock,
+) {
+	c.processedExecPlans = append(c.processedExecPlans, processedExecPlan{
+		execPlanHash: execPlanHash,
+		position:     positionInBlock,
+	})
+}
+
+func (c *CarmenStateDB) HasBundleRecentlyBeenProcessed(execPlanHash common.Hash) bool {
+	for _, plan := range c.processedExecPlans {
+		if plan.execPlanHash == execPlanHash {
+			return true
+		}
+	}
+	if c.processedExecPlanStore == nil {
+		return false
+	}
+	return c.processedExecPlanStore.HasBundleRecentlyBeenProcessed(execPlanHash)
+}
+
+type interTxSnapshots struct {
+	stateDbSnapshotId     carmen.InterTxSnapshotID
+	numProcessedExecPlans int
+}
+
+// ProcessedBundleStore is an abstraction of a data source used by the Carmen
+// StateDB adapter to track bundle-state processing information in the gossip
+// store.
+//
+// The history of stored bundles is not retained inside Carmen. However, since
+// the StateDB is responsible for managing snapshots and rollbacks, and
+// processed bundles are subject to rollbacks, it is the StateDB
+// implementation's responsibility to track the processed bundles while
+// processing a block. To avoid requiring users to consult a secondary source
+// for bundles processed in past blocks, and to keep the reading and writing
+// entity in a single place, the StateDB is responsible for tracking processed
+// bundles among multiple blocks -- based on the store implementing this
+// interface.
+type ProcessedBundleStore interface {
+	// HasBundleRecentlyBeenProcessed checks if the given execution plan has
+	// been processed in any recent block covering at least the maximum
+	// applicable range of a bundle.
+	HasBundleRecentlyBeenProcessed(execPlanHash common.Hash) bool
+
+	// AddProcessedBundles registers the given set of execution plans as
+	// processed in the given block. This is called as part of the completion
+	// of a block by the StateDB.
+	AddProcessedBundles(block uint64, execInfos map[common.Hash]bundle.PositionInBlock)
 }

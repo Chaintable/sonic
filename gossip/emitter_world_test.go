@@ -43,7 +43,7 @@ func TestEmitterWorldProc_GetHeader_UsesStateReaderToResolveHeader(t *testing.T)
 	store := initStoreForTests(t)
 	world := &emitterWorldProc{s: &Service{store: store}}
 
-	got := world.GetHeader(common.Hash{}, 0)
+	got := world.Header(common.Hash{}, 0)
 	require.NotNil(t, got)
 	want := store.GetBlock(0)
 	require.Equal(t, big.NewInt(0), got.Number)
@@ -61,8 +61,8 @@ func initStoreForTests(t *testing.T) *Store {
 
 	genStore := makefakegenesis.FakeGenesisStoreWithRulesAndStart(
 		2,
-		utils.ToFtm(genesisBalance),
-		utils.ToFtm(genesisStake),
+		utils.ToFtmU256(genesisBalance),
+		utils.ToFtmU256(genesisStake),
 		opera.FakeNetRules(opera.GetSonicUpgrades()),
 		2,
 		2,

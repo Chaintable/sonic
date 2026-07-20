@@ -25,6 +25,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/subsidies/proxy"
 	"github.com/0xsoniclabs/sonic/gossip/blockproc/subsidies/registry"
 	"github.com/0xsoniclabs/sonic/integration/makegenesis"
 	"github.com/0xsoniclabs/sonic/inter"
@@ -44,6 +45,7 @@ import (
 	"github.com/0xsoniclabs/sonic/scc/bls"
 	"github.com/0xsoniclabs/sonic/scc/cert"
 	"github.com/0xsoniclabs/sonic/utils"
+	"github.com/0xsoniclabs/sonic/utils/caution"
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/Fantom-foundation/lachesis-base/inter/pos"
@@ -51,6 +53,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/holiman/uint256"
 )
 
 type GenesisJson struct {
@@ -64,7 +67,7 @@ type GenesisJson struct {
 type Account struct {
 	Name    string
 	Address common.Address
-	Balance *big.Int                    `json:",omitempty"`
+	Balance *uint256.Int                `json:",omitempty"`
 	Code    VariableLenCode             `json:",omitempty"`
 	Nonce   uint64                      `json:",omitempty"`
 	Storage map[common.Hash]common.Hash `json:",omitempty"`
@@ -152,17 +155,31 @@ func GenerateFakeJsonGenesis(
 
 	// Deploy the gas subsidies registry contract if enabled.
 	if upgrades.GasSubsidies {
+		implementationAddress := common.Address{1, 2, 3, 4, 5, 6, 7}
+		addressAsStorageValue := common.Hash{}
+		copy(addressAsStorageValue[12:], implementationAddress[:])
 		jsonGenesis.Accounts = append(jsonGenesis.Accounts, Account{
-			Name:    "GasSubsidiesRegistry",
+			Name:    "GasSubsidiesRegistryProxy",
 			Address: registry.GetAddress(),
+			Code:    proxy.GetCode(),
+			Nonce:   1,
+			Storage: map[common.Hash]common.Hash{
+				// Set the implementation address in the proxy contract.
+				proxy.GetSlotForImplementation(): addressAsStorageValue,
+			},
+		})
+
+		jsonGenesis.Accounts = append(jsonGenesis.Accounts, Account{
+			Name:    "GasSubsidiesRegistryImplementation",
+			Address: implementationAddress,
 			Code:    registry.GetCode(),
 			Nonce:   1,
 		})
 	}
 
 	// Create the validator accounts and provide some tokens.
-	tokensPerValidator := utils.ToFtm(1_000_000_000)
-	totalSupply := big.NewInt(0)
+	tokensPerValidator := utils.ToFtmU256(1_000_000_000)
+	totalSupply := uint256.NewInt(0)
 	validatorParameters := GetFakeValidators(idx.Validator(len(validatorsStake)))
 	for _, validator := range validatorParameters {
 		jsonGenesis.Accounts = append(jsonGenesis.Accounts, Account{
@@ -188,7 +205,7 @@ func GenerateFakeJsonGenesis(
 	}
 
 	// Create the genesis transactions.
-	genesisTxs := GetGenesisTxs(0, validatorParameters, totalSupply, delegations, validatorParameters[0].Address)
+	genesisTxs := GetGenesisTxs(0, validatorParameters, totalSupply.ToBig(), delegations, validatorParameters[0].Address)
 	for _, tx := range genesisTxs {
 		jsonGenesis.Txs = append(jsonGenesis.Txs, Transaction{
 			To:   *tx.To(),
@@ -206,6 +223,15 @@ func GenerateFakeJsonGenesis(
 
 	jsonGenesis.GenesisCommittee = &committee
 	return jsonGenesis
+}
+
+func GetGenesisIdFromJson(json *GenesisJson) (common.Hash, error) {
+	store, err := ApplyGenesisJson(json)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("failed to apply genesis json; %v", err)
+	}
+	defer caution.CloseAndReportError(nil, store, "failed to close the genesis store")
+	return common.Hash(store.Genesis().GenesisID), nil
 }
 
 func ApplyGenesisJson(json *GenesisJson) (*genesisstore.Store, error) {
@@ -233,7 +259,7 @@ func ApplyGenesisJson(json *GenesisJson) (*genesisstore.Store, error) {
 
 	genesisTime := inter.Timestamp(json.BlockZeroTime.UnixNano())
 
-	_, genesisStateRoot, err := builder.FinalizeBlockZero(json.Rules, genesisTime)
+	blockHash, genesisStateRoot, err := builder.FinalizeBlockZero(json.Rules, genesisTime)
 	if err != nil {
 		return nil, err
 	}
@@ -256,14 +282,17 @@ func ApplyGenesisJson(json *GenesisJson) (*genesisstore.Store, error) {
 				AdvanceEpochs:         0,
 			},
 			EpochState: iblockproc.EpochState{
-				Epoch:             1,
-				EpochStart:        genesisTime + 1,
-				PrevEpochStart:    genesisTime,
-				EpochStateRoot:    hash.Hash(genesisStateRoot),
-				Validators:        pos.NewBuilder().Build(),
-				ValidatorStates:   make([]iblockproc.ValidatorEpochState, 0),
-				ValidatorProfiles: make(map[idx.ValidatorID]drivertype.Validator),
-				Rules:             json.Rules,
+				Epoch:                          1,
+				EpochStart:                     genesisTime + 1,
+				PrevEpochStart:                 genesisTime,
+				EpochStateRoot:                 hash.Hash(genesisStateRoot),
+				Validators:                     pos.NewBuilder().Build(),
+				ValidatorStates:                make([]iblockproc.ValidatorEpochState, 0),
+				ValidatorProfiles:              make(map[idx.ValidatorID]drivertype.Validator),
+				Rules:                          json.Rules,
+				EpochEndBlockHash:              hash.Hash(blockHash),
+				EpochEndExecutionPlanChainHash: hash.Hash{}, // < zero, since no bundles in genesis
+				EpochSealingTxHashes:           nil,         // < no sealing transactions in genesis
 			},
 		},
 		Idx: 1,

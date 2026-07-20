@@ -91,7 +91,6 @@ func testGasCosts_Sonic(t *testing.T, singleProposer bool) {
 	// > )
 
 	t.Run("reject transactions with insufficient gas", func(t *testing.T) {
-		t.Parallel()
 		session := net.SpawnSession(t)
 		for test := range makeGasCostTestInputs(t, session) {
 			t.Run(test.String(), func(t *testing.T) {
@@ -111,7 +110,6 @@ func testGasCosts_Sonic(t *testing.T, singleProposer bool) {
 	})
 
 	t.Run("transactions with exact gas succeed", func(t *testing.T) {
-		t.Parallel()
 		session := net.SpawnSession(t)
 		for test := range makeGasCostTestInputs(t, session) {
 			t.Run(test.String(), func(t *testing.T) {
@@ -132,7 +130,6 @@ func testGasCosts_Sonic(t *testing.T, singleProposer bool) {
 	})
 
 	t.Run("Sonic processor charges 10% of unused gas", func(t *testing.T) {
-		t.Parallel()
 		session := net.SpawnSession(t)
 		for test := range makeGasCostTestInputs(t, session) {
 			t.Run(test.String(), func(t *testing.T) {
@@ -214,7 +211,6 @@ func testGasCosts_Allegro(t *testing.T, singleProposer bool) {
 	}
 
 	t.Run("reject transactions with insufficient gas", func(t *testing.T) {
-		t.Parallel()
 		session := net.SpawnSession(t)
 		for test := range makeGasCostTestInputs(t, session) {
 			t.Run(test.String(), func(t *testing.T) {
@@ -236,7 +232,6 @@ func testGasCosts_Allegro(t *testing.T, singleProposer bool) {
 	})
 
 	t.Run("transactions with exact gas succeed", func(t *testing.T) {
-		t.Parallel()
 		session := net.SpawnSession(t)
 
 		var corrections int
@@ -265,7 +260,6 @@ func testGasCosts_Allegro(t *testing.T, singleProposer bool) {
 	})
 
 	t.Run("Sonic processor charges 10% of unused gas", func(t *testing.T) {
-		t.Parallel()
 		session := net.SpawnSession(t)
 
 		var floorGreaterThan20Percent int

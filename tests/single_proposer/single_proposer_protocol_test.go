@@ -33,12 +33,7 @@ import (
 
 func TestSingleProposerProtocol_CanProcessTransactions(t *testing.T) {
 
-	upgrades := map[string]opera.Upgrades{
-		"Sonic":   opera.GetSonicUpgrades(),
-		"Allegro": opera.GetAllegroUpgrades(),
-	}
-
-	for name, upgrades := range upgrades {
+	for name, upgrades := range opera.GetAllHardForksInOrder() {
 		t.Run(name, func(t *testing.T) {
 			for _, numNodes := range []int{1, 3} {
 				t.Run(fmt.Sprintf("numNodes=%d", numNodes), func(t *testing.T) {
@@ -77,14 +72,7 @@ func testSingleProposerProtocol_CanProcessTransactions(
 
 	// Create NumTxsPerRound accounts and send them each 1e18 wei to allow each
 	// of them to send independent transactions in each round.
-	accounts := make([]*tests.Account, NumTxsPerRound)
-	addresses := make([]common.Address, NumTxsPerRound)
-	for i := range accounts {
-		accounts[i] = tests.NewAccount()
-		addresses[i] = accounts[i].Address()
-	}
-	_, err = net.EndowAccounts(addresses, big.NewInt(1e18))
-	require.NoError(err)
+	accounts := tests.MakeAccountsWithBalance(t, net, NumTxsPerRound, big.NewInt(1e18))
 
 	// Check that the network is using the single-proposer protocol.
 	require.Equal(3, getUsedEventVersion(t, client))
@@ -92,14 +80,12 @@ func testSingleProposerProtocol_CanProcessTransactions(
 	// --- check processing of transactions ---
 
 	chainId := net.GetChainId()
-	signer := types.NewPragueSigner(chainId)
+	signer := types.LatestSignerForChainID(chainId)
 	target := common.Address{0x42}
 
-	startBlock, err := client.BlockNumber(t.Context())
-	require.NoError(err)
-
-	// Send a sequence of transactions to the network, in several rounds,
-	// across multiple epochs, and check that all get processed.
+	// Create all transactions offline, to avoid any influence of transaction
+	// creation on the test results.
+	txs := map[uint64][]*types.Transaction{}
 	for round := range uint64(NumRounds) {
 		transactions := []*types.Transaction{}
 		for sender := range NumTxsPerRound {
@@ -107,7 +93,6 @@ func testSingleProposerProtocol_CanProcessTransactions(
 				accounts[sender].PrivateKey,
 				signer,
 				&types.DynamicFeeTx{
-					ChainID:   chainId,
 					Nonce:     round,
 					To:        &target,
 					Value:     big.NewInt(1),
@@ -118,8 +103,16 @@ func testSingleProposerProtocol_CanProcessTransactions(
 			)
 			transactions = append(transactions, transaction)
 		}
+		txs[round] = transactions
+	}
 
-		receipts, err := net.RunAll(transactions)
+	startBlock, err := client.BlockNumber(t.Context())
+	require.NoError(err)
+
+	// Send a sequence of transactions to the network, in several rounds,
+	// across multiple epochs, and check that all get processed.
+	for round := range uint64(NumRounds) {
+		receipts, err := net.RunAll(txs[round])
 		require.NoError(err, "failed to run transactions")
 		require.Len(receipts, NumTxsPerRound, "unexpected number of receipts")
 		for _, receipt := range receipts {
@@ -141,17 +134,13 @@ func testSingleProposerProtocol_CanProcessTransactions(
 	endBlock, err := client.BlockNumber(t.Context())
 	require.NoError(err)
 
-	duration := endBlock - startBlock
-	require.Less(duration, uint64(2*NumRounds))
+	blockSpan := endBlock - startBlock
+	require.Less(blockSpan, uint64(2*NumRounds))
 }
 
 func TestSingleProposerProtocol_CanBeEnabledAndDisabled(t *testing.T) {
-	upgrades := map[string]opera.Upgrades{
-		"Sonic":   opera.GetSonicUpgrades(),
-		"Allegro": opera.GetAllegroUpgrades(),
-	}
 
-	for name, upgrades := range upgrades {
+	for name, upgrades := range opera.GetAllHardForksInOrder() {
 		t.Run(name, func(t *testing.T) {
 
 			for _, numNodes := range []int{1, 3} {

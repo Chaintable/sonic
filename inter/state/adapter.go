@@ -18,6 +18,7 @@ package state
 
 import (
 	"github.com/0xsoniclabs/carmen/go/common/witness"
+	"github.com/0xsoniclabs/sonic/gossip/blockproc/bundle"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -25,6 +26,14 @@ import (
 )
 
 //go:generate mockgen -source adapter.go -destination adapter_mock.go -package state
+
+const (
+	// InvalidSnapshotID is a special snapshot ID that can be used to trigger an
+	// invalid revert in the StateDB. This can be used to keep track of invalid
+	// reverts, such that they can be handled when checking for errors in the
+	// StateDB after the block processing.
+	InvalidSnapshotID = int(-1)
+)
 
 type StateDB interface {
 	vm.StateDB
@@ -40,7 +49,22 @@ type StateDB interface {
 	GetStateHash() common.Hash
 
 	BeginBlock(number uint64)
-	EndBlock(number uint64)
+	EndBlock(number uint64) <-chan error
 	EndTransaction()
 	Release()
+	InterTxSnapshot() int
+	RevertToInterTxSnapshot(id int)
+
+	// -- Sonic Extensions --
+
+	// AddProcessedBundle marks the given execution plan as being processed.
+	// Marks are subject to inter-Tx-snapshots. Thus, rolling back the state
+	// to a previous snapshot will also undo the marking plans.
+	AddProcessedBundle(execPlanHash common.Hash, positionInBlock bundle.PositionInBlock)
+
+	// HasBeenProcessed checks whether the given execution plan has been
+	// processed in the past. The processing may have happened as part of the
+	// current block (by being marked as processed using [AddProcessedBundles])
+	// or in a previous block, tracked in the state and not subject to rollbacks.
+	HasBundleRecentlyBeenProcessed(execPlanHash common.Hash) bool
 }

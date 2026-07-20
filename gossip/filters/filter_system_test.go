@@ -32,7 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 
-	"github.com/0xsoniclabs/sonic/ethapi"
+	"github.com/0xsoniclabs/sonic/api/ethapi"
 	"github.com/0xsoniclabs/sonic/evmcore"
 	"github.com/0xsoniclabs/sonic/gossip/evmstore"
 	"github.com/0xsoniclabs/sonic/topicsdb"
@@ -49,7 +49,7 @@ type testBackend struct {
 func newTestBackend() *testBackend {
 	return &testBackend{
 		db:         rawdb.NewMemoryDatabase(),
-		logIndex:   topicsdb.NewWithThreadPool(memorydb.New()),
+		logIndex:   topicsdb.NewWithLeapJoin(memorydb.New()),
 		blocksFeed: new(notify.Feed),
 		txsFeed:    new(notify.Feed),
 		logsFeed:   new(notify.Feed),

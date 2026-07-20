@@ -17,7 +17,6 @@
 package debug
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -32,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/metrics/exp"
 	"github.com/mattn/go-colorable"
 	"github.com/mattn/go-isatty"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"gopkg.in/urfave/cli.v1"
 )
 
@@ -208,6 +208,7 @@ func StartPProf(address string, withMetrics bool) {
 	// from the registry into expvar, and execute regular expvar handler.
 	if withMetrics {
 		exp.Exp(metrics.DefaultRegistry)
+		http.Handle("/debug/metrics/prometheus/native", promhttp.Handler())
 	}
 	log.Info("Starting pprof server", "addr", fmt.Sprintf("http://%s/debug/pprof", address))
 	go func() {
@@ -219,12 +220,16 @@ func StartPProf(address string, withMetrics bool) {
 
 // Exit stops all running profiles, flushing their output to the
 // respective file.
-func Exit() {
-	err := errors.Join(
-		Handler.StopCPUProfile(),
-		Handler.StopGoTrace(),
-	)
-	if err != nil {
-		log.Error("Failed to stop profiles", "err", err)
+func Exit(ctx *cli.Context) {
+	if ctx.GlobalBool(pprofFlag.Name) {
+		if err := Handler.StopCPUProfile(); err != nil {
+			log.Error("Failed to stop CPU profile", "err", err)
+		}
+	}
+
+	if ctx.GlobalString(traceFlag.Name) != "" {
+		if err := Handler.StopGoTrace(); err != nil {
+			log.Error("Failed to stop Go trace", "err", err)
+		}
 	}
 }

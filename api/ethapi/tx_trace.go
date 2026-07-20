@@ -1,0 +1,932 @@
+// Copyright 2026 Sonic Operations Ltd
+// This file is part of the Sonic Client
+//
+// Sonic is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Sonic is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Sonic. If not, see <http://www.gnu.org/licenses/>.
+
+package ethapi
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math/big"
+	"runtime"
+	"sync"
+	"time"
+
+	"github.com/Fantom-foundation/lachesis-base/inter/idx"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/rpc"
+
+	"github.com/ethereum/go-ethereum/core/tracing"
+	"github.com/ethereum/go-ethereum/core/vm"
+
+	"github.com/0xsoniclabs/sonic/evmcore"
+	"github.com/0xsoniclabs/sonic/gossip/evmstore"
+	"github.com/0xsoniclabs/sonic/inter/state"
+	"github.com/0xsoniclabs/sonic/txtrace"
+)
+
+const (
+	TraceTypeTrace     = "trace"
+	TraceTypeStateDiff = "stateDiff"
+	TraceTypeVmTrace   = "vmTrace"
+)
+
+// PublicTxTraceAPI provides an API to access transaction tracing
+// It offers only methods that operate on public data that is freely available to anyone
+type PublicTxTraceAPI struct {
+	b               Backend
+	maxResponseSize int // in bytes
+}
+
+// NewPublicTxTraceAPI creates a new transaction trace API
+func NewPublicTxTraceAPI(b Backend, maxResponseSize int) *PublicTxTraceAPI {
+	return &PublicTxTraceAPI{
+		b:               b,
+		maxResponseSize: maxResponseSize,
+	}
+}
+
+// evmSetup bundles an EVM instance with the tracing loggers and active state
+// prepared for a single traced transaction execution.
+type evmSetup struct {
+	vmenv           *vm.EVM
+	tracer          *tracing.Hooks // cfg.Tracer at time of EVM creation
+	txTracer        *txtrace.TraceStructLogger
+	stateDiffLogger *txtrace.StateDiffLogger
+	activeState     state.StateDB // may be wrapped with stateDiff hooks
+}
+
+// setupTracedEVM creates an EVM configured with the requested tracing hooks and
+// returns it together with the associated loggers and a cancel function.
+// The caller is responsible for calling cancel when execution is complete.
+// noBaseFee should be true for simulated calls, false for historical replay.
+func setupTracedEVM(
+	ctx context.Context,
+	b Backend,
+	block *evmcore.EvmBlock,
+	statedb state.StateDB,
+	index uint64,
+	wantTrace bool,
+	wantStateDiff bool,
+	noBaseFee bool,
+) (*evmSetup, context.CancelFunc, error) {
+	header := block.Header()
+	cfg, err := GetVmConfig(ctx, b, idx.Block(header.Number.Uint64()))
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("cannot get vm config for block %d, error: %w", header.Number.Uint64(), err)
+	}
+	if noBaseFee {
+		cfg.NoBaseFee = true
+	}
+
+	setup := &evmSetup{activeState: statedb}
+
+	if wantTrace {
+		setup.txTracer = txtrace.NewTraceStructLogger(block, uint(index))
+		cfg.Tracer = setup.txTracer.Hooks()
+	}
+
+	if wantStateDiff {
+		setup.stateDiffLogger = txtrace.NewStateDiffLogger()
+		setup.activeState = evmstore.WrapStateDbWithLogger(statedb, setup.stateDiffLogger.Hooks())
+
+		sdOnEnter := setup.stateDiffLogger.OnEnter
+		if cfg.Tracer == nil {
+			cfg.Tracer = &tracing.Hooks{OnEnter: sdOnEnter}
+		} else {
+			existing := cfg.Tracer.OnEnter
+			cfg.Tracer.OnEnter = func(depth int, typ byte, from, to common.Address, input []byte, gas uint64, value *big.Int) {
+				if existing != nil {
+					existing(depth, typ, from, to, input, gas, value)
+				}
+				sdOnEnter(depth, typ, from, to, input, gas, value)
+			}
+		}
+	}
+	setup.tracer = cfg.Tracer
+
+	timeout := defaultTraceTimeout
+	if b.RPCEVMTimeout() > 0 {
+		timeout = b.RPCEVMTimeout()
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+
+	vmenv, _, err := b.GetEVM(ctx, setup.activeState, header, &cfg, nil)
+	if err != nil {
+		cancel()
+		return nil, func() {}, fmt.Errorf("cannot initialize vm for block %d, error: %s", header.Number.Uint64(), err.Error())
+	}
+
+	go func() {
+		<-ctx.Done()
+		vmenv.Cancel()
+	}()
+
+	setup.vmenv = vmenv
+	return setup, cancel, nil
+}
+
+// Call - trace_call function returns transaction inner traces for non historical transactions.
+// Supports "trace" and "stateDiff" trace types, compatible with go-ethereum trace_call format.
+func (s *PublicTxTraceAPI) Call(ctx context.Context, args TransactionArgs, traceTypes []string, blockNrOrHash rpc.BlockNumberOrHash, config *TraceCallConfig) (*txtrace.TraceCallResult, error) {
+
+	defer func(start time.Time) {
+		log.Debug("Executing trace_Call call finished", "txArgs", args, "runtime", time.Since(start))
+	}(time.Now())
+
+	wantTrace, wantStateDiff, err := containsTraceType(traceTypes)
+	if err != nil {
+		return nil, err
+	}
+
+	block, err := getEvmBlockFromNumberOrHash(ctx, blockNrOrHash, s.b)
+	if err != nil {
+		return nil, err
+	}
+	var txIndex uint
+	if config != nil && config.TxIndex != nil {
+		txIndex = uint(*config.TxIndex)
+	}
+
+	// Get state
+	_, statedb, err := stateAtTransaction(ctx, block, int(txIndex), s.b)
+	if err != nil {
+		return nil, err
+	}
+	defer statedb.Release()
+
+	// Apply state overrides
+	if config != nil {
+		if err := config.StateOverrides.Apply(statedb); err != nil {
+			return nil, err
+		}
+	}
+
+	tx, msg, err := getTxAndMessage(&args, block, s.b)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.traceCallExec(ctx, block, msg, statedb, tx, uint64(txIndex), wantTrace, wantStateDiff)
+}
+
+// containsTraceType checks if the provided trace types include "trace" and/or "stateDiff" and returns corresponding booleans.
+func containsTraceType(traceTypes []string) (bool, bool, error) {
+	wantTrace := false
+	wantStateDiff := false
+	for _, traceType := range traceTypes {
+		switch traceType {
+		case TraceTypeTrace:
+			wantTrace = true
+		case TraceTypeStateDiff:
+			wantStateDiff = true
+		case TraceTypeVmTrace:
+			return false, false, fmt.Errorf("vmTrace trace type is not supported")
+		default:
+			return false, false, fmt.Errorf("unrecognized trace type: %s", traceType)
+		}
+	}
+	return wantTrace, wantStateDiff, nil
+}
+
+// traceCallExec executes a simulated transaction and returns a TraceCallResult
+// containing optional trace actions and/or state diff based on the requested types.
+func (s *PublicTxTraceAPI) traceCallExec(
+	ctx context.Context,
+	block *evmcore.EvmBlock,
+	msg *core.Message,
+	statedb state.StateDB,
+	tx *types.Transaction,
+	index uint64,
+	wantTrace bool,
+	wantStateDiff bool,
+) (*txtrace.TraceCallResult, error) {
+	tracedEVM, cancel, err := setupTracedEVM(ctx, s.b, block, statedb, index, wantTrace, wantStateDiff, true)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+
+	tracedEVM.activeState.SetTxContext(tx.Hash(), int(index))
+
+	// Call OnTxStart manually before execution so the trace logger can initialize.
+	if tracedEVM.tracer != nil && tracedEVM.tracer.OnTxStart != nil {
+		tracedEVM.tracer.OnTxStart(tracedEVM.vmenv.GetVMContext(), tx, msg.From)
+	}
+
+	// Set tx context in EVM
+	vmContext, err := evmcore.NewEVMTxContext(msg)
+	if err != nil {
+		return nil, err
+	}
+	tracedEVM.vmenv.SetTxContext(vmContext)
+
+	// Execute the transaction using core.ApplyMessage to capture raw return data.
+	result, applyErr := core.ApplyMessage(tracedEVM.vmenv, msg, core.NewGasPool(msg.GasLimit))
+
+	// Finalize the transaction state regardless of execution outcome.
+	tracedEVM.activeState.EndTransaction()
+
+	// Build a synthetic receipt and call OnTxEnd to finalize the trace.
+	var receipt *types.Receipt
+	if applyErr == nil && result != nil {
+		if result.Failed() {
+			receipt = &types.Receipt{Status: types.ReceiptStatusFailed, GasUsed: result.UsedGas}
+		} else {
+			receipt = &types.Receipt{Status: types.ReceiptStatusSuccessful, GasUsed: result.UsedGas}
+		}
+	}
+	if tracedEVM.tracer != nil && tracedEVM.tracer.OnTxEnd != nil {
+		tracedEVM.tracer.OnTxEnd(receipt, applyErr)
+	}
+
+	if tracedEVM.vmenv.Cancelled() {
+		return nil, fmt.Errorf("EVM was cancelled when tracing call")
+	}
+
+	callResult := &txtrace.TraceCallResult{VmTrace: nil}
+
+	if applyErr != nil {
+		// Pre-EVM error (e.g., insufficient gas for intrinsic cost, nonce mismatch).
+		errTrace := txtrace.GetErrorTraceFromMsg(msg, block.Hash, *block.Number, tx.Hash(), index, applyErr)
+		if wantTrace {
+			callResult.Trace = []txtrace.ActionTrace{*errTrace}
+		}
+		if wantStateDiff {
+			callResult.StateDiff = make(txtrace.StateDiff)
+		}
+		return callResult, nil
+	}
+
+	callResult.Output = hexutil.Bytes(result.ReturnData)
+
+	if wantTrace {
+		callResult.Trace = *tracedEVM.txTracer.GetResult()
+	}
+	if wantStateDiff {
+		callResult.StateDiff = tracedEVM.stateDiffLogger.GetResult()
+	}
+
+	return callResult, nil
+}
+
+// Block - trace_block function returns transaction traces in given block
+func (s *PublicTxTraceAPI) Block(ctx context.Context, numberOrHash rpc.BlockNumberOrHash) (*[]txtrace.ActionTrace, error) {
+
+	blockNumber, err := s.b.ResolveRpcBlockNumberOrHash(ctx, numberOrHash)
+	if err != nil {
+		return nil, err
+	}
+
+	defer func(start time.Time) {
+		log.Debug("Executing trace_block call finished", "block", blockNumber, "runtime", time.Since(start))
+	}(time.Now())
+
+	block, err := s.b.BlockByNumber(ctx, rpc.BlockNumber(blockNumber))
+	if err != nil {
+		return nil, fmt.Errorf("cannot get block %v from db got %v", blockNumber, err.Error())
+	}
+
+	traces, err := s.replayBlock(ctx, block, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("cannot trace block %v got %v", blockNumber, err.Error())
+	}
+
+	return traces, nil
+}
+
+// Get - trace_get function returns transaction traces on specified index position of the traces
+// If index is nil, then just root trace is returned
+func (s *PublicTxTraceAPI) Get(ctx context.Context, hash common.Hash, traceIndex []hexutil.Uint) (*[]txtrace.ActionTrace, error) {
+	defer func(start time.Time) {
+		log.Debug("Executing trace_get call finished", "txHash", hash.String(), "index", traceIndex, "runtime", time.Since(start))
+	}(time.Now())
+	return s.traceTxHash(ctx, hash, &traceIndex)
+}
+
+// traceTxHash looks for a block of this transaction hash and trace it
+func (s *PublicTxTraceAPI) traceTxHash(ctx context.Context, hash common.Hash, traceIndex *[]hexutil.Uint) (*[]txtrace.ActionTrace, error) {
+	tx, blockNumber, _, err := s.b.GetTransaction(ctx, hash)
+	if err != nil {
+		return nil, fmt.Errorf("cannot get transaction %s: %v", hash.String(), err)
+	}
+	if tx == nil {
+		return nil, fmt.Errorf("transaction %s not found", hash.String())
+	}
+	blkNr := rpc.BlockNumber(blockNumber)
+	block, err := s.b.BlockByNumber(ctx, blkNr)
+	if err != nil {
+		return nil, fmt.Errorf("cannot get block from db %v, error:%v", blkNr, err.Error())
+	}
+
+	return s.replayBlock(ctx, block, &hash, traceIndex)
+}
+
+// Replays block and returns traces according to parameters
+//
+// txHash
+//   - if is nil, all transaction traces in the block are collected
+//   - is value, then only trace for that transaction is returned
+//
+// traceIndex - when specified, then only trace on that index is returned
+func (s *PublicTxTraceAPI) replayBlock(ctx context.Context, block *evmcore.EvmBlock, txHash *common.Hash, traceIndex *[]hexutil.Uint) (*[]txtrace.ActionTrace, error) {
+
+	if block == nil {
+		return nil, fmt.Errorf("invalid block for tracing")
+	}
+
+	if block.NumberU64() == 0 {
+		return nil, fmt.Errorf("genesis block is not traceable")
+	}
+
+	blockNumber := block.Number.Int64()
+	parentBlockNr := rpc.BlockNumber(blockNumber - 1)
+	callTrace := txtrace.CallTrace{
+		Actions: make([]txtrace.ActionTrace, 0),
+	}
+
+	chainConfig := s.b.ChainConfig(idx.Block(block.NumberU64()))
+	signer := types.LatestSignerForChainID(chainConfig.ChainID)
+
+	state, _, err := s.b.StateAndBlockByNumberOrHash(ctx, rpc.BlockNumberOrHash{BlockNumber: &parentBlockNr})
+	if err != nil {
+		return nil, fmt.Errorf("cannot get state for block %v, error: %v", block.NumberU64(), err.Error())
+	}
+	defer state.Release()
+
+	receipts, err := s.b.GetReceiptsByNumber(ctx, rpc.BlockNumber(blockNumber))
+	if err != nil {
+		return nil, fmt.Errorf("cannot get receipts for block %v, error: %v", block.NumberU64(), err.Error())
+	}
+
+	// loop thru all transactions in the block and process them
+	for i, tx := range block.Transactions {
+
+		// replay only needed transaction if specified
+		if txHash == nil || *txHash == tx.Hash() {
+
+			msg, err := evmcore.TxAsMessage(tx, signer, block.BaseFee)
+			if err != nil {
+				return nil, fmt.Errorf("cannot get message from transaction %s, error %s", tx.Hash().String(), err)
+			}
+
+			if len(receipts) <= i || receipts[i] == nil {
+				return nil, fmt.Errorf("no receipt found for transaction %s", tx.Hash().String())
+			}
+
+			txTraces, err := s.traceTx(ctx, msg, state, block, tx, uint64(receipts[i].TransactionIndex), receipts[i].Status)
+			if err != nil {
+				return nil, fmt.Errorf("cannot get transaction trace for transaction %s, error %s", tx.Hash().String(), err)
+			} else {
+				callTrace.AddTraces(txTraces, traceIndex)
+			}
+
+			// already replayed specified transaction so end loop
+			if txHash != nil {
+				break
+			}
+
+		} else {
+
+			// Replay transaction without tracing to prepare state for next transaction
+			log.Debug("Replaying transaction without trace", "txHash", tx.Hash().String())
+			msg, err := evmcore.TxAsMessage(tx, signer, block.BaseFee)
+			if err != nil {
+				return nil, fmt.Errorf("cannot get message from transaction %s, error %s", tx.Hash().String(), err)
+			}
+
+			state.SetTxContext(tx.Hash(), i)
+			vmConfig, err := GetVmConfig(ctx, s.b, idx.Block(block.NumberU64()))
+			if err != nil {
+				return nil, fmt.Errorf("cannot get vm config for block %d, error: %w", block.NumberU64(), err)
+			}
+			vmConfig.NoBaseFee = true
+			vmConfig.Tracer = nil
+
+			vmenv, _, err := s.b.GetEVM(ctx, state, block.Header(), &vmConfig, nil)
+			if err != nil {
+				return nil, fmt.Errorf("cannot initialize vm for transaction %s, error: %s", tx.Hash().String(), err.Error())
+			}
+
+			if vmenv.ChainConfig().IsPrague(block.Number, uint64(block.Time.Unix())) {
+				evmcore.ProcessParentBlockHash(block.ParentHash, vmenv, state)
+			}
+
+			res, err := core.ApplyMessage(vmenv, msg, core.NewGasPool(msg.GasLimit))
+			failed := false
+			if err != nil {
+				failed = true
+				log.Error("Cannot replay transaction", "txHash", tx.Hash().String(), "err", err.Error())
+			}
+
+			if res != nil && res.Err != nil {
+				failed = true
+				log.Debug("Error replaying transaction", "txHash", tx.Hash().String(), "err", res.Err.Error())
+			}
+
+			state.EndTransaction()
+
+			// Check correct replay status according to receipt data
+			if (failed && receipts[i].Status == 1) || (!failed && receipts[i].Status == 0) {
+				return nil, fmt.Errorf("invalid transaction replay state at %s", tx.Hash().String())
+			}
+		}
+	}
+
+	// In case of empty result create empty trace for empty block
+	if len(callTrace.Actions) == 0 {
+		if traceIndex != nil || txHash != nil {
+			return nil, nil
+		} else {
+			return getEmptyBlockTrace(block.Hash, *block.Number), nil
+		}
+	}
+
+	return &callTrace.Actions, nil
+}
+
+// traceTx replays a historical transaction with full tracing and returns the action traces.
+// It validates the replayed execution status against the on-chain receipt status.
+func (s *PublicTxTraceAPI) traceTx(
+	ctx context.Context,
+	msg *core.Message,
+	statedb state.StateDB,
+	block *evmcore.EvmBlock,
+	tx *types.Transaction,
+	index uint64,
+	status uint64,
+) (*[]txtrace.ActionTrace, error) {
+	tracedEVM, cancel, err := setupTracedEVM(ctx, s.b, block, statedb, index, true, false, true)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+
+	statedb.SetTxContext(tx.Hash(), int(index))
+	chainConfig := s.b.ChainConfig(idx.Block(block.Number.Uint64()))
+	resultReceipt, err := evmcore.ApplyTransactionWithEVM(msg, chainConfig, core.NewGasPool(msg.GasLimit), statedb, block.Number, block.Hash, tx, &index, tracedEVM.vmenv)
+
+	traceActions := tracedEVM.txTracer.GetResult()
+	statedb.EndTransaction()
+
+	if err != nil {
+		errTrace := txtrace.GetErrorTraceFromMsg(msg, block.Hash, *block.Number, tx.Hash(), index, err)
+		at := []txtrace.ActionTrace{*errTrace}
+		if status == 1 {
+			return nil, fmt.Errorf("invalid transaction replay state at %s, error: %s", tx.Hash().String(), err.Error())
+		}
+		return &at, nil
+	}
+
+	if tracedEVM.vmenv.Cancelled() {
+		return nil, fmt.Errorf("EVM was cancelled when replaying tx")
+	}
+
+	if status != resultReceipt.Status {
+		return nil, fmt.Errorf("invalid transaction replay state at %s, want %v but got %v", tx.Hash().String(), status, resultReceipt.Status)
+	}
+	return traceActions, nil
+}
+
+// getEmptyBlockTrace returns trace for empty block
+func getEmptyBlockTrace(blockHash common.Hash, blockNumber big.Int) *[]txtrace.ActionTrace {
+	emptyTrace := txtrace.CallTrace{
+		Actions: make([]txtrace.ActionTrace, 0),
+	}
+	blockTrace := txtrace.CreateActionTrace(blockHash, blockNumber, common.Hash{}, 0, "empty")
+	txAction := txtrace.NewAddressAction(common.Address{}, 0, []byte{}, nil, hexutil.Big{}, nil)
+	blockTrace.Action = txAction
+	blockTrace.Error = "Empty block"
+	emptyTrace.AddTrace(blockTrace)
+	return &emptyTrace.Actions
+}
+
+// CallRequest represents a single [transaction, traceTypes] pair in a trace_callMany request.
+type CallRequest struct {
+	Args       TransactionArgs
+	TraceTypes []string
+}
+
+// UnmarshalJSON parses the [tx, traceTypes] arguments format expected by trace_callMany.
+func (r *CallRequest) UnmarshalJSON(data []byte) error {
+	var callRequestArgs [2]json.RawMessage
+	if err := json.Unmarshal(data, &callRequestArgs); err != nil {
+		return fmt.Errorf("each call must be [tx, traceTypes]: %w", err)
+	}
+	if err := json.Unmarshal(callRequestArgs[0], &r.Args); err != nil {
+		return fmt.Errorf("cannot parse transaction args: %w", err)
+	}
+	if err := json.Unmarshal(callRequestArgs[1], &r.TraceTypes); err != nil {
+		return fmt.Errorf("cannot parse trace types: %w", err)
+	}
+	return nil
+}
+
+// CallMany - trace_callMany executes multiple call traces on top of the same block.
+// Call n is executed on top of the state produced by all previous calls n-1, so state
+// changes accumulate across the list. The optional config allows state overrides to be
+// applied once to the base state before any call is executed.
+func (s *PublicTxTraceAPI) CallMany(ctx context.Context, calls []CallRequest, blockNrOrHash rpc.BlockNumberOrHash, config *TraceCallConfig) ([]*txtrace.TraceCallResult, error) {
+	defer func(start time.Time) {
+		log.Debug("Executing trace_callMany call finished", "numCalls", len(calls), "runtime", time.Since(start))
+	}(time.Now())
+
+	block, err := getEvmBlockFromNumberOrHash(ctx, blockNrOrHash, s.b)
+	if err != nil {
+		return nil, err
+	}
+
+	_, statedb, err := stateAtTransaction(ctx, block, 0, s.b)
+	if err != nil {
+		return nil, err
+	}
+	defer statedb.Release()
+
+	// Apply state overrides to the base state before executing any call.
+	if config != nil {
+		if err := config.StateOverrides.Apply(statedb); err != nil {
+			return nil, err
+		}
+	}
+
+	results := make([]*txtrace.TraceCallResult, 0, len(calls))
+	for i, call := range calls {
+		wantTrace := false
+		wantStateDiff := false
+
+		wantTrace, wantStateDiff, err = containsTraceType(call.TraceTypes)
+		if err != nil {
+			return nil, fmt.Errorf("call %d: %w", i, err)
+		}
+
+		tx, msg, err := getTxAndMessage(&call.Args, block, s.b)
+		if err != nil {
+			return nil, fmt.Errorf("call %d: %w", i, err)
+		}
+
+		result, err := s.traceCallExec(ctx, block, msg, statedb, tx, uint64(i), wantTrace, wantStateDiff)
+		if err != nil {
+			return nil, fmt.Errorf("call %d: %w", i, err)
+		}
+		results = append(results, result)
+	}
+
+	return results, nil
+}
+
+// FilterArgs represents the arguments for specifying trace targets
+type FilterArgs struct {
+	FromAddress *[]common.Address      `json:"fromAddress"`
+	ToAddress   *[]common.Address      `json:"toAddress"`
+	FromBlock   *rpc.BlockNumberOrHash `json:"fromBlock"`
+	ToBlock     *rpc.BlockNumberOrHash `json:"toBlock"`
+	After       uint                   `json:"after"`
+	Count       uint                   `json:"count"`
+}
+
+// Filter is function for trace_filter rpc call
+func (s *PublicTxTraceAPI) Filter(ctx context.Context, args FilterArgs) (json.RawMessage, error) {
+	// add log after execution
+	defer func(start time.Time) {
+		data := getLogData(args, start)
+		log.Debug("Executing trace_filter call finished", data...)
+	}(time.Now())
+
+	if args.Count == 0 && args.After == 0 {
+		// count and order of traces doesn't matter so filter blocks in parallel
+		return filterBlocksInParallel(ctx, s, args)
+	} else {
+		// filter blocks in series
+		return filterBlocks(ctx, s, args)
+	}
+}
+
+// Filter specified block range in series
+func filterBlocks(ctx context.Context, s *PublicTxTraceAPI, args FilterArgs) (json.RawMessage, error) {
+
+	var traceAdded, traceCount uint
+
+	// resultBuffer is buffer for collecting result traces
+	resultBuffer, err := NewJsonResultBuffer(s.maxResponseSize)
+	if err != nil {
+		return nil, err
+	}
+
+	// parse arguments
+	fromBlock, toBlock, fromAddresses, toAddresses, err := parseFilterArguments(s.b, args)
+	if err != nil {
+		return nil, err
+	}
+
+	// loop trhu all blocks
+	for i := fromBlock; i <= toBlock; i++ {
+		traces, err := getTracesForBlock(s, ctx, i, fromAddresses, toAddresses)
+		if err != nil {
+			return nil, err
+		}
+
+		// check if traces have to be added
+		for _, trace := range traces {
+
+			if traceCount >= args.After {
+				err := resultBuffer.AddObject(&trace)
+				if err != nil {
+					return nil, err
+				}
+				traceAdded++
+			}
+			if traceAdded >= args.Count {
+				return resultBuffer.GetResult()
+			}
+			traceCount++
+		}
+
+		// when context ended return error
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+	}
+	return resultBuffer.GetResult()
+}
+
+// Filter specified block range in parallel
+func filterBlocksInParallel(ctx context.Context, s *PublicTxTraceAPI, args FilterArgs) (json.RawMessage, error) {
+
+	// resultBuffer is buffer for collecting result traces
+	resultBuffer, err := NewJsonResultBuffer(s.maxResponseSize)
+	if err != nil {
+		return nil, err
+	}
+	// parse arguments
+	fromBlock, toBlock, fromAddresses, toAddresses, err := parseFilterArguments(s.b, args)
+	if err != nil {
+		return nil, err
+	}
+	// add context cancel function
+	ctx, cancelFunc := context.WithCancelCause(ctx)
+
+	// number of workers
+	workerCount := runtime.NumCPU()
+
+	blocks := make(chan rpc.BlockNumber, 1)
+	results := make(chan traceWorkerResult, 1)
+
+	// make goroutine for results processing
+	var wgResult sync.WaitGroup
+	wgResult.Add(1)
+	go func() {
+		defer wgResult.Done()
+		for {
+			select {
+			case res, ok := <-results:
+				if !ok {
+					return
+				}
+				if res.err != nil {
+					cancelFunc(res.err)
+				} else {
+					for _, trace := range res.trace {
+						err := resultBuffer.AddObject(&trace)
+						if err != nil {
+							cancelFunc(err)
+						}
+					}
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	// make workers to process blocks
+	var wg sync.WaitGroup
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			replayBlockWorker(s, ctx, blocks, results, fromAddresses, toAddresses)
+		}()
+	}
+
+	// fill blocks channel with blocks to process
+	addBlocksForProcessing(ctx, fromBlock, toBlock, blocks)
+
+	// wait for workers to be done and then close results channel
+	wg.Wait()
+	close(results)
+	wgResult.Wait()
+
+	// check if context expired or had another error
+	if ctx.Err() != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("timeout when replaying tx")
+		} else {
+			return nil, context.Cause(ctx)
+		}
+	}
+	return resultBuffer.GetResult()
+}
+
+// Fills blocks into provided channel for processing and close the channel in the end
+// or if the context was canceled
+func addBlocksForProcessing(ctx context.Context, fromBlock rpc.BlockNumber, toBlock rpc.BlockNumber, blocks chan<- rpc.BlockNumber) {
+	defer close(blocks)
+	for i := fromBlock; i <= toBlock; i++ {
+		select {
+		case blocks <- i:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// Parses rpc call arguments
+func parseFilterArguments(b Backend, args FilterArgs) (fromBlock rpc.BlockNumber, toBlock rpc.BlockNumber, fromAddresses map[common.Address]struct{}, toAddresses map[common.Address]struct{}, err error) {
+
+	blockHead := rpc.BlockNumber(b.CurrentBlock().NumberU64())
+
+	if args.FromBlock != nil {
+		blockNumber, err := b.ResolveRpcBlockNumberOrHash(context.Background(), rpc.BlockNumberOrHashWithNumber(*args.FromBlock.BlockNumber))
+		if err != nil {
+			return 0, 0, nil, nil, err
+		}
+		fromBlock = rpc.BlockNumber(blockNumber)
+	}
+
+	if args.ToBlock != nil {
+		blockNumber, err := b.ResolveRpcBlockNumberOrHash(context.Background(), rpc.BlockNumberOrHashWithNumber(*args.ToBlock.BlockNumber))
+		if err != nil {
+			return 0, 0, nil, nil, err
+		}
+		toBlock = rpc.BlockNumber(blockNumber)
+	} else {
+		toBlock = blockHead
+	}
+
+	if args.FromAddress != nil {
+		fromAddresses = make(map[common.Address]struct{})
+		for _, addr := range *args.FromAddress {
+			fromAddresses[addr] = struct{}{}
+		}
+	}
+	if args.ToAddress != nil {
+		toAddresses = make(map[common.Address]struct{})
+		for _, addr := range *args.ToAddress {
+			toAddresses[addr] = struct{}{}
+		}
+	}
+	return fromBlock, toBlock, fromAddresses, toAddresses, nil
+}
+
+type traceWorkerResult struct {
+	trace []txtrace.ActionTrace
+	err   error
+}
+
+// Worker for replaying blocks in parallel and filter replayed traces
+func replayBlockWorker(
+	s *PublicTxTraceAPI,
+	ctx context.Context,
+	blocks <-chan rpc.BlockNumber,
+	results chan<- traceWorkerResult,
+	fromAddresses map[common.Address]struct{},
+	toAddresses map[common.Address]struct{}) {
+
+	for i := range blocks {
+
+		// check context before block processing
+		// error is not propagated as it is checked
+		// from context in the main goroutine
+		if ctx.Err() != nil {
+			return
+		}
+
+		traces, err := getTracesForBlock(s, ctx, i, fromAddresses, toAddresses)
+		if len(traces) == 0 && err == nil {
+			continue
+		}
+
+		select {
+		case results <- traceWorkerResult{trace: traces, err: err}:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// Replay block transactions and filter out useable traces
+func getTracesForBlock(
+	s *PublicTxTraceAPI,
+	ctx context.Context,
+	blockNumber rpc.BlockNumber,
+	fromAddresses map[common.Address]struct{},
+	toAddresses map[common.Address]struct{},
+) (
+	[]txtrace.ActionTrace,
+	error,
+) {
+	resultTraces := make([]txtrace.ActionTrace, 0)
+
+	block, err := s.b.BlockByNumber(ctx, blockNumber)
+	if err != nil {
+		return nil, fmt.Errorf("cannot get block from db %v, error:%v", blockNumber.Int64(), err.Error())
+	}
+
+	if block == nil {
+		return nil, fmt.Errorf("cannot get block from db %v", blockNumber.Int64())
+	}
+
+	if block.Transactions.Len() == 0 {
+		return resultTraces, nil
+	}
+
+	// when block has any transaction, then process it
+	traces, err := s.replayBlock(ctx, block, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, trace := range *traces {
+
+		if trace.Action != nil {
+			if containsAddress(trace.Action.From, trace.Action.To, fromAddresses, toAddresses) {
+				resultTraces = append(resultTraces, trace)
+			}
+		}
+	}
+
+	return resultTraces, nil
+}
+
+// Check if from or to address is contained in the map
+func containsAddress(addressFrom *common.Address, addressTo *common.Address, fromAddresses map[common.Address]struct{}, toAddresses map[common.Address]struct{}) bool {
+
+	if len(fromAddresses) > 0 {
+		if addressFrom == nil {
+			return false
+		} else {
+			if _, ok := fromAddresses[*addressFrom]; !ok {
+				return false
+			}
+		}
+	}
+
+	if len(toAddresses) > 0 {
+		if addressTo == nil {
+			return false
+		} else if _, ok := toAddresses[*addressTo]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// Creates log record according to request arguments
+func getLogData(args FilterArgs, start time.Time) []interface{} {
+
+	var data []interface{}
+
+	if args.FromBlock != nil {
+		data = append(data, "fromBlock", args.FromBlock.BlockNumber.Int64())
+	}
+
+	if args.ToBlock != nil {
+		data = append(data, "toBlock", args.ToBlock.BlockNumber.Int64())
+	}
+
+	if args.FromAddress != nil {
+		adresses := make([]string, 0)
+		for _, addr := range *args.FromAddress {
+			adresses = append(adresses, addr.String())
+		}
+		data = append(data, "fromAddr", adresses)
+	}
+
+	if args.ToAddress != nil {
+		adresses := make([]string, 0)
+		for _, addr := range *args.ToAddress {
+			adresses = append(adresses, addr.String())
+		}
+		data = append(data, "toAddr", adresses)
+	}
+	data = append(data, "time", time.Since(start))
+	return data
+}
