@@ -6,8 +6,8 @@ github.com/0xsoniclabs/tosca v0.0.0-20260429071638-3f4119284c42 h1:oJMc/vekaRHmI
 github.com/0xsoniclabs/tosca v0.0.0-20260429071638-3f4119284c42/go.mod h1:iXtx7i9R25Oc5SD/xGI7aamdnF0nCteBpulZGIOIYJI=
 github.com/0xsoniclabs/tracy v0.0.0-20251027125423-00a5ab7968fb h1:mb6rPN+DpA/N2QWrQrLQEG2uzrYgy061PPauifstXNM=
 github.com/0xsoniclabs/tracy v0.0.0-20251027125423-00a5ab7968fb/go.mod h1:KUPXHA9bbj/EFrzSd/7i4XIh2SOxDljWCRBmpOpAVxE=
-github.com/Chaintable/pipeline v0.0.63 h1:CO6MUriiK0+1YZab/KqJciEIq05YsLeaZ5NYHkhtrgI=
-github.com/Chaintable/pipeline v0.0.63/go.mod h1:l0GT8LwhbRwaxrLze5FjDv3lHgxxqdf9opAVjJtXNh4=
+github.com/Chaintable/pipeline v0.0.66 h1:WP3iTAcMBb6zZZMmANnE4xwaVFuJfK7/v+fcO1c9BSQ=
+github.com/Chaintable/pipeline v0.0.66/go.mod h1:l0GT8LwhbRwaxrLze5FjDv3lHgxxqdf9opAVjJtXNh4=
 github.com/DataDog/zstd v1.5.7 h1:ybO8RBeh29qrxIhCA9E8gKY6xfONU9T6G6aP9DTKfLE=
 github.com/DataDog/zstd v1.5.7/go.mod h1:g4AWEaM3yOg3HYfnJ3YIawPnVdXJh9QME85blwSAmyw=
 github.com/Fantom-foundation/lachesis-base-sonic v0.0.0-20260429065829-930ae462cd09 h1:AIyOv4ze7kVdfZfCdDtxygaPwXHJaAsrfk9Tpf1EQ8k=
