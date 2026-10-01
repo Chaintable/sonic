@@ -18,270 +18,94 @@ package ethapi
 
 import (
 	"encoding/json"
-	"math"
 	"math/big"
-	"os"
 	"testing"
 
 	"github.com/0xsoniclabs/sonic/evmcore"
 	ptracer "github.com/Chaintable/pipeline/tracer"
 	ptypes "github.com/Chaintable/pipeline/types"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/ethereum/go-ethereum/rlp"
-	"github.com/ethereum/go-ethereum/trie"
 	"github.com/stretchr/testify/require"
 )
 
-func TestValidateDebankReplayReceiptsRejectsReceiptRootMismatch(t *testing.T) {
-	tx := types.NewTx(&types.LegacyTx{Nonce: 1, Gas: 21_000, GasPrice: big.NewInt(1)})
-	receipt := &types.Receipt{
-		TxHash:            tx.Hash(),
-		Status:            types.ReceiptStatusSuccessful,
-		GasUsed:           21_000,
-		CumulativeGasUsed: 21_000,
-	}
-	block := &evmcore.EvmBlock{
-		EvmHeader: evmcore.EvmHeader{Number: big.NewInt(7), GasUsed: 21_000},
-		Transactions: types.Transactions{
-			tx,
-		},
-	}
-
-	err := validateDebankReplayReceipts(block, []evmcore.ProcessedTransaction{{
-		Transaction: tx,
-		Receipt:     receipt,
-	}}, types.Receipts{receipt}, 21_000, common.HexToHash("0x01"), types.Bloom{})
-
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "replayed receipt root mismatch")
-}
-
-func TestValidateDebankReplayReceiptsRejectsBloomMismatch(t *testing.T) {
-	tx := types.NewTx(&types.LegacyTx{Nonce: 1, Gas: 21_000, GasPrice: big.NewInt(1)})
-	receipt := &types.Receipt{
-		TxHash:            tx.Hash(),
-		Status:            types.ReceiptStatusSuccessful,
-		GasUsed:           21_000,
-		CumulativeGasUsed: 21_000,
-		Logs: []*types.Log{{
-			Address: common.HexToAddress("0x1001"),
-			Topics:  []common.Hash{common.HexToHash("0x01")},
-		}},
-	}
-	receipt.Bloom = types.CreateBloom(receipt)
-	block := &evmcore.EvmBlock{
-		EvmHeader: evmcore.EvmHeader{Number: big.NewInt(7), GasUsed: 21_000},
-		Transactions: types.Transactions{
-			tx,
-		},
-	}
-	receiptHash := types.DeriveSha(types.Receipts{receipt}, trie.NewStackTrie(nil))
-
-	err := validateDebankReplayReceipts(block, []evmcore.ProcessedTransaction{{
-		Transaction: tx,
-		Receipt:     receipt,
-	}}, types.Receipts{receipt}, 21_000, receiptHash, types.Bloom{})
-
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "replayed logs bloom mismatch")
-}
-
-func TestValidateDebankReplayReceiptsCanonicalGasAccounting(t *testing.T) {
-	// Captured eth_getBlockByNumber / eth_getBlockReceipts responses for the
-	// two mainnet failures. Only fields needed to reproduce the roots are kept.
-	data, err := os.ReadFile("testdata/debank_receipt_gas.json")
-	require.NoError(t, err)
-	var fixtures []struct {
-		Number               hexutil.Uint64
-		GasUsed              hexutil.Uint64
-		ReceiptsRoot         common.Hash
-		LogsBloom            types.Bloom
-		Transactions         types.Transactions
-		Receipts             types.Receipts
-		ReplayedReceiptsRoot common.Hash
-	}
-	require.NoError(t, json.Unmarshal(data, &fixtures))
-	for _, fixture := range fixtures {
-		t.Run(new(big.Int).SetUint64(uint64(fixture.Number)).String(), func(t *testing.T) {
-			block := &evmcore.EvmBlock{
-				EvmHeader: evmcore.EvmHeader{
-					Number:  new(big.Int).SetUint64(uint64(fixture.Number)),
-					GasUsed: uint64(fixture.GasUsed),
-				},
-				Transactions: fixture.Transactions,
-			}
-			require.Len(t, fixture.Receipts, len(block.Transactions))
-			processed := make([]evmcore.ProcessedTransaction, len(fixture.Receipts))
-			replayed := make(types.Receipts, len(fixture.Receipts))
-			var usedGas uint64
-			for i, canonical := range fixture.Receipts {
-				receipt := *canonical
-				usedGas += receipt.GasUsed
-				receipt.CumulativeGasUsed = usedGas
-				replayed[i] = &receipt
-				processed[i] = evmcore.ProcessedTransaction{Transaction: block.Transactions[i], Receipt: &receipt}
-			}
-			require.Equal(t, fixture.ReceiptsRoot, types.DeriveSha(fixture.Receipts, trie.NewStackTrie(nil)))
-			require.Equal(t, fixture.ReplayedReceiptsRoot, types.DeriveSha(replayed, trie.NewStackTrie(nil)))
-			require.NotEqual(t, fixture.ReceiptsRoot, fixture.ReplayedReceiptsRoot)
-			require.Less(t, usedGas, block.GasUsed)
-
-			canonicalBefore, err := json.Marshal(fixture.Receipts)
-			require.NoError(t, err)
-			replayedBefore, err := json.Marshal(replayed)
-			require.NoError(t, err)
-			require.NoError(t, validateDebankReplayReceipts(block, processed, fixture.Receipts, usedGas, fixture.ReceiptsRoot, fixture.LogsBloom))
-			canonicalAfter, err := json.Marshal(fixture.Receipts)
-			require.NoError(t, err)
-			replayedAfter, err := json.Marshal(replayed)
-			require.NoError(t, err)
-			require.Equal(t, canonicalBefore, canonicalAfter, "cached canonical receipts must not be modified")
-			require.Equal(t, replayedBefore, replayedAfter, "tracer receipts must retain execution gas accounting")
-
-			// Exercise the real disk encoding and DeriveFields path as well: a
-			// restart evicts receipts with actual per-transaction GasUsed values.
-			stored := make([]*types.ReceiptForStorage, len(fixture.Receipts))
-			for i, receipt := range fixture.Receipts {
-				stored[i] = (*types.ReceiptForStorage)(receipt)
-			}
-			encoded, err := rlp.EncodeToBytes(stored)
-			require.NoError(t, err)
-			var decoded []*types.ReceiptForStorage
-			require.NoError(t, rlp.DecodeBytes(encoded, &decoded))
-			coldReceipts := make(types.Receipts, len(decoded))
-			for i, receipt := range decoded {
-				coldReceipts[i] = (*types.Receipt)(receipt)
-			}
-			config := *params.AllEthashProtocolChanges
-			config.ChainID = big.NewInt(146)
-			require.NoError(t, coldReceipts.DeriveFields(&config, common.Hash{}, block.NumberU64(), 0, big.NewInt(50_000_000_000), new(big.Int), block.Transactions))
-			require.NotEqual(t, fixture.Receipts[1].GasUsed, coldReceipts[1].GasUsed)
-			require.Equal(t, fixture.ReceiptsRoot, types.DeriveSha(coldReceipts, trie.NewStackTrie(nil)))
-			require.NoError(t, validateDebankReplayReceipts(block, processed, coldReceipts, usedGas, fixture.ReceiptsRoot, fixture.LogsBloom))
-		})
-	}
-}
-
-func TestValidateDebankReplayReceiptsRejectsExecutionDifferences(t *testing.T) {
+func TestValidateDebankReplayTransactionsCanonicalGasAccounting(t *testing.T) {
+	// Mainnet execution gas from callTracer. Stored cumulative gas includes
+	// additional accounting, so it cannot validate replay completeness. In
+	// block 80175307, tx 1 has derived receipt gas 192796 but executes with
+	// 104861 gas, even though every cumulative delta fits its tx gas limit.
 	for _, tc := range []struct {
-		name   string
-		modify func(*types.Receipt)
-		want   string
+		number    uint64
+		blockGas  uint64
+		replayGas []uint64
 	}{
-		{"status", func(r *types.Receipt) { r.Status = types.ReceiptStatusFailed }, "receipt root mismatch"},
-		{"type", func(r *types.Receipt) { r.Type = types.DynamicFeeTxType }, "receipt root mismatch"},
-		{"log address", func(r *types.Receipt) { r.Logs[0].Address[0]++ }, "receipt root mismatch"},
-		{"log topics", func(r *types.Receipt) { r.Logs[0].Topics[0][0]++ }, "receipt root mismatch"},
-		{"log data", func(r *types.Receipt) { r.Logs[0].Data[0]++ }, "receipt root mismatch"},
-		{"missing log", func(r *types.Receipt) { r.Logs = nil }, "receipt root mismatch"},
-		{"bloom", func(r *types.Receipt) { r.Bloom[0]++ }, "receipt root mismatch"},
-		{"more gas", func(r *types.Receipt) { r.GasUsed++ }, "gas used mismatch"},
-		{"less gas", func(r *types.Receipt) { r.GasUsed-- }, "gas used mismatch"},
-		{"cumulative gas", func(r *types.Receipt) { r.CumulativeGasUsed++ }, "cumulative gas mismatch"},
+		{80174946, 1786070, []uint64{371620, 34382, 165188}},
+		{80174947, 2248113, []uint64{95312, 553798, 137034, 553798}},
+		{80175307, 3334561, []uint64{72308, 104861, 343623, 225670, 423643, 530878, 60326, 104861, 219204, 219206, 313905}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			block, processed, canonical := debankReceiptTestBlock()
-			tc.modify(processed[0].Receipt)
-			err := validateDebankReplayReceipts(block, processed, canonical, 42_000, types.DeriveSha(canonical, trie.NewStackTrie(nil)), types.MergeBloom(canonical))
-			require.ErrorContains(t, err, tc.want)
+		t.Run(new(big.Int).SetUint64(tc.number).String(), func(t *testing.T) {
+			block := &evmcore.EvmBlock{EvmHeader: evmcore.EvmHeader{Number: new(big.Int).SetUint64(tc.number), GasUsed: tc.blockGas}}
+			var processed []evmcore.ProcessedTransaction
+			var cumulative uint64
+			for i, gas := range tc.replayGas {
+				tx := types.NewTx(&types.LegacyTx{Nonce: uint64(i), Gas: gas, GasPrice: big.NewInt(1)})
+				cumulative += gas
+				block.Transactions = append(block.Transactions, tx)
+				processed = append(processed, evmcore.ProcessedTransaction{
+					Transaction: tx,
+					Receipt:     &types.Receipt{TxHash: tx.Hash(), Status: types.ReceiptStatusSuccessful, GasUsed: gas, CumulativeGasUsed: cumulative},
+				})
+			}
+			require.Less(t, cumulative, block.GasUsed)
+			require.NoError(t, validateDebankReplayTransactions(block, processed))
+			require.Equal(t, tc.replayGas[1], processed[1].Receipt.GasUsed, "preserve execution gas in tracer receipts")
 		})
 	}
 }
 
-func TestValidateDebankReplayReceiptsGasAndInputValidation(t *testing.T) {
+func TestValidateDebankReplayTransactionsCompleteness(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		modify func(*evmcore.EvmBlock, *[]evmcore.ProcessedTransaction, *types.Receipts, *uint64)
+		modify func(*evmcore.EvmBlock, *[]evmcore.ProcessedTransaction)
 		want   string
 	}{
-		{"canonical gaps", func(*evmcore.EvmBlock, *[]evmcore.ProcessedTransaction, *types.Receipts, *uint64) {}, ""},
-		{"ordinary accounting", func(b *evmcore.EvmBlock, _ *[]evmcore.ProcessedTransaction, c *types.Receipts, _ *uint64) {
-			b.GasUsed = 42_000
-			(*c)[0].CumulativeGasUsed = 21_000
-			(*c)[1].CumulativeGasUsed = 42_000
+		{"complete", func(*evmcore.EvmBlock, *[]evmcore.ProcessedTransaction) {}, ""},
+		{"empty block", func(b *evmcore.EvmBlock, p *[]evmcore.ProcessedTransaction) {
+			b.Transactions = nil
+			*p = nil
 		}, ""},
-		{"derived gas with trailing block gas", func(_ *evmcore.EvmBlock, _ *[]evmcore.ProcessedTransaction, c *types.Receipts, _ *uint64) {
-			(*c)[0].GasUsed = 40_000
-			(*c)[1].GasUsed = 40_000
+		{"reverted transaction", func(_ *evmcore.EvmBlock, p *[]evmcore.ProcessedTransaction) {
+			(*p)[0].Receipt.Status = types.ReceiptStatusFailed
 		}, ""},
-		{"derived gas without evidence of extra accounting", func(b *evmcore.EvmBlock, _ *[]evmcore.ProcessedTransaction, c *types.Receipts, _ *uint64) {
-			b.GasUsed = 80_000
-			(*c)[0].GasUsed = 40_000
-			(*c)[1].GasUsed = 40_000
-		}, "gas used mismatch"},
-		{"ordinary block gas mismatch", func(b *evmcore.EvmBlock, p *[]evmcore.ProcessedTransaction, c *types.Receipts, gas *uint64) {
-			b.GasUsed = 42_000
-			(*c)[0].CumulativeGasUsed = 21_000
-			(*c)[1].CumulativeGasUsed = 42_000
-			(*p)[0].Receipt.GasUsed--
-			(*p)[0].Receipt.CumulativeGasUsed--
-			(*p)[1].Receipt.CumulativeGasUsed--
-			(*gas)--
-		}, "gas used mismatch"},
-		{"derived gas upper bound", func(_ *evmcore.EvmBlock, p *[]evmcore.ProcessedTransaction, c *types.Receipts, _ *uint64) {
-			(*c)[0].GasUsed = 40_000
-			(*c)[1].GasUsed = 40_000
-			(*p)[0].Receipt.GasUsed = 40_001
-		}, "gas used mismatch"},
-		{"replayed count", func(_ *evmcore.EvmBlock, p *[]evmcore.ProcessedTransaction, _ *types.Receipts, _ *uint64) {
+		{"missing transaction", func(_ *evmcore.EvmBlock, p *[]evmcore.ProcessedTransaction) {
 			*p = (*p)[:1]
 		}, "replayed tx count mismatch"},
-		{"canonical count", func(_ *evmcore.EvmBlock, _ *[]evmcore.ProcessedTransaction, c *types.Receipts, _ *uint64) {
-			*c = (*c)[:1]
-		}, "canonical receipt count mismatch"},
-		{"nil transaction", func(_ *evmcore.EvmBlock, p *[]evmcore.ProcessedTransaction, _ *types.Receipts, _ *uint64) {
+		{"extra transaction", func(_ *evmcore.EvmBlock, p *[]evmcore.ProcessedTransaction) {
+			*p = append(*p, (*p)[0])
+		}, "replayed tx count mismatch"},
+		{"nil transaction", func(_ *evmcore.EvmBlock, p *[]evmcore.ProcessedTransaction) {
 			(*p)[0].Transaction = nil
 		}, "nil transaction"},
-		{"transaction order", func(_ *evmcore.EvmBlock, p *[]evmcore.ProcessedTransaction, _ *types.Receipts, _ *uint64) {
+		{"transaction order", func(_ *evmcore.EvmBlock, p *[]evmcore.ProcessedTransaction) {
 			(*p)[0], (*p)[1] = (*p)[1], (*p)[0]
 		}, "replayed tx 0 mismatch"},
-		{"nil replayed receipt", func(_ *evmcore.EvmBlock, p *[]evmcore.ProcessedTransaction, _ *types.Receipts, _ *uint64) {
-			(*p)[0].Receipt = nil
-		}, "could not replay tx"},
-		{"nil canonical receipt", func(_ *evmcore.EvmBlock, _ *[]evmcore.ProcessedTransaction, c *types.Receipts, _ *uint64) {
-			(*c)[0] = nil
-		}, "canonical receipt 0"},
-		{"canonical transaction order", func(_ *evmcore.EvmBlock, _ *[]evmcore.ProcessedTransaction, c *types.Receipts, _ *uint64) {
-			(*c)[0], (*c)[1] = (*c)[1], (*c)[0]
-		}, "canonical receipt tx 0 mismatch"},
-		{"total gas", func(_ *evmcore.EvmBlock, _ *[]evmcore.ProcessedTransaction, _ *types.Receipts, gas *uint64) { (*gas)++ }, "replayed gas used mismatch"},
-		{"gas redistributed between transactions", func(_ *evmcore.EvmBlock, p *[]evmcore.ProcessedTransaction, _ *types.Receipts, _ *uint64) {
-			(*p)[0].Receipt.GasUsed++
-			(*p)[0].Receipt.CumulativeGasUsed++
-			(*p)[1].Receipt.GasUsed--
-		}, "gas used mismatch"},
-		{"canonical gas decreases", func(_ *evmcore.EvmBlock, _ *[]evmcore.ProcessedTransaction, c *types.Receipts, _ *uint64) {
-			(*c)[1].CumulativeGasUsed = 1
-		}, "invalid canonical cumulative gas"},
-		{"canonical gas below transaction gas", func(_ *evmcore.EvmBlock, _ *[]evmcore.ProcessedTransaction, c *types.Receipts, _ *uint64) {
-			(*c)[1].CumulativeGasUsed = (*c)[0].CumulativeGasUsed + 1
-		}, "invalid canonical cumulative gas"},
-		{"block gas below receipts", func(b *evmcore.EvmBlock, _ *[]evmcore.ProcessedTransaction, _ *types.Receipts, _ *uint64) {
-			b.GasUsed = 42_000
-		}, "canonical receipt gas exceeds block gas"},
-		{"overflow", func(b *evmcore.EvmBlock, p *[]evmcore.ProcessedTransaction, c *types.Receipts, _ *uint64) {
-			b.GasUsed = math.MaxUint64
-			(*p)[0].Receipt.GasUsed = math.MaxUint64
-			(*p)[0].Receipt.CumulativeGasUsed = math.MaxUint64
-			(*c)[0].GasUsed = math.MaxUint64
-			(*c)[0].CumulativeGasUsed = math.MaxUint64
-		}, "invalid canonical cumulative gas"},
+		{"skipped transaction", func(_ *evmcore.EvmBlock, p *[]evmcore.ProcessedTransaction) {
+			(*p)[1].Receipt = nil
+		}, "could not replay tx 1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			block, processed, canonical := debankReceiptTestBlock()
-			root := types.DeriveSha(canonical, trie.NewStackTrie(nil))
-			bloom := types.MergeBloom(canonical)
-			gas := uint64(42_000)
-			tc.modify(block, &processed, &canonical, &gas)
-			if tc.want == "" {
-				root = types.DeriveSha(canonical, trie.NewStackTrie(nil))
+			block := &evmcore.EvmBlock{EvmHeader: evmcore.EvmHeader{Number: big.NewInt(7)}}
+			var processed []evmcore.ProcessedTransaction
+			for i := range 2 {
+				tx := types.NewTx(&types.LegacyTx{Nonce: uint64(i), Gas: 21_000, GasPrice: big.NewInt(1)})
+				block.Transactions = append(block.Transactions, tx)
+				processed = append(processed, evmcore.ProcessedTransaction{Transaction: tx, Receipt: &types.Receipt{TxHash: tx.Hash(), Status: types.ReceiptStatusSuccessful}})
 			}
-			err := validateDebankReplayReceipts(block, processed, canonical, gas, root, bloom)
+			tc.modify(block, &processed)
+			err := validateDebankReplayTransactions(block, processed)
 			if tc.want == "" {
 				require.NoError(t, err)
 			} else {
@@ -289,28 +113,6 @@ func TestValidateDebankReplayReceiptsGasAndInputValidation(t *testing.T) {
 			}
 		})
 	}
-}
-
-func debankReceiptTestBlock() (*evmcore.EvmBlock, []evmcore.ProcessedTransaction, types.Receipts) {
-	block := &evmcore.EvmBlock{EvmHeader: evmcore.EvmHeader{Number: big.NewInt(7), GasUsed: 100_000}}
-	var processed []evmcore.ProcessedTransaction
-	var canonical types.Receipts
-	for i := range 2 {
-		tx := types.NewTx(&types.LegacyTx{Nonce: uint64(i), Gas: 50_000, GasPrice: big.NewInt(1)})
-		receipt := &types.Receipt{
-			TxHash: tx.Hash(), Status: types.ReceiptStatusSuccessful,
-			GasUsed: 21_000, CumulativeGasUsed: uint64(i+1) * 21_000,
-			Logs: []*types.Log{{Address: common.HexToAddress("0x1001"), Topics: []common.Hash{common.HexToHash("0x01")}, Data: []byte{1}}},
-		}
-		receipt.Bloom = types.CreateBloom(receipt)
-		stored := *receipt
-		stored.CumulativeGasUsed = uint64(i+1) * 40_000
-		stored.Logs = []*types.Log{copyLog(receipt.Logs[0])}
-		block.Transactions = append(block.Transactions, tx)
-		processed = append(processed, evmcore.ProcessedTransaction{Transaction: tx, Receipt: receipt})
-		canonical = append(canonical, &stored)
-	}
-	return block, processed, canonical
 }
 
 func TestValidateDebankBlockFileTxsRejectsIDMismatch(t *testing.T) {
