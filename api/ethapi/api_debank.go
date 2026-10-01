@@ -38,7 +38,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
-	"github.com/ethereum/go-ethereum/trie"
 )
 
 type DebankAPI struct {
@@ -292,8 +291,7 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	vmConfig.Tracer = traceGuard.Hooks()
 
 	replayBaseStateDB := parentStateDB.Copy()
-	diffStateDB := newDebankStateDiffDB(replayBaseStateDB)
-	replayStateDB := evmstore.WrapStateDbWithLogger(diffStateDB, vmConfig.Tracer)
+	replayStateDB := evmstore.WrapStateDbWithLogger(replayBaseStateDB, vmConfig.Tracer)
 	defer replayStateDB.Release()
 	replayStateDB.BeginBlock(block.NumberU64())
 
@@ -313,18 +311,11 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 		replayRules.Upgrades,
 	).Process(replayBlock, replayStateDB, vmConfig, block.GasLimit, &usedGas, 0, nil, math.MaxUint64)
 	processed := summary.ProcessedTransactions
-	if err := validateDebankReplayReceipts(block, processed, evmBlockHeader.ReceiptHash, evmBlockHeader.Bloom); err != nil {
+	if err := validateDebankReplayTransactions(block, processed); err != nil {
 		return nil, err
 	}
 
 	replayStateDB.EndBlock(block.NumberU64())
-	replayedRoot := replayStateDB.GetStateHash()
-	if replayedRoot != block.Root {
-		log.Debug("Debank replay state root mismatch; using canonical Carmen archive diff for write-set", "block", block.NumberU64(), "replayedRoot", replayedRoot, "blockRoot", block.Root, "changedAccounts", len(diffStateDB.changes))
-	}
-	if usedGas != block.GasUsed {
-		return nil, fmt.Errorf("replayed gas used mismatch for block %d: got %d, want %d (txs=%d processed=%d)", block.NumberU64(), usedGas, block.GasUsed, len(block.Transactions), len(processed))
-	}
 
 	postState, _, err := api.b.StateAndBlockByNumberOrHash(ctx, rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(block.NumberU64())))
 	if err != nil {
@@ -347,7 +338,7 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	if destructCount == 0 && accountCount == 0 && slotCount == 0 && codeCount == 0 && parent.Root != block.Root {
 		return nil, fmt.Errorf("canonical Carmen archive diff is empty for block %d but state root changed from %s to %s", block.NumberU64(), parent.Root, block.Root)
 	}
-	log.Debug("Using canonical Carmen archive diff for Debank state update", "block", block.NumberU64(), "changedAccounts", len(archiveDiff), "destructs", destructCount, "accounts", accountCount, "slots", slotCount, "codes", codeCount, "replayedRoot", replayedRoot, "canonicalRoot", block.Root)
+	log.Debug("Using canonical Carmen archive diff for Debank state update", "block", block.NumberU64(), "changedAccounts", len(archiveDiff), "destructs", destructCount, "accounts", accountCount, "slots", slotCount, "codes", codeCount, "canonicalRoot", block.Root)
 
 	res := rpcTracer.GetOutPut(parent.Root, block.Root, destructs, accounts, storages, codes)
 	traceGuard.AdjustBlockFile(res.BlockFile)
@@ -360,11 +351,14 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	return newDebankOutPut(res), nil
 }
 
-func validateDebankReplayReceipts(block *evmcore.EvmBlock, processed []evmcore.ProcessedTransaction, receiptHash common.Hash, bloom types.Bloom) error {
+// validateDebankReplayTransactions detects transactions skipped by Sonic's
+// processor, which logs execution errors instead of returning them. Replay is
+// used to collect traces; canonical block accounting and the state write-set
+// come from stored block data and the Carmen archive, respectively.
+func validateDebankReplayTransactions(block *evmcore.EvmBlock, processed []evmcore.ProcessedTransaction) error {
 	if len(processed) != len(block.Transactions) {
 		return fmt.Errorf("replayed tx count mismatch for block %d: got %d, want %d", block.NumberU64(), len(processed), len(block.Transactions))
 	}
-	replayReceipts := make(types.Receipts, 0, len(processed))
 	for i, processedTx := range processed {
 		if processedTx.Transaction == nil {
 			return fmt.Errorf("replayed tx %d in block %d has nil transaction", i, block.NumberU64())
@@ -375,15 +369,6 @@ func validateDebankReplayReceipts(block *evmcore.EvmBlock, processed []evmcore.P
 		if processedTx.Receipt == nil {
 			return fmt.Errorf("could not replay tx %d [%v] in block %d", i, processedTx.Transaction.Hash().Hex(), block.NumberU64())
 		}
-		replayReceipts = append(replayReceipts, processedTx.Receipt)
-	}
-	replayedReceiptHash := types.DeriveSha(replayReceipts, trie.NewStackTrie(nil))
-	if replayedReceiptHash != receiptHash {
-		return fmt.Errorf("replayed receipt root mismatch for block %d: got %s, want %s (txs=%d)", block.NumberU64(), replayedReceiptHash, receiptHash, len(block.Transactions))
-	}
-	replayedBloom := types.MergeBloom(replayReceipts)
-	if replayedBloom != bloom {
-		return fmt.Errorf("replayed logs bloom mismatch for block %d", block.NumberU64())
 	}
 	return nil
 }

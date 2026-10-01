@@ -29,62 +29,90 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/ethereum/go-ethereum/trie"
 	"github.com/stretchr/testify/require"
 )
 
-func TestValidateDebankReplayReceiptsRejectsReceiptRootMismatch(t *testing.T) {
-	tx := types.NewTx(&types.LegacyTx{Nonce: 1, Gas: 21_000, GasPrice: big.NewInt(1)})
-	receipt := &types.Receipt{
-		TxHash:            tx.Hash(),
-		Status:            types.ReceiptStatusSuccessful,
-		GasUsed:           21_000,
-		CumulativeGasUsed: 21_000,
+func TestValidateDebankReplayTransactionsCanonicalGasAccounting(t *testing.T) {
+	// Mainnet execution gas from callTracer. Stored cumulative gas includes
+	// additional accounting, so it cannot validate replay completeness. In
+	// block 80175307, tx 1 has derived receipt gas 192796 but executes with
+	// 104861 gas, even though every cumulative delta fits its tx gas limit.
+	for _, tc := range []struct {
+		number    uint64
+		blockGas  uint64
+		replayGas []uint64
+	}{
+		{80174946, 1786070, []uint64{371620, 34382, 165188}},
+		{80174947, 2248113, []uint64{95312, 553798, 137034, 553798}},
+		{80175307, 3334561, []uint64{72308, 104861, 343623, 225670, 423643, 530878, 60326, 104861, 219204, 219206, 313905}},
+	} {
+		t.Run(new(big.Int).SetUint64(tc.number).String(), func(t *testing.T) {
+			block := &evmcore.EvmBlock{EvmHeader: evmcore.EvmHeader{Number: new(big.Int).SetUint64(tc.number), GasUsed: tc.blockGas}}
+			var processed []evmcore.ProcessedTransaction
+			var cumulative uint64
+			for i, gas := range tc.replayGas {
+				tx := types.NewTx(&types.LegacyTx{Nonce: uint64(i), Gas: gas, GasPrice: big.NewInt(1)})
+				cumulative += gas
+				block.Transactions = append(block.Transactions, tx)
+				processed = append(processed, evmcore.ProcessedTransaction{
+					Transaction: tx,
+					Receipt:     &types.Receipt{TxHash: tx.Hash(), Status: types.ReceiptStatusSuccessful, GasUsed: gas, CumulativeGasUsed: cumulative},
+				})
+			}
+			require.Less(t, cumulative, block.GasUsed)
+			require.NoError(t, validateDebankReplayTransactions(block, processed))
+			require.Equal(t, tc.replayGas[1], processed[1].Receipt.GasUsed, "preserve execution gas in tracer receipts")
+		})
 	}
-	block := &evmcore.EvmBlock{
-		EvmHeader: evmcore.EvmHeader{Number: big.NewInt(7)},
-		Transactions: types.Transactions{
-			tx,
-		},
-	}
-
-	err := validateDebankReplayReceipts(block, []evmcore.ProcessedTransaction{{
-		Transaction: tx,
-		Receipt:     receipt,
-	}}, common.HexToHash("0x01"), types.Bloom{})
-
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "replayed receipt root mismatch")
 }
 
-func TestValidateDebankReplayReceiptsRejectsBloomMismatch(t *testing.T) {
-	tx := types.NewTx(&types.LegacyTx{Nonce: 1, Gas: 21_000, GasPrice: big.NewInt(1)})
-	receipt := &types.Receipt{
-		TxHash:            tx.Hash(),
-		Status:            types.ReceiptStatusSuccessful,
-		GasUsed:           21_000,
-		CumulativeGasUsed: 21_000,
-		Logs: []*types.Log{{
-			Address: common.HexToAddress("0x1001"),
-			Topics:  []common.Hash{common.HexToHash("0x01")},
-		}},
+func TestValidateDebankReplayTransactionsCompleteness(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		modify func(*evmcore.EvmBlock, *[]evmcore.ProcessedTransaction)
+		want   string
+	}{
+		{"complete", func(*evmcore.EvmBlock, *[]evmcore.ProcessedTransaction) {}, ""},
+		{"empty block", func(b *evmcore.EvmBlock, p *[]evmcore.ProcessedTransaction) {
+			b.Transactions = nil
+			*p = nil
+		}, ""},
+		{"reverted transaction", func(_ *evmcore.EvmBlock, p *[]evmcore.ProcessedTransaction) {
+			(*p)[0].Receipt.Status = types.ReceiptStatusFailed
+		}, ""},
+		{"missing transaction", func(_ *evmcore.EvmBlock, p *[]evmcore.ProcessedTransaction) {
+			*p = (*p)[:1]
+		}, "replayed tx count mismatch"},
+		{"extra transaction", func(_ *evmcore.EvmBlock, p *[]evmcore.ProcessedTransaction) {
+			*p = append(*p, (*p)[0])
+		}, "replayed tx count mismatch"},
+		{"nil transaction", func(_ *evmcore.EvmBlock, p *[]evmcore.ProcessedTransaction) {
+			(*p)[0].Transaction = nil
+		}, "nil transaction"},
+		{"transaction order", func(_ *evmcore.EvmBlock, p *[]evmcore.ProcessedTransaction) {
+			(*p)[0], (*p)[1] = (*p)[1], (*p)[0]
+		}, "replayed tx 0 mismatch"},
+		{"skipped transaction", func(_ *evmcore.EvmBlock, p *[]evmcore.ProcessedTransaction) {
+			(*p)[1].Receipt = nil
+		}, "could not replay tx 1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			block := &evmcore.EvmBlock{EvmHeader: evmcore.EvmHeader{Number: big.NewInt(7)}}
+			var processed []evmcore.ProcessedTransaction
+			for i := range 2 {
+				tx := types.NewTx(&types.LegacyTx{Nonce: uint64(i), Gas: 21_000, GasPrice: big.NewInt(1)})
+				block.Transactions = append(block.Transactions, tx)
+				processed = append(processed, evmcore.ProcessedTransaction{Transaction: tx, Receipt: &types.Receipt{TxHash: tx.Hash(), Status: types.ReceiptStatusSuccessful}})
+			}
+			tc.modify(block, &processed)
+			err := validateDebankReplayTransactions(block, processed)
+			if tc.want == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.want)
+			}
+		})
 	}
-	receipt.Bloom = types.CreateBloom(receipt)
-	block := &evmcore.EvmBlock{
-		EvmHeader: evmcore.EvmHeader{Number: big.NewInt(7)},
-		Transactions: types.Transactions{
-			tx,
-		},
-	}
-	receiptHash := types.DeriveSha(types.Receipts{receipt}, trie.NewStackTrie(nil))
-
-	err := validateDebankReplayReceipts(block, []evmcore.ProcessedTransaction{{
-		Transaction: tx,
-		Receipt:     receipt,
-	}}, receiptHash, types.Bloom{})
-
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "replayed logs bloom mismatch")
 }
 
 func TestValidateDebankBlockFileTxsRejectsIDMismatch(t *testing.T) {
