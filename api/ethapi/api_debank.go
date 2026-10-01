@@ -313,7 +313,7 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 		replayRules.Upgrades,
 	).Process(replayBlock, replayStateDB, vmConfig, block.GasLimit, &usedGas, 0, nil, math.MaxUint64)
 	processed := summary.ProcessedTransactions
-	if err := validateDebankReplayReceipts(block, processed, evmBlockHeader.ReceiptHash, evmBlockHeader.Bloom); err != nil {
+	if err := validateDebankReplayReceipts(block, processed, receipts, usedGas, evmBlockHeader.ReceiptHash, evmBlockHeader.Bloom); err != nil {
 		return nil, err
 	}
 
@@ -323,7 +323,7 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 		log.Debug("Debank replay state root mismatch; using canonical Carmen archive diff for write-set", "block", block.NumberU64(), "replayedRoot", replayedRoot, "blockRoot", block.Root, "changedAccounts", len(diffStateDB.changes))
 	}
 	if usedGas != block.GasUsed {
-		return nil, fmt.Errorf("replayed gas used mismatch for block %d: got %d, want %d (txs=%d processed=%d)", block.NumberU64(), usedGas, block.GasUsed, len(block.Transactions), len(processed))
+		log.Debug("Debank replay validated transaction gas; preserving canonical block gas accounting", "block", block.NumberU64(), "replayedGasUsed", usedGas, "canonicalGasUsed", block.GasUsed)
 	}
 
 	postState, _, err := api.b.StateAndBlockByNumberOrHash(ctx, rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(block.NumberU64())))
@@ -360,11 +360,45 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	return newDebankOutPut(res), nil
 }
 
-func validateDebankReplayReceipts(block *evmcore.EvmBlock, processed []evmcore.ProcessedTransaction, receiptHash common.Hash, bloom types.Bloom) error {
+func validateDebankReplayReceipts(block *evmcore.EvmBlock, processed []evmcore.ProcessedTransaction, canonicalReceipts types.Receipts, usedGas uint64, receiptHash common.Hash, bloom types.Bloom) error {
 	if len(processed) != len(block.Transactions) {
 		return fmt.Errorf("replayed tx count mismatch for block %d: got %d, want %d", block.NumberU64(), len(processed), len(block.Transactions))
 	}
+	if len(canonicalReceipts) != len(block.Transactions) {
+		return fmt.Errorf("canonical receipt count mismatch for block %d: got %d, want %d", block.NumberU64(), len(canonicalReceipts), len(block.Transactions))
+	}
+
+	// ReceiptForStorage persists cumulative gas, but not individual GasUsed.
+	// On a cache miss, DeriveFields reconstructs GasUsed from cumulative deltas,
+	// including any gas not attributable to the final transaction list. Only
+	// accept such deltas as upper bounds if the canonical block independently
+	// proves extra accounting: a delta exceeds the transaction's gas limit, or
+	// block gas exceeds the last receipt. Ordinary blocks retain exact checks.
+	derivedGas, extraGas := true, false
+	var canonicalCumulativeGas uint64
+	for i, canonical := range canonicalReceipts {
+		if canonical == nil {
+			return fmt.Errorf("canonical receipt %d in block %d is nil", i, block.NumberU64())
+		}
+		if canonical.TxHash != block.Transactions[i].Hash() {
+			return fmt.Errorf("canonical receipt tx %d mismatch for block %d: got %s, want %s", i, block.NumberU64(), canonical.TxHash, block.Transactions[i].Hash())
+		}
+		if canonical.CumulativeGasUsed < canonicalCumulativeGas || canonical.CumulativeGasUsed-canonicalCumulativeGas < canonical.GasUsed {
+			return fmt.Errorf("invalid canonical cumulative gas for tx %d in block %d", i, block.NumberU64())
+		}
+		delta := canonical.CumulativeGasUsed - canonicalCumulativeGas
+		derivedGas = derivedGas && canonical.GasUsed == delta
+		extraGas = extraGas || delta > block.Transactions[i].Gas()
+		canonicalCumulativeGas = canonical.CumulativeGasUsed
+	}
+	if canonicalCumulativeGas > block.GasUsed {
+		return fmt.Errorf("canonical receipt gas exceeds block gas for block %d: got %d, limit %d", block.NumberU64(), canonicalCumulativeGas, block.GasUsed)
+	}
+	extraGas = extraGas || canonicalCumulativeGas < block.GasUsed
+	allowDerivedGas := derivedGas && extraGas
+
 	replayReceipts := make(types.Receipts, 0, len(processed))
+	var transactionGas uint64
 	for i, processedTx := range processed {
 		if processedTx.Transaction == nil {
 			return fmt.Errorf("replayed tx %d in block %d has nil transaction", i, block.NumberU64())
@@ -375,7 +409,30 @@ func validateDebankReplayReceipts(block *evmcore.EvmBlock, processed []evmcore.P
 		if processedTx.Receipt == nil {
 			return fmt.Errorf("could not replay tx %d [%v] in block %d", i, processedTx.Transaction.Hash().Hex(), block.NumberU64())
 		}
-		replayReceipts = append(replayReceipts, processedTx.Receipt)
+		canonical := canonicalReceipts[i]
+		replayed := processedTx.Receipt
+		if replayed.GasUsed != canonical.GasUsed && (!allowDerivedGas || replayed.GasUsed > canonical.GasUsed) {
+			return fmt.Errorf("replayed tx %d gas used mismatch for block %d: got %d, want %d", i, block.NumberU64(), replayed.GasUsed, canonical.GasUsed)
+		}
+		if replayed.GasUsed > math.MaxUint64-transactionGas {
+			return fmt.Errorf("replayed transaction gas overflow for block %d", block.NumberU64())
+		}
+		transactionGas += replayed.GasUsed
+		if replayed.CumulativeGasUsed != transactionGas {
+			return fmt.Errorf("replayed tx %d cumulative gas mismatch for block %d: got %d, want %d", i, block.NumberU64(), replayed.CumulativeGasUsed, transactionGas)
+		}
+		// Some Sonic blocks retain gas in their cumulative counters that is not
+		// represented by the final transaction list. Replaying that list cannot
+		// reproduce those counters. After checking the transaction's gas above,
+		// use canonical accounting on a copy solely for receipt-root validation.
+		// Type, status, logs and bloom still come from execution, and neither the
+		// cached canonical receipt nor the tracer's receipt is modified.
+		receipt := *replayed
+		receipt.CumulativeGasUsed = canonical.CumulativeGasUsed
+		replayReceipts = append(replayReceipts, &receipt)
+	}
+	if usedGas != transactionGas {
+		return fmt.Errorf("replayed gas used mismatch for block %d: got %d, want %d (txs=%d)", block.NumberU64(), usedGas, transactionGas, len(processed))
 	}
 	replayedReceiptHash := types.DeriveSha(replayReceipts, trie.NewStackTrie(nil))
 	if replayedReceiptHash != receiptHash {
