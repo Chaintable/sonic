@@ -22,7 +22,6 @@ import (
 	"math"
 	"math/big"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/0xsoniclabs/sonic/evmcore"
@@ -227,20 +226,7 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 		blockDiff := ptracer.GenesisAllocToStateDiff(evmcore.GenesisAlloc)
 		blockDiff.Hash = evmBlockHeader.Root
 		blockDiff.ParentHash = types.EmptyRootHash
-		blockFile := &ptypes.BlockFile{
-			Block:            util.BuildPipelineBlock(evmBlock),
-			Txs:              make([]ptypes.Transaction, 0),
-			Events:           make([]ptypes.Event, 0),
-			Traces:           make([]ptypes.Trace, 0),
-			ErrorEvents:      make([]ptypes.Event, 0),
-			ErrorTraces:      make([]ptypes.Trace, 0),
-			StorageContracts: make([]string, 0),
-		}
-		for addr, account := range evmcore.GenesisAlloc {
-			if len(account.Storage) > 0 {
-				blockFile.StorageContracts = append(blockFile.StorageContracts, strings.ToLower(addr.Hex()))
-			}
-		}
+		blockFile := buildDebankGenesisBlockFile(evmBlock, evmcore.GenesisAlloc)
 		var stateDiffBytes []byte
 		stateDiffBytes, err = util.EncodeToRlp(blockDiff)
 		if err != nil {

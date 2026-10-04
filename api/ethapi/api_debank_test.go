@@ -17,8 +17,10 @@
 package ethapi
 
 import (
+	"context"
 	"encoding/json"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/0xsoniclabs/sonic/evmcore"
@@ -29,7 +31,9 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 )
 
 func TestValidateDebankReplayTransactionsCanonicalGasAccounting(t *testing.T) {
@@ -295,6 +299,49 @@ func TestDebankGenesisStateDiffIncludesFullAllocation(t *testing.T) {
 		storageSlots += len(account.Values)
 	}
 	require.Equal(t, 6, storageSlots)
+}
+
+func TestDebankBlockGenesisRecords(t *testing.T) {
+	backend := NewMockBackend(gomock.NewController(t))
+	block := evmcore.NewEvmBlock(evmcore.ConvertFromEthHeader(&evmcore.GenesisHeader), nil)
+	backend.EXPECT().BlockByNumber(gomock.Any(), rpc.BlockNumber(0)).Return(block, nil)
+	backend.EXPECT().GetReceiptsByNumber(gomock.Any(), rpc.BlockNumber(0)).Return(types.Receipts{}, nil)
+	backend.EXPECT().ChainID().Return(big.NewInt(146))
+
+	out, err := NewDebankAPI(backend).DebankBlock(context.Background(), rpc.BlockNumberOrHashWithNumber(0))
+	require.NoError(t, err)
+	require.Len(t, out.BlockFile.Txs, 23)
+	require.Len(t, out.BlockFile.Traces, 23)
+	require.Len(t, out.BlockFile.StorageContracts, 6)
+	require.NotEmpty(t, out.StateDiff)
+
+	counts := map[string]int{}
+	total := new(big.Int)
+	ids := []string{out.BlockFile.Block.ID}
+	for i, tx := range out.BlockFile.Txs {
+		kind := tx.ID[2:4]
+		counts[kind]++
+		account := evmcore.GenesisAlloc[common.HexToAddress(tx.To)]
+		switch kind {
+		case "01":
+			require.Equal(t, account.Balance, tx.Value.ToInt())
+			total.Add(total, tx.Value.ToInt())
+		case "02":
+			require.Equal(t, account.Code, []byte(tx.Input))
+			require.Equal(t, account.Code, []byte(out.BlockFile.Traces[i].Output))
+		case "03":
+			require.Equal(t, "0x030000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", tx.ID)
+			require.Equal(t, "create", out.BlockFile.Traces[i].CallCreateType)
+		default:
+			t.Fatalf("unexpected genesis record kind %q", kind)
+		}
+		require.Equal(t, strings.ToLower(tx.To), tx.To)
+		require.Equal(t, tx.ID, out.BlockFile.Traces[i].TxID)
+		ids = append(ids, tx.ID, out.BlockFile.Traces[i].ID)
+	}
+	require.Equal(t, map[string]int{"01": 14, "02": 8, "03": 1}, counts)
+	require.Equal(t, "2024000000000000000000", total.String())
+	require.Equal(t, ptypes.CalcValidationHash(ids), out.ValidationHash)
 }
 
 func newTestDebankRPCTracer(t *testing.T) (*ptracer.RPCTracer, *debankTraceGuard) {
